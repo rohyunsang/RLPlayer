@@ -1,6 +1,6 @@
 import { ContributionError } from './errors.ts'
 import { validateIds, topoSort, type DiscoveredModule } from './registry-order.ts'
-import { OwnerMap } from './mpv/ownership.ts'
+import { CORE_OWNERSHIP, OwnerMap } from './mpv/ownership.ts'
 import { vfChain, createVfService } from './mpv/vf-chain.ts'
 import { afChain, createAfService } from './mpv/af-chain.ts'
 import { mpvBus } from './mpv/bus.ts'
@@ -76,7 +76,7 @@ export class Registry {
 
     // 2. The property owner map (§3.7). Two modules claiming one property is a
     //    boot error naming both, in the same breath as a duplicate command id.
-    this.owners = new OwnerMap(ordered.map((s) => s.module))
+    this.owners = new OwnerMap([...CORE_OWNERSHIP, ...ordered.map((s) => s.module)])
     mpvBus.setOwnerMap(this.owners)
 
     // 3. Filter labels, same duplicate detection.
@@ -149,6 +149,7 @@ export class Registry {
       commands: {
         register: (c) => registry.deps.commands.register(id, c),
         invoke: (cid, arg) => registry.deps.commands.invoke(cid, arg),
+        query: (cid, arg) => registry.deps.commands.query(cid, arg),
         has: (cid) => registry.deps.commands.has(cid)
       },
       ipc: this.deps.ipc.createService(id),

@@ -2,18 +2,56 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   AppConfig,
   AudioDevice,
-  Keybinds,
+  OsdPayload,
   PlayerAction,
   PlayerState,
   PlaylistState,
+  ProgressPayload,
+  ResolvedKeybinds,
   ToastPayload
 } from '@shared/types'
 
 /**
- * The only surface the renderer ever sees. Raw ipcRenderer is deliberately not
- * exposed: every call below is a named, typed operation, so a compromised
- * renderer cannot reach arbitrary main-process channels.
+ * WAVE 0, then FROZEN. Nobody edits this file again.
+ *
+ * TWO surfaces, deliberately:
+ *
+ *  1. `window.rl` — the GENERIC bridge (§3.3.4). One `invoke`/`send`/`on`, with
+ *     a shape check on the channel name. Every feature module's renderer half
+ *     talks through this, so shipping a module never means adding a method
+ *     here. The regex is a shape check, NOT the security boundary: main only
+ *     has a handler for channels a module actually registered under its own id,
+ *     so a channel nobody published cannot be reached at all.
+ *
+ *  2. `window.rlplayer` — the typed CORE surface. It carries the core player
+ *     state, config and the app shell, and feature modules do not extend it.
+ *
+ * Raw `ipcRenderer` is never exposed on either.
  */
+
+const CHANNEL_RE = /^[a-z0-9-]+:[A-Za-z0-9_-]+$/
+
+function check(channel: string): void {
+  if (!CHANNEL_RE.test(channel)) throw new Error(`bad channel: ${channel}`)
+}
+
+const rl = {
+  invoke(channel: string, req?: unknown): Promise<unknown> {
+    check(channel)
+    return ipcRenderer.invoke(channel, req)
+  },
+  send(channel: string, req?: unknown): void {
+    check(channel)
+    ipcRenderer.send(channel, req)
+  },
+  on(channel: string, cb: (payload: unknown) => void): () => void {
+    check(channel)
+    const h = (_e: unknown, p: unknown): void => cb(p)
+    ipcRenderer.on(channel, h)
+    return () => ipcRenderer.off(channel, h)
+  }
+}
+
 const api = {
   // --- push channels ---
   onState(cb: (s: PlayerState) => void): () => void {
@@ -31,10 +69,25 @@ const api = {
     ipcRenderer.on('ui:toast', h)
     return () => ipcRenderer.off('ui:toast', h)
   },
-  onKeybinds(cb: (k: Keybinds) => void): () => void {
-    const h = (_e: unknown, k: Keybinds): void => cb(k)
+  onOsd(cb: (o: OsdPayload) => void): () => void {
+    const h = (_e: unknown, o: OsdPayload): void => cb(o)
+    ipcRenderer.on('ui:osd', h)
+    return () => ipcRenderer.off('ui:osd', h)
+  },
+  onProgress(cb: (p: ProgressPayload) => void): () => void {
+    const h = (_e: unknown, p: ProgressPayload): void => cb(p)
+    ipcRenderer.on('ui:progress', h)
+    return () => ipcRenderer.off('ui:progress', h)
+  },
+  onKeybinds(cb: (k: ResolvedKeybinds) => void): () => void {
+    const h = (_e: unknown, k: ResolvedKeybinds): void => cb(k)
     ipcRenderer.on('ui:keybinds', h)
     return () => ipcRenderer.off('ui:keybinds', h)
+  },
+  onChrome(cb: (mode: 'full' | 'minimal' | 'none') => void): () => void {
+    const h = (_e: unknown, m: 'full' | 'minimal' | 'none'): void => cb(m)
+    ipcRenderer.on('ui:chrome', h)
+    return () => ipcRenderer.off('ui:chrome', h)
   },
   /** Main asking the overlay to run a named UI action (from the menu). */
   onUiCommand(cb: (name: string) => void): () => void {
@@ -43,17 +96,26 @@ const api = {
     return () => ipcRenderer.off('ui:command', h)
   },
 
-  // --- playback ---
+  // --- commands: what the keyboard and the menus speak now ---
+  invokeCommand(id: string, arg?: unknown): void {
+    ipcRenderer.send('core-input:invoke', { id, arg })
+  },
+  keybinds(): Promise<ResolvedKeybinds> {
+    return ipcRenderer.invoke('core-input:keybinds')
+  },
+
+  // --- playback (transitional: the legacy PlayerAction surface, §5.10) ---
   action(a: PlayerAction): void {
     ipcRenderer.send('player:action', a)
   },
-  /** Run a keybind action string such as 'seek:-5'. */
   runBinding(name: string): void {
     ipcRenderer.send('player:binding', name)
   },
-  /** Dismiss a resume offer and play the current file from the start. */
   restart(): void {
     ipcRenderer.send('player:restart')
+  },
+  toastAction(id: number): void {
+    ipcRenderer.send('ui:toastAction', id)
   },
 
   // --- opening files ---
@@ -75,7 +137,7 @@ const api = {
     }
   },
 
-  // --- playlist ---
+  // --- playlist: M28's own channels ---
   playlist: {
     play(index: number): void {
       ipcRenderer.send('playlist:play', index)
@@ -94,34 +156,37 @@ const api = {
     },
     setShuffle(on: boolean): void {
       ipcRenderer.send('playlist:setShuffle', on)
+    },
+    request(): void {
+      ipcRenderer.send('playlist:request')
     }
   },
 
-  // --- window chrome (the overlay covers the real frame) ---
+  // --- window chrome: M31's own channels, plus the layout plumbing ---
   window: {
     minimize(): void {
-      ipcRenderer.send('window:minimize')
+      ipcRenderer.send('shell-window:minimize')
     },
     toggleMaximize(): void {
-      ipcRenderer.send('window:toggleMaximize')
+      ipcRenderer.send('shell-window:toggleMaximize')
     },
     close(): void {
-      ipcRenderer.send('window:close')
+      ipcRenderer.send('shell-window:close')
     },
     beginDrag(mode: 'move' | 'resize', edge?: string): void {
-      ipcRenderer.send('window:beginDrag', { mode, edge })
+      ipcRenderer.send('shell-window:beginDrag', { mode, edge })
     },
     endDrag(): void {
-      ipcRenderer.send('window:endDrag')
+      ipcRenderer.send('shell-window:endDrag')
     },
     toggleFullscreen(): void {
-      ipcRenderer.send('window:toggleFullscreen')
+      ipcRenderer.send('shell-window:toggleFullscreen')
     },
     setFullscreen(on: boolean): void {
-      ipcRenderer.send('window:setFullscreen', on)
+      ipcRenderer.send('shell-window:setFullscreen', on)
     },
     toggleAlwaysOnTop(): void {
-      ipcRenderer.send('window:toggleAlwaysOnTop')
+      ipcRenderer.send('shell-window:cycleOnTop')
     },
     /**
      * Compat layout only: tell main which rectangle of the page is reserved for
@@ -163,14 +228,14 @@ const api = {
   // --- system ---
   system: {
     audioDevices(): Promise<AudioDevice[]> {
-      return ipcRenderer.invoke('system:audioDevices')
+      return ipcRenderer.invoke('audio-devices:list')
     },
     /** Windows will not let an app make itself the default handler. */
     openDefaultAppsSettings(): void {
       ipcRenderer.send('system:openDefaultApps')
     },
     openReleasesPage(): void {
-      ipcRenderer.send('system:openReleases')
+      ipcRenderer.send('core-input:invoke', { id: 'core.openReleases' })
     },
     openConfigFolder(): void {
       ipcRenderer.send('system:openConfigFolder')
@@ -182,12 +247,20 @@ const api = {
     chooseScreenshotDir(): Promise<string | null> {
       return ipcRenderer.invoke('system:chooseScreenshotDir')
     },
-    info(): Promise<{ version: string; portable: boolean; configPath: string; mpv: string }> {
+    info(): Promise<{
+      version: string
+      portable: boolean
+      configPath: string
+      readOnly: boolean
+      mpv: string
+    }> {
       return ipcRenderer.invoke('system:info')
     }
   }
 }
 
 export type RlPlayerApi = typeof api
+export type RlBridge = typeof rl
 
 contextBridge.exposeInMainWorld('rlplayer', api)
+contextBridge.exposeInMainWorld('rl', rl)

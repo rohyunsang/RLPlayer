@@ -256,7 +256,14 @@ export class PerFileManager {
       currentKey: () => mgr.currentKey(),
       currentPath: () => mgr.currentPath(),
       forget: (file) => mgr.forget(file),
-      lookupMany: (paths) => mgr.lookupMany(paths)
+      lookupMany: (paths) => mgr.lookupMany(paths),
+      recordPosition: (file, position, duration) =>
+        mgr.recordPosition(file, position, duration, path.basename(file)),
+      resumeFor: (file) => {
+        const e = mgr.lookupPosition(file)
+        return e ? { position: e.position, duration: e.duration } : null
+      },
+      captureNow: () => mgr.captureSlices()
     }
   }
 }

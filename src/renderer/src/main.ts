@@ -1,7 +1,14 @@
 import './styles.css'
-import type { Keybinds, PlayerState, PlaylistState, ToastPayload } from '@shared/types'
-import { eventToAccel } from '@shared/keybinds'
+import type {
+  OsdPayload,
+  PlayerState,
+  PlaylistState,
+  ResolvedKeybinds,
+  ToastPayload
+} from '@shared/types'
+import { accelFromEvent } from '@shared/input/accel'
 import { clamp, displayName, el, formatTime } from './util'
+import { SeekbarHost, attachSeekbar, loadRendererFeatures, publishState, setOsdSink } from './core'
 
 const api = window.rlplayer
 
@@ -18,6 +25,7 @@ const mediaTitle = $('mediaTitle')
 const seek = $<HTMLInputElement>('seek')
 const seekBuffer = $('seekBuffer')
 const seekHover = $('seekHover')
+const seekLayers = $('seekLayers')
 const timeNow = $('timeNow')
 const timeTotal = $('timeTotal')
 const playBtn = $<HTMLButtonElement>('playBtn')
@@ -47,13 +55,41 @@ const videoRegion = $('videoRegion')
 
 let state: PlayerState | null = null
 let playlist: PlaylistState = { items: [], index: -1, open: false, repeat: 'off', shuffle: false }
-let keybinds: Keybinds = {}
+let keybinds: ResolvedKeybinds = {}
 /** While the user drags the seek bar we must ignore incoming time-pos. */
 let scrubbing = false
 let osdTimer: number | undefined
 let idleTimer: number | undefined
 
 const SEEK_STEP = 0.1
+
+/**
+ * The interactive seek-bar layer host (§3.4). Contributed layers paint into
+ * `#seekLayers` and are offered the pointer in reverse paint order; when none
+ * of them claims a press, the host falls through to the ordinary scrub below,
+ * which is why adding a bookmark pin can never silently break drag-to-seek.
+ */
+const seekbar = attachSeekbar(
+  new SeekbarHost({
+    el: seekLayers,
+    duration: () => state?.duration ?? 0,
+    width: () => seek.getBoundingClientRect().width,
+    scrub(time, phase, cancelled) {
+      if (phase === 'down') {
+        scrubbing = true
+        document.body.classList.add('scrubbing')
+      }
+      if (!cancelled) api.action({ type: 'seek', seconds: time, absolute: true })
+      if (phase === 'up') {
+        scrubbing = false
+        document.body.classList.remove('scrubbing')
+      }
+    },
+    invalidate: () => {
+      if (state) seekbar.render()
+    }
+  })
+)
 
 // --- rendering ------------------------------------------------------------
 
@@ -86,6 +122,8 @@ window.addEventListener('resize', reportVideoRegion)
 function render(s: PlayerState): void {
   const layoutChanged = state?.layoutMode !== s.layoutMode
   state = s
+  publishState(s)
+  seekbar.render()
   document.body.classList.toggle('idle', s.idle || !s.path)
   document.body.classList.toggle('fullscreen', s.fullscreen)
   document.body.classList.toggle('compat', s.layoutMode === 'compat')
@@ -189,11 +227,18 @@ function renderPlaylist(p: PlaylistState): void {
 
 // --- OSD ------------------------------------------------------------------
 
-function showOsd(text: string): void {
-  osd.textContent = text
+/**
+ * ONE OSD element, always. Messages coalesce by `kind`, so dragging the volume
+ * slider produces a single updating readout rather than forty stacked ones --
+ * and because main applies the per-kind enable/disable, anything that arrives
+ * here is something the user asked to see.
+ */
+function showOsd(msg: OsdPayload): void {
+  osd.dataset.kind = msg.kind
+  osd.textContent = msg.text
   osd.classList.add('show')
   window.clearTimeout(osdTimer)
-  osdTimer = window.setTimeout(() => osd.classList.remove('show'), 900)
+  osdTimer = window.setTimeout(() => osd.classList.remove('show'), msg.durationMs ?? 900)
 }
 
 // --- toasts ---------------------------------------------------------------
@@ -203,11 +248,13 @@ function showToast(t: ToastPayload): void {
   node.setAttribute('role', t.kind === 'error' ? 'alert' : 'status')
   node.appendChild(el('span', 'toast-msg', t.message))
 
-  if (t.actionLabel && t.action) {
+  if (t.actionLabel) {
     const btn = el('button', 'toast-action', t.actionLabel)
     btn.type = 'button'
     btn.addEventListener('click', () => {
-      if (t.action === 'restart') api.restart()
+      // The callback lives in main, keyed by id: a toast action is a module's
+      // code, not the overlay's.
+      if (typeof t.id === 'number') api.toastAction(t.id)
       node.remove()
     })
     node.appendChild(btn)
@@ -271,29 +318,63 @@ stage.addEventListener(
 
 document.addEventListener('mousemove', wakeChrome)
 
-// seek bar: drag scrubbing
-seek.addEventListener('pointerdown', () => {
-  scrubbing = true
-  document.body.classList.add('scrubbing')
-})
-const endScrub = (): void => {
-  if (!scrubbing) return
-  scrubbing = false
-  document.body.classList.remove('scrubbing')
-  api.action({ type: 'seek', seconds: Number(seek.value), absolute: true })
+// --- seek bar -------------------------------------------------------------
+//
+// Every pointer gesture on the bar is offered to the contributed layers first
+// (topmost wins) and only then to the ordinary scrub. `claimed` is the flag
+// that keeps a grabbed A-B handle or bookmark pin from also seeking.
+
+let claimed = false
+
+const barX = (clientX: number): number => {
+  const rect = seek.getBoundingClientRect()
+  return clamp(clientX - rect.left, 0, rect.width)
 }
-seek.addEventListener('pointerup', endScrub)
-seek.addEventListener('pointercancel', endScrub)
+
+seek.addEventListener('pointerdown', (e) => {
+  seek.setPointerCapture(e.pointerId)
+  claimed = seekbar.pointerDown(barX(e.clientX), {
+    shift: e.shiftKey,
+    ctrl: e.ctrlKey,
+    alt: e.altKey
+  })
+  if (claimed) e.preventDefault()
+})
+
+const endScrub = (cancelled: boolean) => (e: PointerEvent): void => {
+  if (!seekbar.dragging) return
+  seekbar.pointerUp(barX(e.clientX), { shift: e.shiftKey }, cancelled)
+  claimed = false
+}
+seek.addEventListener('pointerup', endScrub(false))
+seek.addEventListener('pointercancel', endScrub(true))
+// Releasing outside the window must still deliver exactly one onPointerUp.
+window.addEventListener('blur', () => {
+  if (seekbar.dragging) seekbar.cancel()
+  claimed = false
+})
+
 seek.addEventListener('input', () => {
   fillPercent(seek)
   timeNow.textContent = formatTime(Number(seek.value))
   // Live-seek while dragging; commandNoReply on the main side keeps this cheap.
-  if (scrubbing) api.action({ type: 'seek', seconds: Number(seek.value), absolute: true })
+  if (scrubbing && !claimed) {
+    api.action({ type: 'seek', seconds: Number(seek.value), absolute: true })
+  }
 })
 seek.addEventListener('change', () => {
-  if (!scrubbing) api.action({ type: 'seek', seconds: Number(seek.value), absolute: true })
+  if (!scrubbing && !claimed) {
+    api.action({ type: 'seek', seconds: Number(seek.value), absolute: true })
+  }
 })
 seek.addEventListener('pointermove', (e) => {
+  const x = barX(e.clientX)
+  if (seekbar.dragging) {
+    seekbar.pointerMove(x, { shift: e.shiftKey, ctrl: e.ctrlKey, alt: e.altKey })
+    if (claimed) return
+  } else {
+    seekbar.hover(x, { shift: e.shiftKey })
+  }
   if (!state || state.duration <= 0) return
   const rect = seek.getBoundingClientRect()
   const ratio = clamp((e.clientX - rect.left) / rect.width, 0, 1)
@@ -303,6 +384,7 @@ seek.addEventListener('pointermove', (e) => {
 })
 seek.addEventListener('pointerleave', () => {
   seekHover.hidden = true
+  if (!seekbar.dragging) seekbar.hover(null)
 })
 
 volume.addEventListener('input', () => {
@@ -325,7 +407,7 @@ repeatBtn.addEventListener('click', () => {
   const order = ['off', 'one', 'all'] as const
   const next = order[(order.indexOf(playlist.repeat) + 1) % order.length]!
   api.playlist.setRepeat(next)
-  showOsd({ off: '반복 없음', one: '한 파일 반복', all: '전체 반복' }[next])
+  showOsd({ kind: 'info', text: { off: '반복 없음', one: '한 파일 반복', all: '전체 반복' }[next] })
 })
 speedBtn.addEventListener('click', (e) => {
   // Left click steps up, right click steps down, both wrap within 0.25-4x.
@@ -430,50 +512,6 @@ window.addEventListener('drop', (e) => {
 
 // --- keyboard -------------------------------------------------------------
 
-const BINDING_LABELS: Record<string, string> = {
-  playPause: '재생 / 일시정지',
-  stop: '정지',
-  seek: '탐색',
-  seekStart: '처음으로',
-  seekEnd: '끝으로',
-  volume: '볼륨',
-  mute: '음소거',
-  speed: '재생 속도',
-  speedReset: '속도 초기화',
-  frameBack: '이전 프레임',
-  frameForward: '다음 프레임',
-  screenshot: '스크린샷 저장',
-  screenshotClipboard: '스크린샷 복사',
-  toggleSubs: '자막 켜기/끄기',
-  cycleSub: '자막 트랙 전환',
-  cycleAudio: '오디오 트랙 전환',
-  subDelay: '자막 싱크',
-  audioDelay: '오디오 싱크',
-  chapterNext: '다음 챕터',
-  chapterPrev: '이전 챕터',
-  next: '다음 파일',
-  previous: '이전 파일',
-  fullscreen: '전체화면',
-  exitFullscreen: '전체화면 종료',
-  alwaysOnTop: '항상 위에',
-  togglePlaylist: '재생목록',
-  open: '파일 열기',
-  settings: '설정',
-  quit: '종료'
-}
-
-function bindingLabel(binding: string): string {
-  const [name, arg] = binding.split(':')
-  const base = BINDING_LABELS[name ?? ''] ?? binding
-  if (arg === undefined) return base
-  const n = Number(arg)
-  if (name === 'seek') return `${base} ${n > 0 ? '+' : ''}${n}초`
-  if (name === 'volume') return `${base} ${n > 0 ? '+' : ''}${n}%`
-  if (name === 'speed') return `${base} ${n > 0 ? '+' : ''}${n}×`
-  if (name === 'subDelay' || name === 'audioDelay') return `${base} ${n > 0 ? '+' : ''}${n}초`
-  return `${base} ${arg}`
-}
-
 window.addEventListener('keydown', (e) => {
   const target = e.target as HTMLElement | null
   const inRange = target instanceof HTMLInputElement && target.type === 'range'
@@ -486,25 +524,22 @@ window.addEventListener('keydown', (e) => {
   // Let the focused slider handle its own arrow keys rather than double-acting.
   if (inRange && /^Arrow/.test(e.key)) return
 
-  const accel = eventToAccel(e)
-  const binding = keybinds[accel]
-  if (!binding) return
+  // e.code, never e.key: with the Korean IME composing, e.key is 'Process'
+  // for every letter and every bare-letter binding silently stops working.
+  const accel = accelFromEvent(e)
+  const entry = keybinds[accel]
+  if (!entry) return
 
   e.preventDefault()
   wakeChrome()
 
-  // Give immediate visual feedback for the adjustments that have no other
-  // on-screen affordance in fullscreen.
-  const [name, arg] = binding.split(':')
-  if (name === 'volume' && state) {
-    showOsd(`${clamp(state.volume + Number(arg), 0, 150)}%`)
-  } else if (name === 'speed' && state) {
-    showOsd(`${clamp(state.speed + Number(arg), 0.25, 4).toFixed(2)}×`)
-  } else if (name === 'seek') {
-    showOsd(`${Number(arg) > 0 ? '▶▶' : '◀◀'} ${Math.abs(Number(arg))}초`)
-  }
-
-  api.runBinding(binding)
+// Renderer feature modules, discovered by the same directory glob main uses.
+setOsdSink((m) => showOsd({ kind: m.kind, text: m.text, value: m.value }))
+loadRendererFeatures()
+seekbar.render()
+  // The OSD is main's job now: the module that changes the value is the one
+  // that knows what to say about it.
+  api.invokeCommand(entry.commandId)
 })
 
 // --- shortcut sheet -------------------------------------------------------
@@ -513,10 +548,12 @@ function renderShortcuts(): void {
   shortcutList.textContent = ''
   const dl = document.createElement('dl')
   dl.className = 'shortcut-list'
-  for (const [accel, binding] of Object.entries(keybinds)) {
-    const dt = el('dt', undefined, accel)
-    const dd = el('dd', undefined, bindingLabel(binding))
-    dl.append(dt, dd)
+  // Both halves come from the command registry: the label from the command's
+  // own labelKey, the key from whichever preset is active. Nothing here knows
+  // what any of the commands do.
+  const rows = Object.values(keybinds).sort((a, b) => a.label.localeCompare(b.label))
+  for (const entry of rows) {
+    dl.append(el('dt', undefined, entry.accelLabel), el('dd', undefined, entry.label))
   }
   shortcutList.appendChild(dl)
 }
@@ -530,6 +567,7 @@ $('shortcutClose').addEventListener('click', () => {
 api.onState(render)
 api.onPlaylist(renderPlaylist)
 api.onToast(showToast)
+api.onOsd(showOsd)
 api.onKeybinds((k) => {
   keybinds = k
   renderShortcuts()
@@ -543,3 +581,8 @@ api.onUiCommand((name) => {
 })
 
 wakeChrome()
+
+// Renderer feature modules, discovered by the same directory glob main uses.
+setOsdSink((m) => showOsd({ kind: m.kind, text: m.text, value: m.value }))
+loadRendererFeatures()
+seekbar.render()

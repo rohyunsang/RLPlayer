@@ -10,8 +10,7 @@ import {
   persistBounds as persistBoundsRaw,
   setAlwaysOnTop as setAlwaysOnTopRaw,
   setFullScreen as setFullScreenRaw,
-  syncOverlay,
-  toggleFullScreen as toggleFullScreenRaw
+  syncOverlay
 } from './windows'
 import type {
   DisplayInfo,

@@ -13,6 +13,9 @@
     "noImplicitOverride": true,
     "skipLibCheck": true,
     "isolatedModules": true,
+    // The renderer core imports @shared with explicit .ts extensions so the same
+    // files can be exercised directly by `node --test`.
+    "allowImportingTsExtensions": true,
     "noEmit": true,
     "baseUrl": ".",
     "paths": { "@shared/*": ["src/shared/*"] }

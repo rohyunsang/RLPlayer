@@ -1,0 +1,192 @@
+import type { Track } from '@shared/types'
+import type { FeatureContext, FeatureModule, MenuNode } from '@shared/feature-api'
+
+/**
+ * M11 audio-tracks — audio and video track selection.
+ *
+ * WAVE 0 SEED: the new owner of `cycleAudio`, and — this is the part that
+ * matters — the SOLE owner of `aid` and `vid` (§3.7.1).
+ *
+ * `aid` had three writers on paper: M11's own per-file restore, M15's
+ * passthrough round-trip and M13's AC-3 DRC reinit. An M15 round-trip racing
+ * M11's restore picks the wrong dub on a dual-audio release: silent,
+ * intermittent, and exactly the failure ownership exists to prevent. So the
+ * round-trip lives here, serialised against the restore, and everyone else
+ * calls the mediator.
+ */
+
+let ctx: FeatureContext
+/** The track M11 INTENDS to be selected. The round-trip restores to this, not
+ *  to whatever happened to be current when a caller asked. */
+let intended: number | false = false
+let restoring: Promise<void> = Promise.resolve()
+
+const tracks = (): Track[] => ctx.mpv.peek<Track[]>('track-list') ?? []
+const audioTracks = (): Track[] => tracks().filter((t) => t.type === 'audio')
+
+function label(t: Track): string {
+  const bits = [String(t.id)]
+  if (t.lang) bits.push(t.lang)
+  if (t.channels) bits.push(t.channels)
+  if (t.title) bits.push(t.title)
+  if (t.external) bits.push('(외부)')
+  return bits.join(' · ')
+}
+
+async function select(id: number | false): Promise<void> {
+  intended = id
+  await ctx.mpv.set('aid', id === false ? 'no' : id)
+  const t = audioTracks().find((x) => x.id === id)
+  ctx.osd.show({ kind: 'track', text: id === false ? '오디오 없음' : `오디오 ${label(t ?? { id, type: 'audio', selected: true })}` })
+}
+
+const mod: FeatureModule = {
+  id: 'audio-tracks',
+  ownsProperties: [
+    'aid',
+    'vid',
+    'alang',
+    'audio-display',
+    'audio-file-auto',
+    'cover-art-auto',
+    'cover-art-whitelist',
+    'track-auto-selection',
+    'subs-with-matching-audio'
+  ],
+
+  setup(c): void {
+    ctx = c
+
+    ctx.mpv.contributeArgs(10, () => ['--audio-file-auto=fuzzy'])
+
+    ctx.mpv.observe<number | false>('aid', (v) => {
+      // Keep `intended` honest when mpv picks a track on its own at file load.
+      if (typeof v === 'number') intended = v
+    })
+
+    ctx.perFile.slice({
+      key: 'audio-tracks',
+      capture: () => ({ aid: ctx.mpv.peek<number | false>('aid') ?? false }),
+      apply: async (v) => {
+        if (typeof v.aid === 'number') {
+          restoring = select(v.aid).then(
+            () => undefined,
+            () => undefined
+          )
+          await restoring
+        }
+      },
+      rememberDefaults: { aid: true }
+    })
+
+    ctx.commands.register([
+      {
+        id: 'audio-tracks.cycle',
+        labelKey: 'audio-tracks.cycle',
+        category: 'audio',
+        defaults: { default: ['KeyA'], mpv: ['Shift+Digit3'] },
+        enabledWhen: () => audioTracks().length > 1,
+        run: async () => {
+          await ctx.mpv.command(['cycle', 'aid']).catch(() => {})
+          const now = ctx.mpv.peek<number | false>('aid')
+          intended = now ?? false
+          const t = audioTracks().find((x) => x.id === now)
+          ctx.osd.show({ kind: 'track', text: t ? `오디오 ${label(t)}` : '오디오 없음' })
+        }
+      },
+      {
+        id: 'audio-tracks.select',
+        labelKey: 'audio-tracks.select',
+        category: 'audio',
+        internal: true,
+        run: (arg) => select(arg === false || arg === 'no' ? false : Number(arg))
+      },
+      {
+        id: 'audio-tracks.selectVideo',
+        labelKey: 'audio-tracks.selectVideo',
+        category: 'video',
+        internal: true,
+        run: (arg) => ctx.mpv.set('vid', arg === false || arg === 'no' ? 'no' : Number(arg))
+      },
+      {
+        /**
+         * The sanctioned cross-module path (§3.7.3). M15 (A20 passthrough) and
+         * M13 (A36 AC-3 DRC) both need a decoder reinit, which mpv only offers
+         * as an `aid` round-trip. Neither of them may write `aid`.
+         */
+        id: 'audio-tracks.reinitDecoder',
+        labelKey: 'audio-tracks.reinitDecoder',
+        category: 'audio',
+        internal: true,
+        run: async () => {
+          await restoring
+          const target = intended
+          if (target === false) return
+          await ctx.mpv.set('aid', 'no')
+          await ctx.mpv.set('aid', target)
+        }
+      },
+      {
+        /** M36 (R08): `vid` and `aid` are one decision on an EDL-backed source,
+         *  so they are applied together by the module that owns both. */
+        id: 'audio-tracks.selectStreamFormat',
+        labelKey: 'audio-tracks.selectStreamFormat',
+        category: 'audio',
+        internal: true,
+        run: async (arg) => {
+          const a = (arg ?? {}) as { vid?: number | false; aid?: number | false }
+          if (a.vid !== undefined) await ctx.mpv.set('vid', a.vid === false ? 'no' : a.vid)
+          if (a.aid !== undefined) await select(a.aid)
+        }
+      }
+    ])
+
+    ctx.menu.contribute({
+      id: 'audio-tracks.menu',
+      labelKey: 'audio-tracks.menuTitle',
+      order: 40,
+      items: [
+        {
+          labelKey: 'audio-tracks.menuTitle',
+          submenu: [
+            {
+              dynamic(): readonly MenuNode[] {
+                const list = audioTracks()
+                if (list.length === 0) return [{ labelKey: 'audio-tracks.none', enabled: false }]
+                const current = ctx.mpv.peek<number | false>('aid')
+                return list.map((t) => ({
+                  label: label(t),
+                  commandId: 'audio-tracks.select',
+                  arg: t.id,
+                  radio: true,
+                  checked: current === t.id
+                }))
+              }
+            }
+          ]
+        }
+      ]
+    })
+
+    ctx.i18n.register('ko', {
+      'audio-tracks.cycle': '오디오 트랙 전환',
+      'audio-tracks.select': '오디오 트랙 선택',
+      'audio-tracks.selectVideo': '비디오 트랙 선택',
+      'audio-tracks.reinitDecoder': '오디오 디코더 재초기화',
+      'audio-tracks.selectStreamFormat': '스트림 포맷 선택',
+      'audio-tracks.menuTitle': '오디오 트랙',
+      'audio-tracks.none': '(트랙 없음)'
+    })
+    ctx.i18n.register('en', {
+      'audio-tracks.cycle': 'Cycle audio track',
+      'audio-tracks.select': 'Select audio track',
+      'audio-tracks.selectVideo': 'Select video track',
+      'audio-tracks.reinitDecoder': 'Reinitialise audio decoder',
+      'audio-tracks.selectStreamFormat': 'Select stream format',
+      'audio-tracks.menuTitle': 'Audio track',
+      'audio-tracks.none': '(no tracks)'
+    })
+  }
+}
+
+export default mod

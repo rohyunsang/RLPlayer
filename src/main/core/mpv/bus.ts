@@ -296,7 +296,10 @@ export class MpvBus {
     const privileged = opts?.privileged === true
 
     const checkWrite = (property: string): boolean => {
-      if (!bus.owners) return true
+      // Core pieces hold their own properties (§3.7) and the two chains write
+      // exactly one each; `privileged` covers the handful of core writes that
+      // predate the owner map, such as the respawn path.
+      if (privileged || !bus.owners) return true
       return bus.owners.assertWrite(ownerId, property, strict, (m) => console.error(m))
     }
 

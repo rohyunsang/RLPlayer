@@ -147,11 +147,11 @@ export interface ResumeEntry {
 }
 
 export interface ToastPayload {
+  /** Identifies the main-side action callback; 0 means "no action". */
+  id?: number
   kind: 'resume' | 'info' | 'error'
   message: string
   actionLabel?: string
-  action?: string
-  data?: unknown
 }
 
 export interface PlaylistState {

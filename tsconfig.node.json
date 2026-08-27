@@ -1,5 +1,7 @@
 {
   "include": ["src/main/**/*", "src/preload/**/*", "src/shared/**/*", "electron.vite.config.ts"],
+  // Mentions HTMLElement; the main process has no DOM lib and never needs it.
+  "exclude": ["src/shared/renderer-api.ts"],
   "compilerOptions": {
     "composite": true,
     "target": "ES2022",

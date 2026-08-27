@@ -47,7 +47,7 @@ const realFs: StoreFs = {
   copyFileSync: (a, b) => nodeFs.copyFileSync(a, b)
 }
 
-export interface StoreOptions<T extends Record<string, unknown>> {
+export interface StoreOptions<T extends object> {
   id: string
   file: string
   version: number
@@ -70,7 +70,7 @@ export interface StoreOptions<T extends Record<string, unknown>> {
 
 const EXTRA = '__extra'
 
-export interface Store<T extends Record<string, unknown>> {
+export interface Store<T extends object> {
   read(): T
   write(patch: Partial<T>): void
   replace(next: T): void
@@ -80,7 +80,7 @@ export interface Store<T extends Record<string, unknown>> {
   readonly path: string
 }
 
-export function createStore<T extends Record<string, unknown>>(opts: StoreOptions<T>): Store<T> {
+export function createStore<T extends object>(opts: StoreOptions<T>): Store<T> {
   const fs = opts.fs ?? realFs
   const now = opts.now ?? Date.now
   const debounceMs = opts.debounceMs ?? 300
@@ -122,7 +122,7 @@ export function createStore<T extends Record<string, unknown>>(opts: StoreOption
       if (k === EXTRA || k === 'schema') continue
       if (v === undefined) continue
       if (k in opts.defaults) {
-        const base = opts.defaults[k]
+        const base = (opts.defaults as Record<string, unknown>)[k]
         out[k] = isPlain(base) && isPlain(v) ? { ...base, ...v } : v
       } else {
         extra[k] = v
@@ -258,7 +258,7 @@ export function createStore<T extends Record<string, unknown>>(opts: StoreOption
       const next = { ...cur } as Record<string, unknown>
       for (const [k, v] of Object.entries(patch)) {
         if (v === undefined) continue
-        const base = cur[k]
+        const base = (cur as Record<string, unknown>)[k]
         next[k] = isPlain(base) && isPlain(v) ? { ...base, ...v } : v
       }
       cache = next as T

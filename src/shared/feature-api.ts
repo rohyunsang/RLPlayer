@@ -10,8 +10,6 @@
  * are structurally identical to Electron's and pass straight through.
  */
 
-import type { PlayerState } from './types'
-
 export type FeatureId = string // kebab-case, globally unique, e.g. 'video-color'
 export type CommandId = string // `${FeatureId}.${verb}`
 export type SettingId = string // `${FeatureId}.${key}`
@@ -248,13 +246,23 @@ export interface CommandDescriptor {
   readonly enabledWhen?: () => boolean
   /** Internal mediator commands are hidden from the keybind editor. */
   readonly internal?: boolean
-  run(arg?: unknown): void | Promise<void>
+  run(arg?: unknown): unknown
 }
 
 export interface CommandService {
   register(commands: readonly CommandDescriptor[]): void
   /** Invoke another module's command by id. Throws if unknown. */
   invoke(id: CommandId, arg?: unknown): Promise<void>
+  /**
+   * Same as invoke(), but returns what the command returned.
+   *
+   * DEVIATION from 3.3.3, documented in docs/parity/02-wave0-api.md: 3.7.3
+   * sanctions `playlist.seriesPrefix(path)` as a mediator, and a mediator that
+   * computes a value cannot be expressed by a `run()` typed `void`. Rather than
+   * let M25 re-derive the prefix (which is precisely the duplication L50 exists
+   * to prevent), commands may return a value and callers may ask for it.
+   */
+  query<T>(id: CommandId, arg?: unknown): Promise<T>
   has(id: CommandId): boolean
 }
 
@@ -318,6 +326,27 @@ export interface PerFileService {
   currentKey(): string | null
   currentPath(): string | null
   forget(file: string): void
+  /**
+   * The stored resume position for a file, or null when there is nothing worth
+   * offering (under 60s in, or already finished).
+   *
+   * DEVIATION from §3.3.5, documented in docs/parity/02-wave0-api.md: the
+   * declared PerFileService had no way to READ a resume position, yet M28 needs
+   * one at `loadfile` time and M30 needs one for the continue-watching list.
+   * Both would otherwise have re-implemented resume.json.
+   */
+  resumeFor(file: string): { position: number; duration: number } | null
+  /** Record the current position for a file. Also a deviation: the module that
+   *  owns the queue is the only one that knows which file is playing and when
+   *  it is about to be replaced. */
+  recordPosition(file: string, position: number, duration: number): void
+  /**
+   * Flush the current file's slices and position NOW, before switching away.
+   * Also a deviation: mpv's `end-file` arrives with some properties already
+   * reset, so the module that is about to issue `loadfile` has to be able to
+   * say "capture first".
+   */
+  captureNow(): void
   /** Batch watched-state lookup for the playlist's badges (L39). */
   lookupMany(paths: readonly string[]): Record<string, { position: number; finished: boolean }>
 }
@@ -498,104 +527,4 @@ export interface DialogService {
     confirmKey: string
     destructive?: boolean
   }): Promise<boolean>
-}
-
-// ---------------------------------------------------------------------------
-// §3.4 Renderer-side API
-// ---------------------------------------------------------------------------
-
-export interface SeekbarLayerCtx {
-  readonly el: HTMLElement
-  /** 0 or unknown for live streams — guard. */
-  readonly duration: number
-  readonly width: number
-  timeToX(t: number): number
-  xToTime(x: number): number
-}
-
-export interface SeekbarPointerEvent {
-  readonly handle: string
-  readonly x: number
-  readonly time: number
-  readonly shift: boolean
-  readonly ctrl: boolean
-  readonly alt: boolean
-  preventDefault(): void
-}
-
-export interface SeekbarLayer {
-  id: string
-  /** Paint order low→high; hit-test order is the reverse. */
-  order: number
-  render(ctx: SeekbarLayerCtx): void
-  /** Interaction is opt-in: no hitTest means no pointer events at all. */
-  hitTest?(ctx: SeekbarLayerCtx & { x: number; tolerancePx: number }): string | null
-  onPointerDown?(e: SeekbarPointerEvent): void
-  onPointerMove?(e: SeekbarPointerEvent): void
-  onPointerUp?(e: SeekbarPointerEvent & { cancelled: boolean }): void
-  /** Hit-test independent, throttled to one frame. `null` on leave. */
-  onHover?(e: (SeekbarPointerEvent & { handle: string | null }) | null): void
-  tooltip?(e: SeekbarPointerEvent): { el: HTMLElement; order: number } | null
-  onKey?(e: {
-    handle: string
-    key: 'ArrowLeft' | 'ArrowRight' | 'Home' | 'End'
-    stepSec: number
-    shift: boolean
-  }): void
-}
-
-export interface StatsSection {
-  id: string
-  order: number
-  titleKey: string
-  levels?: ReadonlyArray<'full' | 'short' | 'misc'>
-  fields(): ReadonlyArray<{ labelKey: string; value: string }>
-  refresh?:
-    | { mode: 'static' }
-    | { mode: 'onChange'; watch: readonly string[] }
-    | { mode: 'poll'; intervalMs: number }
-}
-
-export interface SettingBinding {
-  get<T>(): T
-  set<T>(v: T): void
-  onChange(cb: () => void): Unsubscribe
-}
-
-export interface RendererFeatureContext {
-  readonly id: FeatureId
-  readonly ipc: {
-    invoke<Req, Res>(ch: IpcChannel, r?: Req): Promise<Res>
-    send<Req>(ch: IpcChannel, r?: Req): void
-    on<T>(ch: IpcChannel, cb: (p: T) => void): Unsubscribe
-  }
-  readonly state: {
-    get(): PlayerState | null
-    subscribe(cb: (s: PlayerState) => void): Unsubscribe
-  }
-  readonly t: (key: string, params?: Record<string, string | number>) => string
-  panel(p: {
-    id: PanelId
-    side: 'left' | 'right' | 'bottom'
-    titleKey: string
-    order: number
-    mount(el: HTMLElement): () => void
-  }): void
-  seekbarLayer(l: SeekbarLayer): void
-  statsSection(s: StatsSection): void
-  settingsSection(s: {
-    id: string
-    section: SettingSection
-    order: number
-    titleKey: string
-    mount(el: HTMLElement): () => void
-  }): void
-  settingsComponent(name: string, mount: (el: HTMLElement, api: SettingBinding) => () => void): void
-  readonly osd: { show(m: { kind: OsdKind; text: string; value?: number }): void }
-}
-
-export interface RendererFeatureModule {
-  readonly id: FeatureId
-  setup(ctx: RendererFeatureContext): void
-  dispose?(): void
 }

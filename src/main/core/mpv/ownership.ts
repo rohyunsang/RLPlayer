@@ -46,6 +46,22 @@ export const PROPERTY_WRITING_COMMANDS = new Set([
 /** §0.2 rule 5: no feature module ever issues a raw filter command. */
 export const CHAIN_COMMANDS = new Set(['vf', 'af', 'vf-command', 'af-command'])
 
+/**
+ * The core pieces are owners too (§3.7's first four rows). Seeding them means
+ * `ownerOf('pause')` answers 'core/mpv/bus' rather than 'nobody', so a module
+ * that tries to write the transport gets the same named-owner error it would
+ * get for another module's property — and the CI cross-check against
+ * modules.json compares like with like.
+ */
+export const CORE_OWNERSHIP: readonly OwnershipDeclaration[] = [
+  {
+    id: 'core/mpv/bus',
+    ownsProperties: ['pause', 'keep-open', 'idle', 'force-window', 'msg-level', 'input-*']
+  },
+  { id: 'core/vf-chain', ownsProperties: ['vf'] },
+  { id: 'core/af-chain', ownsProperties: ['af'] }
+]
+
 export class OwnerMap {
   private readonly exact = new Map<string, string>()
   private readonly globs: Claim[] = []

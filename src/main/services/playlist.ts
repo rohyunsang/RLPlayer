@@ -2,21 +2,16 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { PlaylistItem } from '@shared/types'
 
-export const VIDEO_EXTENSIONS = [
-  'mkv', 'mp4', 'avi', 'mov', 'wmv', 'm4v', 'webm', 'ts', 'm2ts', 'mts',
-  'flv', 'mpg', 'mpeg', 'vob', 'ogv', '3gp', 'rmvb', 'rm', 'asf', 'divx',
-  'f4v', 'm2v', 'mpv', 'qt', 'dat', 'amv'
-]
-
-export const AUDIO_EXTENSIONS = [
-  'mp3', 'flac', 'aac', 'm4a', 'ogg', 'opus', 'wav', 'wma', 'ape', 'alac', 'aiff', 'dsf'
-]
-
-const MEDIA = new Set([...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS])
-
-export function isMediaFile(file: string): boolean {
-  return MEDIA.has(path.extname(file).slice(1).toLowerCase())
-}
+export {
+  VIDEO_EXTENSIONS,
+  AUDIO_EXTENSIONS,
+  SUB_EXTENSIONS,
+  isMediaFile,
+  isSubtitleFile
+} from '../../shared/media-types.ts'
+// Relative + .ts: this file is unit-tested under `node --test`, which strips
+// types but knows nothing about the bundler's '@shared' alias.
+import { isMediaFile } from '../../shared/media-types.ts'
 
 // --- natural sort ---------------------------------------------------------
 //

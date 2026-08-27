@@ -161,7 +161,13 @@ export function validateArgContributions(contributions: readonly ArgContribution
         )
       }
 
-      if (WID_INERT_OPTIONS.includes(name)) {
+      // Core is exempt from the inert check, and only core. §5.3 asks for
+      // `--cursor-autohide=no` and `--taskbar-progress=no` in the base set
+      // while §7.5 lists both as inert; setting them is harmless belt-and-
+      // braces if a future mpv changes its mind about what --wid implies. A
+      // FEATURE module contributing one is still a boot error, because there
+      // the flag is standing in for window work that has to happen in Electron.
+      if (c.ownerId !== 'core/mpv/bus' && WID_INERT_OPTIONS.includes(name)) {
         const advice = WID_INERT_ADVICE[name] ?? 'ctx.window (§3.3.7)'
         throw new ContributionError(
           `module '${c.ownerId}' contributes '${arg}', which is INERT under --wid (§7.5). ` +

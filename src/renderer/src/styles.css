@@ -859,3 +859,34 @@ kbd {
   margin: 0;
   color: var(--text-dim);
 }
+
+
+/* --- contributed seek-bar layers ---------------------------------------- */
+/* The layer container sits over the range input but never eats its pointer
+   events: the host routes every gesture itself, so a layer that wants the
+   pointer says so through hitTest rather than by covering the bar. */
+.seek-layers {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.seek-layer {
+  position: absolute;
+  inset: 0;
+}
+.seek-chapter-tick {
+  position: absolute;
+  top: 50%;
+  width: 2px;
+  height: 10px;
+  margin-left: -1px;
+  transform: translateY(-50%);
+  background: rgba(255, 255, 255, 0.75);
+  border-radius: 1px;
+}
+.seek-tip-chapter {
+  display: block;
+  font-size: 11px;
+  opacity: 0.85;
+}
