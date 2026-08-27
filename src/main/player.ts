@@ -51,6 +51,16 @@ export class Player {
 
     this.mpv.on('state', () => this.pushState())
     this.mpv.on('eof', () => void this.onEof())
+    // mpv reports an unplayable file through end-file, not through loadfile's
+    // reply, so without this a corrupt or unsupported file just sits silent.
+    this.mpv.on('mpv-event', (event: string, msg: Record<string, unknown>) => {
+      if (event !== 'end-file' || msg.reason !== 'error') return
+      const name = this.currentFile ? path.basename(this.currentFile) : ''
+      this.toast({
+        kind: 'error',
+        message: `재생할 수 없는 파일입니다${name ? `: ${name}` : ''}`
+      })
+    })
     this.mpv.on('crashed', (code: number, detail: string) => {
       this.toast({
         kind: 'error',

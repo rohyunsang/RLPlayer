@@ -1,0 +1,5 @@
+Rename this file to "portable.txt" to run RLPlayer in portable mode.
+
+In portable mode RLPlayer keeps config.json and resume.json in a "data" folder
+next to RLPlayer.exe instead of in %APPDATA%\rlplayer, so the whole folder can
+be moved between machines or run from a USB drive.

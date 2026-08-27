@@ -234,6 +234,13 @@ export function createWindows(): void {
     mainWindow.on(ev as 'move', syncBounds)
   }
 
+  if (layout === 'overlay') {
+    // Only the overlay can see input. If the shell window ever takes focus --
+    // a taskbar click, Alt+Tab, or being raised by the OS -- hand focus
+    // straight back, or the keyboard silently stops working.
+    mainWindow.on('focus', () => alive(rendererWindow)?.focus())
+  }
+
   const secondary = layout === 'compat' ? mpvHost : rendererWindow
   mainWindow.on('minimize', () => secondary?.hide())
   mainWindow.on('restore', () => {
@@ -280,18 +287,28 @@ function clampToDisplay(b: {
   width: number
   height: number
 }): { x?: number; y?: number; width: number; height: number } {
-  const width = Math.max(480, Math.round(b.width))
-  const height = Math.max(320, Math.round(b.height))
+  let width = Math.max(480, Math.round(b.width))
+  let height = Math.max(320, Math.round(b.height))
   if (b.x === undefined || b.y === undefined) return { width, height }
-  // A position saved on a monitor that is no longer attached would open the
-  // window off-screen; centre it instead.
+
   const area = screen.getDisplayMatching({ x: b.x, y: b.y, width, height }).workArea
-  const visible =
-    b.x + width > area.x &&
-    b.x < area.x + area.width &&
-    b.y + height > area.y &&
-    b.y < area.y + area.height
-  return visible ? { x: Math.round(b.x), y: Math.round(b.y), width, height } : { width, height }
+
+  // Restore the window strictly INSIDE one display's work area. A geometry
+  // saved under a different monitor layout can otherwise leave the window
+  // straddling two displays, which has been observed to leave mpv's D3D11
+  // swapchain rendering black. Returning undefined coordinates lets Electron
+  // centre the window instead.
+  width = Math.min(width, area.width)
+  height = Math.min(height, area.height)
+  const x = Math.round(Math.min(Math.max(b.x, area.x), area.x + area.width - width))
+  const y = Math.round(Math.min(Math.max(b.y, area.y), area.y + area.height - height))
+
+  const fits =
+    x >= area.x &&
+    y >= area.y &&
+    x + width <= area.x + area.width &&
+    y + height <= area.y + area.height
+  return fits ? { x, y, width, height } : { width, height }
 }
 
 export function persistBounds(): void {

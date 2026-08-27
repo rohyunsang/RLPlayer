@@ -1,0 +1,89 @@
+appId: com.rohyunsang.rlplayer
+productName: RLPlayer
+copyright: Copyright (c) 2026 rohyunsang
+
+directories:
+  buildResources: build
+  output: dist
+
+# Ship only the built output; sources, samples and the mpv archive cache stay out.
+files:
+  - out/**/*
+  - package.json
+  - '!**/*.map'
+  - '!**/*.ts'
+
+# mpv is bundled as a SEPARATE EXECUTABLE, never linked. RLPlayer talks to it
+# over a JSON IPC named pipe, which is what keeps mpv's GPLv2+ from reaching
+# RLPlayer's own MIT-licensed code. Its licence text ships alongside it.
+extraResources:
+  - from: resources/mpv
+    to: mpv
+    filter:
+      - '**/*'
+  - from: THIRD-PARTY-NOTICES.md
+    to: THIRD-PARTY-NOTICES.md
+  - from: LICENSE
+    to: LICENSE
+  - from: licenses
+    to: licenses
+    filter:
+      - '**/*'
+
+# Rename this to portable.txt to keep all settings beside the executable.
+extraFiles:
+  - from: build/portable.txt.example
+    to: portable.txt.example
+
+asar: true
+npmRebuild: false
+
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: zip
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  license: LICENSE
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  installerLanguages:
+    - ko-KR
+  language: '1042'
+  shortcutName: RLPlayer
+  artifactName: ${productName} Setup ${version}.${ext}
+  uninstallDisplayName: ${productName} ${version}
+  deleteAppDataOnUninstall: false
+
+# Registers the ProgIDs and Capabilities so RLPlayer can be PICKED as a default
+# app. Windows 10/11 will not let an application make itself the default
+# handler -- that requires the user to choose it in Settings, which the app
+# links to from its settings screen. See README.
+fileAssociations:
+  - ext:
+      - mkv
+      - mp4
+      - avi
+      - mov
+      - wmv
+      - m4v
+      - webm
+      - ts
+      - m2ts
+      - flv
+      - mpg
+      - mpeg
+      - vob
+      - ogv
+      - 3gp
+      - rmvb
+    name: RLPlayer Video
+    description: 동영상 파일
+    icon: build/icon.ico
+    role: Viewer

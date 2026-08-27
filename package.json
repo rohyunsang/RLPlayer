@@ -15,7 +15,8 @@
     "start": "electron-vite preview",
     "dist": "npm run build && electron-builder --win --publish never",
     "test": "node --test src/main/services/*.test.ts",
-    "verify:sort": "node scripts/verify-natural-sort.mjs"
+    "verify:sort": "node scripts/verify-natural-sort.mjs",
+    "make:icon": "electron scripts/make-icon.js"
   },
   "devDependencies": {
     "@types/node": "^26.4.0",
