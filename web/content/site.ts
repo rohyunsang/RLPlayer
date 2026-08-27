@@ -183,8 +183,8 @@ export const ko = {
       },
       {
         icon: "bolt",
-        title: "가볍고 즉시 실행",
-        body: "스플래시 화면도, 로딩 바도 없습니다. 더블클릭하면 첫 프레임이 이미 떠 있습니다.",
+        title: "켜면 바로 재생",
+        body: "스플래시 화면도, 로딩 바도 없습니다. 더블클릭하면 첫 프레임이 이미 떠 있습니다. 설치본은 139MB로 작지 않은데, 그중 119MB가 내장된 재생 엔진입니다 — 대신 코덱을 따로 깔 일이 없습니다.",
       },
     ],
   },
@@ -474,8 +474,8 @@ export const en: Dict = {
       },
       {
         icon: "bolt",
-        title: "Light and instant",
-        body: "No splash screen, no loading bar. Double-click a file and the first frame is already on screen.",
+        title: "Starts instantly",
+        body: "No splash screen, no loading bar. Double-click a file and the first frame is already on screen. The installer is 139MB — not small, but 119MB of that is the bundled playback engine, which is why you never install a codec pack.",
       },
     ],
   },

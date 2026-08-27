@@ -1,0 +1,2421 @@
+[
+  {
+    "id": "core-paths",
+    "path": "src/main/core/paths.ts",
+    "title": "Portable paths and Electron redirection",
+    "wave": 0,
+    "priority": "P0",
+    "dependsOn": [],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/core/paths.ts"
+    ],
+    "features": [
+      "P36",
+      "P37",
+      "P38",
+      "P39"
+    ],
+    "mustNotTouch": [
+      "any file under src/main/features/** or src/renderer/src/features/**",
+      "another core piece's files"
+    ]
+  },
+  {
+    "id": "core-feature-api",
+    "path": "src/shared/feature-api.ts",
+    "title": "The module and context interfaces",
+    "wave": 0,
+    "priority": "P0",
+    "dependsOn": [],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/shared/feature-api.ts"
+    ],
+    "features": [],
+    "mustNotTouch": [
+      "any file under src/main/features/** or src/renderer/src/features/**",
+      "another core piece's files"
+    ]
+  },
+  {
+    "id": "core-i18n",
+    "path": "src/main/core/i18n/",
+    "title": "Message catalogs, t() and the 조사 helper",
+    "wave": 0,
+    "priority": "P0",
+    "dependsOn": [
+      "core-paths"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/core/i18n/",
+      "src/main/core/i18n/catalogs/"
+    ],
+    "features": [
+      "P45",
+      "P46",
+      "P47",
+      "P48"
+    ],
+    "mustNotTouch": [
+      "any file under src/main/features/** or src/renderer/src/features/**",
+      "another core piece's files"
+    ]
+  },
+  {
+    "id": "core-settings",
+    "path": "src/main/core/settings/",
+    "title": "Descriptor registry and versioned stores",
+    "wave": 0,
+    "priority": "P0",
+    "dependsOn": [
+      "core-paths",
+      "core-i18n"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/core/settings/",
+      "src/main/services/config.ts"
+    ],
+    "features": [
+      "P03",
+      "P07",
+      "P08",
+      "P09",
+      "P10",
+      "P11",
+      "P12"
+    ],
+    "mustNotTouch": [
+      "any file under src/main/features/** or src/renderer/src/features/**",
+      "another core piece's files"
+    ]
+  },
+  {
+    "id": "core-registry",
+    "path": "src/main/core/registry.ts",
+    "title": "Module discovery, order, namespaces, isolation",
+    "wave": 0,
+    "priority": "P0",
+    "dependsOn": [
+      "core-feature-api",
+      "core-i18n",
+      "core-settings"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/core/registry.ts",
+      "src/main/features/index.ts"
+    ],
+    "features": [],
+    "mustNotTouch": [
+      "any file under src/main/features/** or src/renderer/src/features/**",
+      "another core piece's files"
+    ]
+  },
+  {
+    "id": "core-mpv-bus",
+    "path": "src/main/core/mpv/bus.ts",
+    "title": "Property bus, spawn args, respawn",
+    "wave": 0,
+    "priority": "P0",
+    "dependsOn": [
+      "core-registry"
+    ],
+    "ownedProperties": [
+      "force-window",
+      "idle",
+      "input-*",
+      "keep-open",
+      "msg-level",
+      "pause"
+    ],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/core/mpv/bus.ts",
+      "src/main/core/mpv/reserved.ts",
+      "src/main/mpv/manager.ts"
+    ],
+    "features": [],
+    "mustNotTouch": [
+      "any file under src/main/features/** or src/renderer/src/features/**",
+      "another core piece's files"
+    ]
+  },
+  {
+    "id": "core-mpv-ownership",
+    "path": "src/main/core/mpv/ownership.ts",
+    "title": "The §3.7 property owner map",
+    "wave": 0,
+    "priority": "P0",
+    "dependsOn": [
+      "core-registry",
+      "core-mpv-bus"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/core/mpv/ownership.ts"
+    ],
+    "features": [],
+    "mustNotTouch": [
+      "any file under src/main/features/** or src/renderer/src/features/**",
+      "another core piece's files"
+    ]
+  },
+  {
+    "id": "core-vf-chain",
+    "path": "src/main/core/mpv/vf-chain.ts",
+    "title": "Sole owner of mpv `vf`",
+    "wave": 0,
+    "priority": "P0",
+    "dependsOn": [
+      "core-mpv-bus",
+      "core-mpv-ownership"
+    ],
+    "ownedProperties": [
+      "vf"
+    ],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/core/mpv/vf-chain.ts"
+    ],
+    "features": [
+      "V56"
+    ],
+    "mustNotTouch": [
+      "any file under src/main/features/** or src/renderer/src/features/**",
+      "another core piece's files"
+    ]
+  },
+  {
+    "id": "core-af-chain",
+    "path": "src/main/core/mpv/af-chain.ts",
+    "title": "Sole owner of mpv `af`",
+    "wave": 0,
+    "priority": "P0",
+    "dependsOn": [
+      "core-mpv-bus",
+      "core-mpv-ownership"
+    ],
+    "ownedProperties": [
+      "af"
+    ],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/core/mpv/af-chain.ts"
+    ],
+    "features": [
+      "A25",
+      "A26",
+      "A27"
+    ],
+    "mustNotTouch": [
+      "any file under src/main/features/** or src/renderer/src/features/**",
+      "another core piece's files"
+    ]
+  },
+  {
+    "id": "core-input",
+    "path": "src/main/core/input/",
+    "title": "Command registry, derived presets, conflicts",
+    "wave": 0,
+    "priority": "P0",
+    "dependsOn": [
+      "core-registry"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/core/input/",
+      "src/shared/input/accel.ts",
+      "src/shared/keybinds.ts"
+    ],
+    "features": [
+      "P13",
+      "P14",
+      "P15",
+      "P16",
+      "P18",
+      "P22",
+      "P23",
+      "P24"
+    ],
+    "mustNotTouch": [
+      "any file under src/main/features/** or src/renderer/src/features/**",
+      "another core piece's files"
+    ]
+  },
+  {
+    "id": "core-osd",
+    "path": "src/main/core/osd/",
+    "title": "OSD bus, toasts, progress handles",
+    "wave": 0,
+    "priority": "P0",
+    "dependsOn": [
+      "core-registry"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/core/osd/"
+    ],
+    "features": [
+      "U01"
+    ],
+    "mustNotTouch": [
+      "any file under src/main/features/** or src/renderer/src/features/**",
+      "another core piece's files"
+    ]
+  },
+  {
+    "id": "core-per-file",
+    "path": "src/main/core/state/per-file.ts",
+    "title": "File identity and slice registry",
+    "wave": 0,
+    "priority": "P0",
+    "dependsOn": [
+      "core-settings",
+      "core-mpv-bus"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/core/state/per-file.ts",
+      "src/main/services/resume.ts",
+      "src/main/services/resume-rules.ts"
+    ],
+    "features": [
+      "N45",
+      "P49",
+      "P50",
+      "P51",
+      "P53",
+      "P54"
+    ],
+    "mustNotTouch": [
+      "any file under src/main/features/** or src/renderer/src/features/**",
+      "another core piece's files"
+    ]
+  },
+  {
+    "id": "core-window",
+    "path": "src/main/core/window/",
+    "title": "WindowService: fullscreen, ontop, PiP, bounds, sleep",
+    "wave": 0,
+    "priority": "P0",
+    "dependsOn": [
+      "core-registry"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/core/window/",
+      "src/main/windows.ts"
+    ],
+    "features": [],
+    "mustNotTouch": [
+      "any file under src/main/features/** or src/renderer/src/features/**",
+      "another core piece's files"
+    ]
+  },
+  {
+    "id": "core-legacy-bridge",
+    "path": "src/main/core/legacy-bridge.ts",
+    "title": "Transitional shim for ipc.ts and Player — deleted at the end of Wave 1",
+    "wave": 0,
+    "priority": "P0",
+    "dependsOn": [
+      "core-registry",
+      "core-input"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/core/legacy-bridge.ts",
+      "src/main/ipc.ts",
+      "src/main/player.ts",
+      "src/main/menu.ts",
+      "src/preload/index.ts",
+      "src/shared/types.ts"
+    ],
+    "features": [],
+    "mustNotTouch": [
+      "any file under src/main/features/** or src/renderer/src/features/**",
+      "another core piece's files"
+    ]
+  },
+  {
+    "id": "core-renderer",
+    "path": "src/renderer/src/core/",
+    "title": "Renderer registry, panel host, interactive seek-bar host, stats and settings hosts",
+    "wave": 0,
+    "priority": "P0",
+    "dependsOn": [
+      "core-feature-api"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/renderer/src/core/"
+    ],
+    "features": [],
+    "mustNotTouch": [
+      "any file under src/main/features/** or src/renderer/src/features/**",
+      "another core piece's files"
+    ]
+  },
+  {
+    "id": "M01",
+    "path": "src/main/features/video-color/",
+    "title": "Video colour controls",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-vf-chain"
+    ],
+    "ownedProperties": [
+      "brightness",
+      "contrast",
+      "gamma",
+      "hue",
+      "saturation",
+      "video-output-levels"
+    ],
+    "requestsProperties": [],
+    "ownedFilterLabels": [
+      "rl-autolevel",
+      "rl-cshift",
+      "rl-levels"
+    ],
+    "ownedFiles": [
+      "src/main/features/video-color/",
+      "src/renderer/src/features/video-color/"
+    ],
+    "features": [
+      "V01",
+      "V02",
+      "V03",
+      "V04",
+      "V05",
+      "V06",
+      "V07",
+      "V53"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M02",
+    "path": "src/main/features/video-geometry/",
+    "title": "Video geometry, crop and rotation",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-vf-chain"
+    ],
+    "ownedProperties": [
+      "keepaspect",
+      "panscan",
+      "video-align-x",
+      "video-align-y",
+      "video-aspect-method",
+      "video-aspect-override",
+      "video-crop",
+      "video-margin-ratio-bottom",
+      "video-margin-ratio-left",
+      "video-margin-ratio-right",
+      "video-margin-ratio-top",
+      "video-pan-x",
+      "video-pan-y",
+      "video-rotate",
+      "video-scale-x",
+      "video-scale-y",
+      "video-unscaled",
+      "video-zoom"
+    ],
+    "requestsProperties": [],
+    "ownedFilterLabels": [
+      "rl-cropdetect",
+      "rl-hflip",
+      "rl-rotate",
+      "rl-vflip"
+    ],
+    "ownedFiles": [
+      "src/main/features/video-geometry/",
+      "src/renderer/src/features/video-geometry/"
+    ],
+    "features": [
+      "V22",
+      "V23",
+      "V24",
+      "V25",
+      "V26",
+      "V27",
+      "V28",
+      "V29",
+      "V30",
+      "V31",
+      "V53",
+      "V57",
+      "V58"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M03",
+    "path": "src/main/features/video-enhance/",
+    "title": "Video enhancement filters",
+    "wave": 1,
+    "priority": "P1",
+    "dependsOn": [
+      "core-vf-chain"
+    ],
+    "ownedProperties": [
+      "deband",
+      "deband-grain",
+      "deband-iterations",
+      "deband-range",
+      "deband-threshold"
+    ],
+    "requestsProperties": [],
+    "ownedFilterLabels": [
+      "rl-deblock",
+      "rl-denoise",
+      "rl-gdenoise",
+      "rl-mblur",
+      "rl-sharpen",
+      "rl-soften",
+      "rl-tdenoise"
+    ],
+    "ownedFiles": [
+      "src/main/features/video-enhance/",
+      "src/renderer/src/features/video-enhance/"
+    ],
+    "features": [
+      "V08",
+      "V09",
+      "V10",
+      "V11",
+      "V12",
+      "V13",
+      "V14",
+      "V15",
+      "V16",
+      "V53"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M04",
+    "path": "src/main/features/video-deinterlace/",
+    "title": "Deinterlacing",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-vf-chain"
+    ],
+    "ownedProperties": [
+      "deinterlace",
+      "deinterlace-field-parity"
+    ],
+    "requestsProperties": [],
+    "ownedFilterLabels": [
+      "rl-deint"
+    ],
+    "ownedFiles": [
+      "src/main/features/video-deinterlace/",
+      "src/renderer/src/features/video-deinterlace/"
+    ],
+    "features": [
+      "V17",
+      "V18",
+      "V19",
+      "V20",
+      "V21",
+      "V53"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M05",
+    "path": "src/main/features/video-hdr/",
+    "title": "HDR tone mapping and passthrough",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-vf-chain",
+      "M07"
+    ],
+    "ownedProperties": [
+      "allow-delayed-peak-detect",
+      "gamut-mapping-mode",
+      "hdr-compute-peak",
+      "hdr-contrast-recovery",
+      "hdr-peak-percentile",
+      "inverse-tone-mapping",
+      "target-colorspace-hint",
+      "target-colorspace-hint-mode",
+      "target-contrast",
+      "target-peak",
+      "tone-mapping",
+      "tone-mapping-max-boost",
+      "tone-mapping-param"
+    ],
+    "requestsProperties": [
+      "d3d11-output-csp",
+      "d3d11-output-format"
+    ],
+    "ownedFilterLabels": [
+      "rl-dv",
+      "rl-truehdr"
+    ],
+    "ownedFiles": [
+      "src/main/features/video-hdr/",
+      "src/renderer/src/features/video-hdr/"
+    ],
+    "features": [
+      "V32",
+      "V33",
+      "V34",
+      "V35",
+      "V53"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M06",
+    "path": "src/main/features/video-scaler/",
+    "title": "Scalers, dither, shaders and LUTs",
+    "wave": 1,
+    "priority": "P1",
+    "dependsOn": [
+      "core-vf-chain",
+      "M07"
+    ],
+    "ownedProperties": [
+      "correct-downscaling",
+      "cscale",
+      "cscale-antiring",
+      "cscale-blur",
+      "cscale-clamp",
+      "cscale-param1",
+      "cscale-param2",
+      "cscale-radius",
+      "cscale-window",
+      "dither",
+      "dither-depth",
+      "dscale",
+      "dscale-antiring",
+      "dscale-blur",
+      "dscale-clamp",
+      "dscale-param1",
+      "dscale-param2",
+      "dscale-radius",
+      "dscale-window",
+      "glsl-shader-opts",
+      "glsl-shaders",
+      "icc-3dlut-size",
+      "icc-intent",
+      "icc-profile",
+      "icc-profile-auto",
+      "icc-use-luma",
+      "image-lut",
+      "image-lut-type",
+      "linear-downscaling",
+      "lut",
+      "lut-type",
+      "scale",
+      "scale-antiring",
+      "scale-blur",
+      "scale-clamp",
+      "scale-param1",
+      "scale-param2",
+      "scale-radius",
+      "scale-window",
+      "sigmoid-upscaling"
+    ],
+    "requestsProperties": [
+      "d3d11-output-format"
+    ],
+    "ownedFilterLabels": [
+      "rl-lut",
+      "rl-vsr"
+    ],
+    "ownedFiles": [
+      "src/main/features/video-scaler/",
+      "src/renderer/src/features/video-scaler/"
+    ],
+    "features": [
+      "V36",
+      "V44",
+      "V45",
+      "V46",
+      "V47",
+      "V48",
+      "V53"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M07",
+    "path": "src/main/features/video-decode/",
+    "title": "Hardware decode and video output",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-mpv-bus"
+    ],
+    "ownedProperties": [
+      "background",
+      "background-blur-radius",
+      "background-color",
+      "background-tile-color-0",
+      "background-tile-color-1",
+      "background-tile-size",
+      "corner-rounding",
+      "d3d11-adapter",
+      "d3d11-feature-level",
+      "d3d11-flip",
+      "d3d11-output-csp",
+      "d3d11-output-format",
+      "d3d11-output-mode",
+      "d3d11-sync-interval",
+      "d3d11-warp",
+      "gpu-api",
+      "gpu-context",
+      "hwdec",
+      "hwdec-codecs",
+      "hwdec-extra-frames",
+      "hwdec-software-fallback",
+      "vo"
+    ],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/video-decode/",
+      "src/renderer/src/features/video-decode/"
+    ],
+    "features": [
+      "V49",
+      "V50",
+      "V51",
+      "V52",
+      "V53",
+      "V54"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M08",
+    "path": "src/main/features/video-framerate/",
+    "title": "Frame timing and interpolation",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-vf-chain"
+    ],
+    "ownedProperties": [
+      "display-fps-override",
+      "framedrop",
+      "interpolation",
+      "tscale",
+      "video-sync"
+    ],
+    "requestsProperties": [],
+    "ownedFilterLabels": [
+      "rl-mi"
+    ],
+    "ownedFiles": [
+      "src/main/features/video-framerate/",
+      "src/renderer/src/features/video-framerate/"
+    ],
+    "features": [
+      "V41",
+      "V42",
+      "V43",
+      "V53"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M09",
+    "path": "src/main/features/video-stereo360/",
+    "title": "Stereo 3D and 360 projection",
+    "wave": 1,
+    "priority": "P1",
+    "dependsOn": [
+      "core-vf-chain",
+      "M02"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [
+      "keepaspect",
+      "panscan"
+    ],
+    "ownedFilterLabels": [
+      "rl-360",
+      "rl-3d"
+    ],
+    "ownedFiles": [
+      "src/main/features/video-stereo360/",
+      "src/renderer/src/features/video-stereo360/"
+    ],
+    "features": [
+      "V37",
+      "V38",
+      "V39",
+      "V40",
+      "V53"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M10",
+    "path": "src/main/features/audio-volume/",
+    "title": "Volume, speed and pitch",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-af-chain"
+    ],
+    "ownedProperties": [
+      "audio-delay",
+      "audio-pitch-correction",
+      "mute",
+      "pitch",
+      "speed",
+      "volume",
+      "volume-gain"
+    ],
+    "requestsProperties": [],
+    "ownedFilterLabels": [
+      "rlboost",
+      "rltempo"
+    ],
+    "ownedFiles": [
+      "src/main/features/audio-volume/",
+      "src/renderer/src/features/audio-volume/"
+    ],
+    "features": [
+      "A06",
+      "A07",
+      "A08",
+      "A09",
+      "A22",
+      "A23",
+      "A24"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M11",
+    "path": "src/main/features/audio-tracks/",
+    "title": "Audio and video track selection",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-mpv-bus"
+    ],
+    "ownedProperties": [
+      "aid",
+      "alang",
+      "audio-display",
+      "cover-art-auto",
+      "cover-art-whitelist",
+      "subs-with-matching-audio",
+      "track-auto-selection",
+      "vid"
+    ],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/audio-tracks/",
+      "src/renderer/src/features/audio-tracks/"
+    ],
+    "features": [
+      "A10",
+      "A11",
+      "A12",
+      "A38",
+      "A44",
+      "P52"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M12",
+    "path": "src/main/features/audio-eq/",
+    "title": "Equalizer",
+    "wave": 1,
+    "priority": "P1",
+    "dependsOn": [
+      "core-af-chain"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [
+      "rleq",
+      "rlfeq",
+      "rlpre",
+      "rltone"
+    ],
+    "ownedFiles": [
+      "src/main/features/audio-eq/",
+      "src/renderer/src/features/audio-eq/"
+    ],
+    "features": [
+      "A01",
+      "A02",
+      "A03",
+      "A35",
+      "A49"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M13",
+    "path": "src/main/features/audio-loudness/",
+    "title": "Loudness, normalizer and night mode",
+    "wave": 1,
+    "priority": "P1",
+    "dependsOn": [
+      "core-af-chain",
+      "M11"
+    ],
+    "ownedProperties": [
+      "ad-lavc-ac3drc",
+      "replaygain",
+      "replaygain-clip",
+      "replaygain-fallback",
+      "replaygain-preamp"
+    ],
+    "requestsProperties": [
+      "aid"
+    ],
+    "ownedFilterLabels": [
+      "rldlg",
+      "rlnight",
+      "rlnorm"
+    ],
+    "ownedFiles": [
+      "src/main/features/audio-loudness/",
+      "src/renderer/src/features/audio-loudness/"
+    ],
+    "features": [
+      "A04",
+      "A05",
+      "A36",
+      "A37"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M14",
+    "path": "src/main/features/audio-channels/",
+    "title": "Channels, downmix and upmix",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-af-chain"
+    ],
+    "ownedProperties": [
+      "ad-lavc-downmix",
+      "ad-lavc-threads",
+      "audio-channels",
+      "audio-normalize-downmix"
+    ],
+    "requestsProperties": [],
+    "ownedFilterLabels": [
+      "rlch"
+    ],
+    "ownedFiles": [
+      "src/main/features/audio-channels/",
+      "src/renderer/src/features/audio-channels/"
+    ],
+    "features": [
+      "A13",
+      "A14",
+      "A15",
+      "A16",
+      "A17",
+      "A47"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M15",
+    "path": "src/main/features/audio-devices/",
+    "title": "Audio devices and passthrough",
+    "wave": 1,
+    "priority": "P1",
+    "dependsOn": [
+      "core-af-chain",
+      "M11"
+    ],
+    "ownedProperties": [
+      "audio-buffer",
+      "audio-device",
+      "audio-exclusive",
+      "audio-fallback-to-null",
+      "audio-format",
+      "audio-samplerate",
+      "audio-spdif",
+      "audio-stream-silence",
+      "audio-wait-open",
+      "wasapi-exclusive-buffer"
+    ],
+    "requestsProperties": [
+      "aid"
+    ],
+    "ownedFilterLabels": [
+      "rlac3"
+    ],
+    "ownedFiles": [
+      "src/main/features/audio-devices/",
+      "src/renderer/src/features/audio-devices/"
+    ],
+    "features": [
+      "A18",
+      "A19",
+      "A20",
+      "A21",
+      "A41",
+      "A42",
+      "A43",
+      "A50"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M16",
+    "path": "src/main/features/audio-effects/",
+    "title": "Audio effects",
+    "wave": 1,
+    "priority": "P2",
+    "dependsOn": [
+      "core-af-chain"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [
+      "rlcry",
+      "rlfx",
+      "rlnr"
+    ],
+    "ownedFiles": [
+      "src/main/features/audio-effects/",
+      "src/renderer/src/features/audio-effects/"
+    ],
+    "features": [
+      "A28",
+      "A29",
+      "A30",
+      "A31",
+      "A32",
+      "A33",
+      "A34"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M17",
+    "path": "src/main/features/subs-tracks/",
+    "title": "Subtitle tracks and sources",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-mpv-bus",
+      "M18"
+    ],
+    "ownedProperties": [
+      "secondary-sid",
+      "secondary-sub-visibility",
+      "sid",
+      "slang",
+      "sub-auto",
+      "sub-auto-exts",
+      "sub-create-cc-track",
+      "sub-file-paths",
+      "sub-reload",
+      "sub-visibility",
+      "subs-fallback",
+      "subs-fallback-forced",
+      "subs-match-os-language"
+    ],
+    "requestsProperties": [
+      "subs-with-matching-audio"
+    ],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/subs-tracks/",
+      "src/renderer/src/features/subs-tracks/"
+    ],
+    "features": [
+      "P52",
+      "S01",
+      "S02",
+      "S08",
+      "S09",
+      "S10",
+      "S11",
+      "S12",
+      "S13",
+      "S14",
+      "S15",
+      "S16",
+      "S52"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M18",
+    "path": "src/main/features/subs-formats/",
+    "title": "Subtitle formats and encoding",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-settings"
+    ],
+    "ownedProperties": [
+      "sub-codepage"
+    ],
+    "requestsProperties": [
+      "sub-reload"
+    ],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/subs-formats/",
+      "src/renderer/src/features/subs-formats/"
+    ],
+    "features": [
+      "S03",
+      "S04",
+      "S05",
+      "S06",
+      "S07",
+      "S33",
+      "S34",
+      "S42"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M19",
+    "path": "src/main/features/subs-style/",
+    "title": "Subtitle styling",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-mpv-bus",
+      "M17"
+    ],
+    "ownedProperties": [
+      "embeddedfonts",
+      "image-subs-hdr-peak",
+      "image-subs-video-resolution",
+      "secondary-sub-ass-override",
+      "secondary-sub-pos",
+      "secondary-sub-scale",
+      "stretch-dvd-subs",
+      "stretch-image-subs-to-screen",
+      "sub-align-x",
+      "sub-align-y",
+      "sub-ass-force-margins",
+      "sub-ass-override",
+      "sub-ass-scale-with-window",
+      "sub-ass-style-overrides",
+      "sub-ass-styles",
+      "sub-ass-vsfilter-color-compat",
+      "sub-back-color",
+      "sub-blur",
+      "sub-bold",
+      "sub-border-style",
+      "sub-color",
+      "sub-filter-regex",
+      "sub-filter-regex-enable",
+      "sub-filter-regex-plain",
+      "sub-filter-regex-warn",
+      "sub-filter-sdh",
+      "sub-filter-sdh-enclosures",
+      "sub-filter-sdh-harder",
+      "sub-font",
+      "sub-font-size",
+      "sub-fonts-dir",
+      "sub-forced-events-only",
+      "sub-gauss",
+      "sub-hdr-peak",
+      "sub-italic",
+      "sub-justify",
+      "sub-line-spacing",
+      "sub-margin-x",
+      "sub-margin-y",
+      "sub-margin-y-offset",
+      "sub-outline-color",
+      "sub-outline-size",
+      "sub-pos",
+      "sub-scale",
+      "sub-scale-by-window",
+      "sub-scale-signs",
+      "sub-scale-with-window",
+      "sub-shadow-offset",
+      "sub-spacing",
+      "sub-use-margins"
+    ],
+    "requestsProperties": [
+      "sub-reload"
+    ],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/subs-style/",
+      "src/renderer/src/features/subs-style/"
+    ],
+    "features": [
+      "S17",
+      "S18",
+      "S19",
+      "S20",
+      "S21",
+      "S22",
+      "S23",
+      "S24",
+      "S25",
+      "S26",
+      "S46",
+      "S51",
+      "S53"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M20",
+    "path": "src/main/features/subs-sync/",
+    "title": "Subtitle timing",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-mpv-bus"
+    ],
+    "ownedProperties": [
+      "secondary-sub-delay",
+      "sub-delay",
+      "sub-fix-timing",
+      "sub-fix-timing-keep",
+      "sub-fix-timing-threshold",
+      "sub-speed",
+      "sub-stretch-durations"
+    ],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/subs-sync/",
+      "src/renderer/src/features/subs-sync/"
+    ],
+    "features": [
+      "S27",
+      "S28",
+      "S29",
+      "S30",
+      "S31",
+      "S32",
+      "S47"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M21",
+    "path": "src/main/features/subs-browser/",
+    "title": "Subtitle browser and providers",
+    "wave": 2,
+    "priority": "P1",
+    "dependsOn": [
+      "M18",
+      "M17"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/subs-browser/",
+      "src/renderer/src/features/subs-browser/"
+    ],
+    "features": [
+      "S35",
+      "S36",
+      "S37",
+      "S39",
+      "S40",
+      "S44"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M22",
+    "path": "src/main/features/capture-still/",
+    "title": "Still capture",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-mpv-bus"
+    ],
+    "ownedProperties": [
+      "screenshot-directory",
+      "screenshot-format",
+      "screenshot-high-bit-depth",
+      "screenshot-jpeg-quality",
+      "screenshot-jxl-distance",
+      "screenshot-jxl-effort",
+      "screenshot-png-compression",
+      "screenshot-png-filter",
+      "screenshot-sw",
+      "screenshot-tag-colorspace",
+      "screenshot-template",
+      "screenshot-webp-compression",
+      "screenshot-webp-lossless",
+      "screenshot-webp-quality"
+    ],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/capture-still/",
+      "src/renderer/src/features/capture-still/"
+    ],
+    "features": [
+      "C01",
+      "C02",
+      "C03",
+      "C04",
+      "C05",
+      "C06",
+      "C07",
+      "C08",
+      "C20",
+      "C21",
+      "C22",
+      "C23",
+      "C24"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M23",
+    "path": "src/main/features/capture-encode/",
+    "title": "Encode jobs and clip export",
+    "wave": 1,
+    "priority": "P1",
+    "dependsOn": [
+      "core-paths"
+    ],
+    "ownedProperties": [
+      "stream-record"
+    ],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/capture-encode/",
+      "src/renderer/src/features/capture-encode/"
+    ],
+    "features": [
+      "C09",
+      "C10",
+      "C11",
+      "C12",
+      "C13",
+      "C14",
+      "C15",
+      "C16",
+      "C17",
+      "C18",
+      "C19",
+      "S43"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M24",
+    "path": "src/main/features/nav-seek/",
+    "title": "Seeking and frame stepping",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-mpv-bus"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/nav-seek/",
+      "src/renderer/src/features/nav-seek/"
+    ],
+    "features": [
+      "N24",
+      "N25",
+      "N27",
+      "N28",
+      "N29",
+      "N30",
+      "N31",
+      "N32",
+      "N33",
+      "N35",
+      "N50",
+      "N52"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M25",
+    "path": "src/main/features/nav-chapters/",
+    "title": "Chapters, editions and skip",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-mpv-bus",
+      "M24",
+      "M28"
+    ],
+    "ownedProperties": [
+      "chapter",
+      "chapter-merge-threshold",
+      "chapter-seek-threshold",
+      "edition",
+      "ordered-chapters"
+    ],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/nav-chapters/",
+      "src/renderer/src/features/nav-chapters/"
+    ],
+    "features": [
+      "N01",
+      "N02",
+      "N03",
+      "N04",
+      "N05",
+      "N06",
+      "N07",
+      "N08",
+      "N09",
+      "N50",
+      "N51"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M26",
+    "path": "src/main/features/nav-bookmarks/",
+    "title": "Bookmarks and A-B loop",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-mpv-bus"
+    ],
+    "ownedProperties": [
+      "ab-loop-a",
+      "ab-loop-b",
+      "ab-loop-count"
+    ],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/nav-bookmarks/",
+      "src/renderer/src/features/nav-bookmarks/"
+    ],
+    "features": [
+      "N10",
+      "N11",
+      "N12",
+      "N13",
+      "N15",
+      "N17",
+      "N18",
+      "N19",
+      "N20",
+      "N21",
+      "N22",
+      "N23",
+      "N50"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M27",
+    "path": "src/main/features/nav-thumbnails/",
+    "title": "Thumbnails and scene preview",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-paths"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/nav-thumbnails/",
+      "src/renderer/src/features/nav-thumbnails/"
+    ],
+    "features": [
+      "L30",
+      "N14",
+      "N36",
+      "N37",
+      "N38",
+      "N39",
+      "N50"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M28",
+    "path": "src/main/features/playlist/",
+    "title": "Playlist and queue",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-per-file",
+      "core-i18n"
+    ],
+    "ownedProperties": [
+      "gapless-audio",
+      "image-display-duration",
+      "loop-file",
+      "loop-playlist",
+      "prefetch-playlist"
+    ],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/playlist/",
+      "src/renderer/src/features/playlist/"
+    ],
+    "features": [
+      "A40",
+      "L01",
+      "L02",
+      "L03",
+      "L04",
+      "L05",
+      "L06",
+      "L07",
+      "L08",
+      "L09",
+      "L10",
+      "L11",
+      "L12",
+      "L13",
+      "L14",
+      "L15",
+      "L16",
+      "L17",
+      "L18",
+      "L19",
+      "L20",
+      "L31",
+      "L32",
+      "L33",
+      "L34",
+      "L35",
+      "L36",
+      "L37",
+      "L38",
+      "L41",
+      "L42",
+      "L46",
+      "L47",
+      "L48",
+      "L49",
+      "L50",
+      "N46",
+      "N47"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M29",
+    "path": "src/main/features/mediainfo/",
+    "title": "Media info and stats",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-mpv-bus",
+      "M11"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [
+      "audio-display",
+      "cover-art-auto",
+      "cover-art-whitelist"
+    ],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/mediainfo/",
+      "src/renderer/src/features/mediainfo/"
+    ],
+    "features": [
+      "A45",
+      "L21",
+      "L22",
+      "L23",
+      "L24",
+      "L25",
+      "L26",
+      "L27",
+      "L28",
+      "L29",
+      "L40",
+      "L43",
+      "L44",
+      "N26",
+      "R34",
+      "U06",
+      "U47",
+      "V55"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M30",
+    "path": "src/main/features/history/",
+    "title": "History and resume UI",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-per-file"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/history/",
+      "src/renderer/src/features/history/"
+    ],
+    "features": [
+      "L39",
+      "N16",
+      "N40",
+      "N41",
+      "N42",
+      "N43",
+      "N44"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M31",
+    "path": "src/main/features/shell-window/",
+    "title": "Window behaviour and OSD policy",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-osd",
+      "core-window",
+      "M02"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [
+      "keepaspect",
+      "panscan"
+    ],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/shell-window/",
+      "src/renderer/src/features/shell-window/"
+    ],
+    "features": [
+      "P58",
+      "P63",
+      "U01",
+      "U02",
+      "U03",
+      "U04",
+      "U05",
+      "U07",
+      "U08",
+      "U09",
+      "U10",
+      "U11",
+      "U12",
+      "U13",
+      "U14",
+      "U15",
+      "U16",
+      "U17",
+      "U18",
+      "U19",
+      "U20",
+      "U32",
+      "U33",
+      "U36",
+      "U37",
+      "U38",
+      "U40",
+      "U42",
+      "U45",
+      "U46"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M32",
+    "path": "src/main/features/shell-taskbar/",
+    "title": "Taskbar and tray",
+    "wave": 1,
+    "priority": "P1",
+    "dependsOn": [
+      "core-window"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/shell-taskbar/",
+      "src/renderer/src/features/shell-taskbar/"
+    ],
+    "features": [
+      "U26",
+      "U27",
+      "U28",
+      "U29",
+      "U30",
+      "U31",
+      "U39"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M33",
+    "path": "src/main/features/shell-system/",
+    "title": "System integration",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-paths",
+      "core-window"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/shell-system/",
+      "src/renderer/src/features/shell-system/"
+    ],
+    "features": [
+      "A51",
+      "N53",
+      "P56",
+      "P57",
+      "U21",
+      "U22",
+      "U23",
+      "U24",
+      "U25",
+      "U34",
+      "U35",
+      "U41"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M34",
+    "path": "src/main/features/shell-associations/",
+    "title": "File associations",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-paths"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/shell-associations/",
+      "src/renderer/src/features/shell-associations/"
+    ],
+    "features": [
+      "P26",
+      "P27",
+      "P28",
+      "P29",
+      "P30",
+      "P31",
+      "P32",
+      "P33",
+      "P34",
+      "P35",
+      "P38",
+      "P41",
+      "R35"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M35",
+    "path": "src/main/features/stream-open/",
+    "title": "Streaming and network sources",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-mpv-bus"
+    ],
+    "ownedProperties": [
+      "cache",
+      "cache-on-disk",
+      "cache-pause",
+      "cache-pause-initial",
+      "cache-pause-wait",
+      "cache-secs",
+      "cookies",
+      "cookies-file",
+      "curl-*",
+      "demuxer-cache-dir",
+      "demuxer-max-back-bytes",
+      "demuxer-max-bytes",
+      "demuxer-readahead-secs",
+      "force-seekable",
+      "hls-bitrate",
+      "http-header-fields",
+      "http-proxy",
+      "network-timeout",
+      "referrer",
+      "rtsp-transport",
+      "stream-buffer-size",
+      "tls-ca-file",
+      "tls-cert-file",
+      "tls-key-file",
+      "tls-verify",
+      "user-agent"
+    ],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/stream-open/",
+      "src/renderer/src/features/stream-open/"
+    ],
+    "features": [
+      "R01",
+      "R02",
+      "R03",
+      "R04",
+      "R11",
+      "R12",
+      "R13",
+      "R14",
+      "R15",
+      "R16",
+      "R17",
+      "R18",
+      "R19",
+      "R20",
+      "R22",
+      "R23",
+      "R24",
+      "R33"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M36",
+    "path": "src/main/features/stream-ytdl/",
+    "title": "yt-dlp integration",
+    "wave": 2,
+    "priority": "P1",
+    "dependsOn": [
+      "M35",
+      "M11"
+    ],
+    "ownedProperties": [
+      "script-opts",
+      "ytdl",
+      "ytdl-format",
+      "ytdl-raw-options"
+    ],
+    "requestsProperties": [
+      "aid",
+      "vid"
+    ],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/stream-ytdl/",
+      "src/renderer/src/features/stream-ytdl/"
+    ],
+    "features": [
+      "R05",
+      "R06",
+      "R07",
+      "R08",
+      "R09",
+      "R10"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M37",
+    "path": "src/main/features/disc-devices/",
+    "title": "Discs and capture devices",
+    "wave": 1,
+    "priority": "P2",
+    "dependsOn": [
+      "core-mpv-bus",
+      "M25"
+    ],
+    "ownedProperties": [
+      "bluray-angle",
+      "bluray-device",
+      "disc-menu",
+      "dvd-angle",
+      "dvd-device",
+      "dvd-speed"
+    ],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/disc-devices/",
+      "src/renderer/src/features/disc-devices/"
+    ],
+    "features": [
+      "R25",
+      "R26",
+      "R27",
+      "R28"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M38",
+    "path": "src/main/features/settings-ui/",
+    "title": "Settings UI",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-settings"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/settings-ui/",
+      "src/renderer/src/features/settings-ui/"
+    ],
+    "features": [
+      "P01",
+      "P02",
+      "P04",
+      "P05",
+      "P06",
+      "P40",
+      "P55",
+      "P60",
+      "U44"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M39",
+    "path": "src/main/features/input-ui/",
+    "title": "Keybinding UI",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-input"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/input-ui/",
+      "src/renderer/src/features/input-ui/"
+    ],
+    "features": [
+      "P17",
+      "P19",
+      "P20"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  },
+  {
+    "id": "M40",
+    "path": "src/main/features/transfer/",
+    "title": "Settings transfer",
+    "wave": 1,
+    "priority": "P0",
+    "dependsOn": [
+      "core-settings",
+      "core-input"
+    ],
+    "ownedProperties": [],
+    "requestsProperties": [],
+    "ownedFilterLabels": [],
+    "ownedFiles": [
+      "src/main/features/transfer/",
+      "src/renderer/src/features/transfer/"
+    ],
+    "features": [
+      "P42",
+      "P43",
+      "P44",
+      "P61"
+    ],
+    "mustNotTouch": [
+      "src/shared/types.ts",
+      "src/main/ipc.ts",
+      "src/preload/index.ts",
+      "src/main/menu.ts",
+      "src/shared/keybinds.ts",
+      "src/main/mpv/manager.ts",
+      "src/main/windows.ts",
+      "src/main/player.ts",
+      "mpv `vf` / `af` (use ctx.vf / ctx.af)",
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+    ]
+  }
+]

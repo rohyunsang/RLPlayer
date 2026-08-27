@@ -150,10 +150,20 @@ export class MpvClient extends EventEmitter {
     await this.command(['set_property', name, value])
   }
 
-  /** Ask mpv to push changes for `name`; they arrive as 'property-change'. */
-  async observeProperty(name: string): Promise<void> {
+  /**
+   * Ask mpv to push changes for `name`; they arrive as 'property-change'.
+   * Returns the observe id so the caller can `unobserveProperty` it later --
+   * the property bus refcounts on top of this and issues exactly one
+   * observe_property per property no matter how many modules want it.
+   */
+  async observeProperty(name: string): Promise<number> {
     const id = this.nextObserveId++
     await this.command(['observe_property', id, name])
+    return id
+  }
+
+  async unobserveProperty(id: number): Promise<void> {
+    await this.command(['unobserve_property', id]).catch(() => {})
   }
 
   close(): void {

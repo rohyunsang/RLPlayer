@@ -1,6 +1,6 @@
 import path from 'node:path'
 import { app, BrowserWindow, screen, shell, type Rectangle } from 'electron'
-import { loadConfig, saveConfig } from './services/config'
+import { loadConfig, saveConfig } from '../../services/config'
 
 /**
  * Window topology.
@@ -319,12 +319,34 @@ export function persistBounds(): void {
   saveConfig({ window: { x: b.x, y: b.y, width: b.width, height: b.height, maximized } })
 }
 
+/**
+ * U07. BOTH windows, with the correct relative levels.
+ *
+ * On Windows, 'floating'...'status' sit BELOW the taskbar while 'pop-up-menu'
+ * and above sit above it. Getting this pair wrong is how the overlay ends up
+ * underneath the video, so no caller chooses the level -- WindowService does.
+ */
 export function setAlwaysOnTop(on: boolean): void {
-  alive(mainWindow)?.setAlwaysOnTop(on)
+  alive(mainWindow)?.setAlwaysOnTop(on, 'floating')
   // The secondary window has to outrank the main one even when it is topmost.
   if (layout === 'overlay') alive(rendererWindow)?.setAlwaysOnTop(on, 'pop-up-menu')
   else alive(mpvHost)?.setAlwaysOnTop(on, 'pop-up-menu')
   saveConfig({ alwaysOnTop: on })
+}
+
+/** The window a dialog must be parented to: in overlay layout the OVERLAY,
+ *  because parenting to the video window puts the dialog behind it. */
+export function getDialogParent(): BrowserWindow | null {
+  return alive(layout === 'overlay' ? rendererWindow : mainWindow) ?? alive(mainWindow)
+}
+
+export function clampRectToDisplay(b: {
+  x?: number
+  y?: number
+  width: number
+  height: number
+}): { x?: number; y?: number; width: number; height: number } {
+  return clampToDisplay(b)
 }
 
 export function setFullScreen(on: boolean): void {

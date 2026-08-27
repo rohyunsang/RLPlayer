@@ -6,8 +6,22 @@ import { app } from 'electron'
 import { MpvClient } from './client'
 import type { Chapter, PlayerState, Track } from '@shared/types'
 
-/** Properties mpv pushes to us; everything the UI shows is derived from these. */
-const OBSERVED = [
+/**
+ * The mpv process and the PlayerState it feeds.
+ *
+ * WAVE 0 — FROZEN. Spawn arguments are no longer written here: `core/mpv/bus`
+ * composes them from core's base set plus every module's `contributeArgs()`,
+ * and hands the finished argv to `start()`. Property OBSERVATION is likewise
+ * the bus's job — this class only knows how to turn a property change into the
+ * core `PlayerState` the renderer paints.
+ */
+
+/**
+ * The properties the core PlayerState is derived from. The bus subscribes to
+ * these through the same refcounted path every module uses, so a module
+ * observing `time-pos` costs zero extra `observe_property` calls.
+ */
+export const CORE_OBSERVED = [
   'time-pos',
   'duration',
   'pause',
@@ -23,7 +37,9 @@ const OBSERVED = [
   'eof-reached',
   'idle-active',
   'chapter-list',
+  'chapter',
   'demuxer-cache-state',
+  'demuxer-via-network',
   'sub-delay',
   'audio-delay',
   'sub-scale',
@@ -38,18 +54,6 @@ export function resolveMpvPath(): string {
   const packaged = path.join(process.resourcesPath, 'mpv', 'mpv.exe')
   if (app.isPackaged && fs.existsSync(packaged)) return packaged
   return path.join(app.getAppPath(), 'resources', 'mpv', 'mpv.exe')
-}
-
-export interface MpvOptions {
-  hwnd: string
-  volume: number
-  muted: boolean
-  speed: number
-  hwdec: string
-  audioDevice: string
-  subScale: number
-  subAssOverride: boolean
-  vo: string
 }
 
 export class MpvManager extends EventEmitter {
@@ -76,6 +80,7 @@ export class MpvManager extends EventEmitter {
     aid: false,
     vid: false,
     chapters: [],
+    chapter: -1,
     cacheSeconds: 0,
     subDelay: 0,
     audioDelay: 0,
@@ -84,71 +89,33 @@ export class MpvManager extends EventEmitter {
     fullscreen: false,
     alwaysOnTop: false,
     maximized: false,
-    aspect: '-1',
+    aspect: 'no',
     rotate: 0,
+    network: false,
     // Overwritten from the real window topology on every pushState().
     layoutMode: 'overlay'
   }
 
-  async start(opts: MpvOptions): Promise<void> {
+  get running(): boolean {
+    return this.proc !== null && this.client.connected
+  }
+
+  /** `args` is the composed argv from core/mpv/bus; this class adds nothing. */
+  async start(args: readonly string[]): Promise<void> {
     const exe = resolveMpvPath()
     if (!fs.existsSync(exe)) {
       throw new Error(
         `mpv.exe not found at ${exe}. Run "npm run fetch:mpv" to download the playback engine.`
       )
     }
-    this.pipePath = `\\\\.\\pipe\\rlplayer-mpv-${process.pid}-${Date.now()}`
+    this.stopping = false
+    // Built by concatenation, never by templating: a template that folds
+    // `\\.\pipe\` silently eats the backslashes (§7.7 trap 9).
+    this.pipePath = '\\\\.\\pipe\\' + `rlplayer-mpv-${process.pid}-${Date.now()}`
 
-    const args = [
-      `--wid=${opts.hwnd}`,
-      `--input-ipc-server=${this.pipePath}`,
-      // Never read the user's global mpv config: RLPlayer must behave predictably.
-      '--no-config',
-      '--idle=yes',
-      '--force-window=yes',
-      '--keep-open=yes',
-      // mpv must not fight the overlay for input; the UI window owns all of it.
-      '--input-default-bindings=no',
-      '--input-vo-keyboard=no',
-      '--input-cursor=no',
-      '--osc=no',
-      '--no-osd-bar',
-      '--osd-level=0',
-      '--terminal=yes',
-      '--msg-level=all=error',
-      // Zero network at startup: no youtube-dl hook, no scripts.
-      '--ytdl=no',
-      '--load-scripts=no',
-      '--screenshot-format=png',
-      '--screenshot-png-compression=3',
-      '--volume-max=150',
-      `--volume=${opts.volume}`,
-      `--mute=${opts.muted ? 'yes' : 'no'}`,
-      `--speed=${opts.speed}`,
-      `--sub-scale=${opts.subScale}`,
-      `--hwdec=${opts.hwdec || 'auto-safe'}`,
-      // gpu-next + d3d11 is both the most efficient path for a --wid child
-      // window and the only one that can do HDR passthrough. `--vo=gpu` is the
-      // documented fallback for old hardware; see docs/03-architecture.md.
-      `--vo=${opts.vo || 'gpu-next'}`,
-      '--gpu-context=d3d11',
-      // Cheap and kills most judder on non-24Hz displays.
-      '--video-sync=display-resample',
-      // Subtitle auto-loading is mpv's job, not ours: `fuzzy` matches
-      // `Show.S01E02.en.srt` against `Show.S01E02.mkv`, and sub-file-paths
-      // covers the conventional subfolder names releases use.
-      '--sub-auto=fuzzy',
-      '--audio-file-auto=fuzzy',
-      '--sub-file-paths=subs:Subs:subtitles:Subtitles:SUBS',
-      // Render release-group styling as authored. Forcing our own font is
-      // available in settings but must not be the default.
-      `--sub-ass-override=${opts.subAssOverride ? 'force' : 'no'}`
-    ]
-    if (opts.audioDevice && opts.audioDevice !== 'auto') {
-      args.push(`--audio-device=${opts.audioDevice}`)
-    }
+    const argv = [`--input-ipc-server=${this.pipePath}`, ...args]
 
-    this.proc = spawn(exe, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    this.proc = spawn(exe, argv, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
     this.proc.stderr?.on('data', (d: Buffer) => {
       this.lastStderr = d.toString().slice(-2000)
       console.error('[mpv]', d.toString().trim())
@@ -161,18 +128,13 @@ export class MpvManager extends EventEmitter {
 
     await this.client.connect(this.pipePath)
 
-    this.client.on('property-change', (name: string, data: unknown) =>
-      this.onProperty(name, data)
-    )
     this.client.on('mpv-event', (event: string, msg: Record<string, unknown>) => {
       this.emit('mpv-event', event, msg)
     })
-
-    for (const p of OBSERVED) await this.client.observeProperty(p)
-    this.emit('state')
   }
 
-  private onProperty(name: string, data: unknown): void {
+  /** Called by the bus for every observed property change. */
+  applyProperty(name: string, data: unknown): void {
     const s = this.state
     switch (name) {
       case 'time-pos':
@@ -221,8 +183,14 @@ export class MpvManager extends EventEmitter {
       case 'chapter-list':
         s.chapters = mapChapters(data)
         break
+      case 'chapter':
+        s.chapter = typeof data === 'number' ? data : -1
+        break
       case 'demuxer-cache-state':
         s.cacheSeconds = readCacheSeconds(data)
+        break
+      case 'demuxer-via-network':
+        s.network = data === true
         break
       case 'sub-delay':
         s.subDelay = typeof data === 'number' ? data : 0
@@ -240,10 +208,11 @@ export class MpvManager extends EventEmitter {
         s.rotate = typeof data === 'number' ? data : 0
         break
       case 'video-aspect-override':
-        s.aspect = data === undefined || data === null ? '-1' : String(data)
+        // V22: mpv's "no override" value is the string 'no', not '-1'.
+        s.aspect = data === undefined || data === null ? 'no' : String(data)
         break
       default:
-        break
+        return
     }
     this.scheduleFlush()
   }
@@ -260,33 +229,71 @@ export class MpvManager extends EventEmitter {
     }, 100)
   }
 
-  /** Load a file, optionally resuming at `startAt` seconds. */
+  /**
+   * Load a file, optionally resuming at `startAt` seconds.
+   *
+   * `-1` before the options map is mandatory: without it mpv HARD-ERRORS with
+   * `{"error":"invalid parameter"}` (it does not silently drop the map, which
+   * is what an earlier revision of the spec claimed three times). The `start`
+   * option gets the first painted frame right so there is no flash at 0:00;
+   * the explicit `absolute+exact` seek afterwards is what makes resume land on
+   * the frame the user left rather than the nearest keyframe.
+   */
   async loadFile(file: string, startAt?: number): Promise<void> {
-    await this.client.command(['loadfile', file, 'replace'])
-    if (startAt && startAt > 1) {
-      // Seek only once mpv reports the file open, otherwise the seek is dropped.
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(() => {
-          this.client.off('mpv-event', onEvent)
-          resolve()
-        }, 8000)
-        const onEvent = (event: string): void => {
-          if (event !== 'file-loaded') return
-          this.client.off('mpv-event', onEvent)
-          clearTimeout(timer)
-          resolve()
-        }
-        this.client.on('mpv-event', onEvent)
-      })
-      // absolute+exact, never a plain keyframe seek: resuming to the nearest
-      // keyframe can land tens of seconds away from where the user stopped.
+    const resume = typeof startAt === 'number' && startAt > 1
+    if (resume) {
+      await this.client.command(['loadfile', file, 'replace', -1, { start: String(startAt) }])
+    } else {
+      await this.client.command(['loadfile', file, 'replace'])
+    }
+    if (resume) {
+      // N41: wait for playback-restart, not file-loaded. The verified order is
+      // start-file → file-loaded → seek → playback-restart, and a write made at
+      // file-loaded can be dropped outright.
+      await this.waitForEvent('playback-restart', 8000)
       await this.client.command(['seek', startAt, 'absolute+exact']).catch(() => {})
     }
     await this.client.setProperty('pause', false).catch(() => {})
   }
 
+  waitForEvent(event: string, timeoutMs: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const done = (): void => {
+        this.client.off('mpv-event', onEvent)
+        clearTimeout(timer)
+        resolve()
+      }
+      const timer = setTimeout(done, timeoutMs)
+      const onEvent = (name: string): void => {
+        if (name === event) done()
+      }
+      this.client.on('mpv-event', onEvent)
+    })
+  }
+
   async stop(): Promise<void> {
     await this.client.command(['stop']).catch(() => {})
+  }
+
+  /** Used by the bus for a respawn: tear mpv down without emitting 'crashed'. */
+  async shutdown(): Promise<void> {
+    this.stopping = true
+    await this.client.command(['quit']).catch(() => {})
+    this.client.close()
+    const proc = this.proc
+    this.proc = null
+    if (proc) {
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(() => {
+          proc.kill()
+          resolve()
+        }, 400)
+        proc.once('exit', () => {
+          clearTimeout(t)
+          resolve()
+        })
+      })
+    }
   }
 
   dispose(): void {
@@ -311,7 +318,16 @@ function mapTracks(data: unknown): Track[] {
       lang: typeof raw.lang === 'string' ? raw.lang : undefined,
       selected: raw.selected === true,
       external: raw.external === true,
-      codec: typeof raw.codec === 'string' ? raw.codec : undefined
+      codec: typeof raw.codec === 'string' ? raw.codec : undefined,
+      // A10: "5.1" vs "stereo" is how a user tells two audio tracks apart when
+      // both are titled nothing at all. Dropping it made the menu unusable on
+      // exactly the releases that need it most.
+      channels:
+        typeof raw['audio-channels'] === 'number'
+          ? `${raw['audio-channels'] as number}ch`
+          : typeof raw['demux-channel-count'] === 'number'
+            ? `${raw['demux-channel-count'] as number}ch`
+            : undefined
     })
   }
   return out
