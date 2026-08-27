@@ -1,0 +1,357 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------
+   RLPlayer design tokens.
+   Dark is the default. prefers-color-scheme: light flips the
+   palette, and an explicit [data-theme] wins over both.
+   --------------------------------------------------------------- */
+
+:root {
+  color-scheme: dark;
+
+  --bg: #08090c;
+  --bg-2: #0b0d12;
+  --surface: #101219;
+  --surface-2: #161a23;
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.17);
+  --text: #f1f2f5;
+  --muted: #9aa1ae;
+  --faint: #6b7280;
+  --accent: #ffb454;
+  --accent-soft: rgba(255, 180, 84, 0.14);
+  --accent-ink: #1b1305;
+  --good: #4ec97a;
+  --good-soft: rgba(78, 201, 122, 0.13);
+  --warn: #d8b25f;
+  --bad: #f2705f;
+  --bad-soft: rgba(242, 112, 95, 0.13);
+  --solid: #f6f7f9;
+  --solid-ink: #0a0b0e;
+  --glow: rgba(255, 180, 84, 0.2);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+
+    --bg: #fbfaf8;
+    --bg-2: #f4f3ef;
+    --surface: #ffffff;
+    --surface-2: #f7f6f2;
+    --border: rgba(16, 18, 24, 0.11);
+    --border-strong: rgba(16, 18, 24, 0.22);
+    --text: #14161b;
+    --muted: #565c67;
+    --faint: #878d98;
+    --accent: #a85e08;
+    --accent-soft: rgba(168, 94, 8, 0.1);
+    --accent-ink: #ffffff;
+    --good: #1c7a45;
+    --good-soft: rgba(28, 122, 69, 0.1);
+    --warn: #8a6b16;
+    --bad: #b23f2d;
+    --bad-soft: rgba(178, 63, 45, 0.09);
+    --solid: #14161b;
+    --solid-ink: #ffffff;
+    --glow: rgba(168, 94, 8, 0.12);
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #fbfaf8;
+  --bg-2: #f4f3ef;
+  --surface: #ffffff;
+  --surface-2: #f7f6f2;
+  --border: rgba(16, 18, 24, 0.11);
+  --border-strong: rgba(16, 18, 24, 0.22);
+  --text: #14161b;
+  --muted: #565c67;
+  --faint: #878d98;
+  --accent: #a85e08;
+  --accent-soft: rgba(168, 94, 8, 0.1);
+  --accent-ink: #ffffff;
+  --good: #1c7a45;
+  --good-soft: rgba(28, 122, 69, 0.1);
+  --warn: #8a6b16;
+  --bad: #b23f2d;
+  --bad-soft: rgba(178, 63, 45, 0.09);
+  --solid: #14161b;
+  --solid-ink: #ffffff;
+  --glow: rgba(168, 94, 8, 0.12);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-bg2: var(--bg-2);
+  --color-surface: var(--surface);
+  --color-surface2: var(--surface-2);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-ink: var(--text);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-ink: var(--accent-ink);
+  --color-good: var(--good);
+  --color-good-soft: var(--good-soft);
+  --color-warn: var(--warn);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+  --color-solid: var(--solid);
+  --color-solid-ink: var(--solid-ink);
+
+  --font-sans: "Pretendard Variable", Pretendard, -apple-system,
+    BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI",
+    "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", Roboto, Helvetica,
+    Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", "Cascadia Mono",
+    Consolas, "Liberation Mono", monospace;
+}
+
+/* Everything below lives in a layer so Tailwind utilities still win.
+   (Unlayered rules beat every layer, which would silently break
+   `border-accent`, `hover:border-line-strong`, and friends.) */
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    border-color: var(--border);
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* Korean copy must break on word boundaries, not mid-word. */
+    word-break: keep-all;
+    overflow-wrap: anywhere;
+    overflow-x: hidden;
+  }
+
+  ::selection {
+    background: var(--accent);
+    color: var(--accent-ink);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 4px;
+  }
+
+  details > summary {
+    list-style: none;
+    cursor: pointer;
+  }
+
+  details > summary::-webkit-details-marker {
+    display: none;
+  }
+}
+
+@layer components {
+  /* File names, shortcut keys and numbers must not use keep-all. */
+  .break-normal-latin {
+    word-break: normal;
+    overflow-wrap: break-word;
+  }
+
+  /* --- Typography ------------------------------------------------------ */
+
+  .h-display {
+    font-size: clamp(2.35rem, 1.15rem + 5.1vw, 4.6rem);
+    line-height: 1.06;
+    letter-spacing: -0.033em;
+    font-weight: 680;
+  }
+
+  .h-section {
+    font-size: clamp(1.7rem, 1.05rem + 2.3vw, 2.7rem);
+    line-height: 1.14;
+    letter-spacing: -0.026em;
+    font-weight: 660;
+  }
+
+  .h-card {
+    font-size: 1.0625rem;
+    line-height: 1.35;
+    letter-spacing: -0.012em;
+    font-weight: 620;
+  }
+
+  .lede {
+    font-size: clamp(1.02rem, 0.95rem + 0.34vw, 1.2rem);
+    line-height: 1.68;
+    color: var(--muted);
+  }
+
+  /* Tracking stays modest: wide tracking looks broken in Hangul. */
+  .kicker {
+    font-size: 0.72rem;
+    font-weight: 620;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  .eyebrow {
+    font-size: 0.7rem;
+    font-weight: 620;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+
+  /* --- Surfaces -------------------------------------------------------- */
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+  }
+
+  /* A soft radial wash behind the hero and the final CTA. */
+  .aura::before {
+    content: "";
+    position: absolute;
+    inset: -20% -10% auto -10%;
+    height: 130%;
+    background:
+      radial-gradient(60% 46% at 50% 8%, var(--glow) 0%, transparent 68%),
+      radial-gradient(
+        40% 30% at 82% 30%,
+        rgba(120, 150, 255, 0.09) 0%,
+        transparent 70%
+      );
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Faint grid: structure on the dark surface without visual noise. */
+  .grid-veil::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(to right, var(--border) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--border) 1px, transparent 1px);
+    background-size: 72px 72px;
+    mask-image: radial-gradient(72% 58% at 50% 34%, #000 0%, transparent 78%);
+    -webkit-mask-image: radial-gradient(
+      72% 58% at 50% 34%,
+      #000 0%,
+      transparent 78%
+    );
+    opacity: 0.5;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* --- Reveal on scroll ------------------------------------------------ */
+
+  .reveal {
+    opacity: 0;
+    transform: translateY(14px);
+    transition:
+      opacity 0.7s cubic-bezier(0.22, 0.61, 0.36, 1),
+      transform 0.7s cubic-bezier(0.22, 0.61, 0.36, 1);
+    will-change: opacity, transform;
+  }
+
+  .reveal.is-in {
+    opacity: 1;
+    transform: none;
+  }
+
+  /* --- Player mockup --------------------------------------------------- */
+  /* The mockup keeps its own dark palette in both themes: it depicts the
+     app's real frameless dark window, so it must not follow the site. */
+
+  .mock {
+    --m-bg: #0d0f14;
+    --m-chrome: #14171f;
+    --m-panel: #101319;
+    --m-line: rgba(255, 255, 255, 0.08);
+    --m-text: #e8eaef;
+    --m-muted: #878e9c;
+    --m-accent: #ffb454;
+    color: var(--m-text);
+  }
+
+  .mock-live {
+    animation: mock-pulse 2.8s ease-in-out infinite;
+  }
+
+  .mock-eq span {
+    display: block;
+    width: 2px;
+    height: 11px;
+    background: var(--m-accent);
+    border-radius: 1px;
+    transform-origin: bottom;
+    animation: mock-eq 1.15s ease-in-out infinite;
+  }
+
+  /* --- FAQ ------------------------------------------------------------- */
+
+  .faq-chevron {
+    transition: transform 0.25s ease;
+  }
+
+  details[open] .faq-chevron {
+    transform: rotate(45deg);
+  }
+}
+
+@keyframes mock-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes mock-eq {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+/* --- Reduced motion ------------------------------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+
+  .reveal {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
