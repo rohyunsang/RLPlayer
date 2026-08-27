@@ -1,84 +1,163 @@
 import path from 'node:path'
-import { app, BrowserWindow, screen, shell } from 'electron'
+import { app, BrowserWindow, screen, shell, type Rectangle } from 'electron'
 import { loadConfig, saveConfig } from './services/config'
 
 /**
- * Two-window design (validated by spike; see docs/03-architecture.md).
+ * Window topology.
  *
- *  videoWindow  frameless, opaque, owns the native HWND we hand to mpv --wid.
- *               mpv creates a CHILD HWND inside it, which on Windows always
- *               renders above Chromium's compositor output. So nothing of ours
- *               may be painted here -- it would be invisible.
+ * On Windows, mpv with --wid creates a CHILD HWND inside the window we give it,
+ * and a child HWND always renders ABOVE Chromium's compositor output. Nothing
+ * Chromium paints in that same window can ever be seen. Everything below is a
+ * consequence of that one fact.
  *
- *  uiWindow     transparent, frameless, created with `parent: videoWindow`.
- *               Electron parent windows are OWNED TOP-LEVEL windows, not HWND
- *               children, so they composite above mpv's child HWND. All HTML UI
- *               lives here, and it captures every mouse/keyboard event.
+ * OVERLAY MODE (default)
+ *   mainWindow      opaque, frameless. Its HWND is handed to mpv, so mpv's
+ *                   child fills it edge to edge. Paints nothing itself.
+ *   rendererWindow  transparent, frameless, created with `parent: mainWindow`.
+ *                   Electron parent windows are OWNED TOP-LEVEL windows, not
+ *                   HWND children, so this composites above mpv's child. All
+ *                   HTML UI lives here and it captures every input event.
  *
- * The cost of that trick is that the UI window fully covers the video window,
- * so the video window can never see input: window move and edge-resize have to
- * be driven manually from the overlay (see beginDrag below).
+ * COMPAT MODE (Electron issue #40515 escape hatch)
+ *   Transparent windows render black for a minority of Windows GPU/driver
+ *   combinations, which would leave those users staring at a black rectangle
+ *   with no way out. So compat mode uses NO transparent window at all:
+ *     mainWindow    opaque, frameless, hosts the HTML UI directly.
+ *     mpvHost       opaque owned child sized to just the video region the
+ *                   renderer reports. The UI is docked around it rather than
+ *                   floating over it, so no Chromium pixels ever need to sit
+ *                   under mpv's child HWND.
+ *   The renderer code is shared; only geometry and the transparent flag differ.
  */
 
-export interface Windows {
-  videoWindow: BrowserWindow
-  uiWindow: BrowserWindow
-}
+export type LayoutMode = 'overlay' | 'compat'
 
-let videoWindow: BrowserWindow | null = null
-let uiWindow: BrowserWindow | null = null
+let mainWindow: BrowserWindow | null = null
+let rendererWindow: BrowserWindow | null = null
+let mpvHost: BrowserWindow | null = null
+let layout: LayoutMode = 'overlay'
+/** Video rect in CSS px relative to the content area, reported by the renderer. */
+let videoRegion: Rectangle = { x: 0, y: 0, width: 0, height: 0 }
 let syncScheduled = false
 
-export function getWindows(): Windows | null {
-  if (!videoWindow || !uiWindow || videoWindow.isDestroyed() || uiWindow.isDestroyed()) return null
-  return { videoWindow, uiWindow }
-}
+const alive = (w: BrowserWindow | null): BrowserWindow | null =>
+  w && !w.isDestroyed() ? w : null
 
-export function getUiWindow(): BrowserWindow | null {
-  return uiWindow && !uiWindow.isDestroyed() ? uiWindow : null
-}
-
+/** The top-level window: bounds, taskbar entry, fullscreen, dialog parent. */
 export function getVideoWindow(): BrowserWindow | null {
-  return videoWindow && !videoWindow.isDestroyed() ? videoWindow : null
+  return alive(mainWindow)
+}
+
+/** The window hosting the HTML UI; all renderer IPC goes here. */
+export function getUiWindow(): BrowserWindow | null {
+  return alive(rendererWindow)
+}
+
+/** The window whose HWND mpv embeds into. */
+export function getMpvHostWindow(): BrowserWindow | null {
+  return alive(layout === 'compat' ? mpvHost : mainWindow)
+}
+
+export function getLayoutMode(): LayoutMode {
+  return layout
 }
 
 /**
  * Read the HWND as a decimal string for mpv's --wid.
- * getNativeWindowHandle() returns an 8-byte little-endian buffer on x64.
+ *
+ * getNativeWindowHandle() returns an 8-byte buffer on x64, but the value MUST
+ * be read as an UNSIGNED 32-bit integer: mpv's manual specifies --wid is cast
+ * to uint32_t, and w32_common.c rejects anything not > 0. Reading it as signed
+ * 32-bit or as a full 64-bit value makes mpv silently ignore --wid and open its
+ * own floating window instead of embedding. (Windows guarantees window handles
+ * fit in 32 bits, so this truncation is correct, not lossy.)
  */
 export function getHwnd(win: BrowserWindow): string {
-  const buf = win.getNativeWindowHandle()
-  if (buf.length === 8) return buf.readBigUInt64LE(0).toString()
-  return String(buf.readUInt32LE(0))
+  const hwnd = win.getNativeWindowHandle().readUInt32LE(0)
+  if (!(hwnd > 0)) {
+    throw new Error(
+      `native window handle was ${hwnd}; mpv requires --wid > 0 and would refuse to embed`
+    )
+  }
+  return String(hwnd)
 }
 
 /**
- * Keep the overlay exactly on top of the video window. Called on every move,
- * resize, maximize and fullscreen transition. Coalesced into an animation-frame
- * -ish tick: calling setBounds synchronously inside a resize storm is the main
- * source of overlay flicker.
+ * Keep the secondary window glued to the main one. Coalesced to one call per
+ * tick: calling setBounds synchronously inside a resize storm is the single
+ * biggest source of overlay flicker.
  */
 function syncBounds(): void {
   if (syncScheduled) return
   syncScheduled = true
   setImmediate(() => {
     syncScheduled = false
-    if (!videoWindow || !uiWindow) return
-    if (videoWindow.isDestroyed() || uiWindow.isDestroyed()) return
-    if (videoWindow.isMinimized()) return
-    const b = videoWindow.getContentBounds()
-    const cur = uiWindow.getBounds()
-    if (cur.x === b.x && cur.y === b.y && cur.width === b.width && cur.height === b.height) return
-    uiWindow.setBounds(b)
+    const main = alive(mainWindow)
+    if (!main || main.isMinimized()) return
+    const content = main.getContentBounds()
+
+    if (layout === 'overlay') {
+      const ui = alive(rendererWindow)
+      if (!ui) return
+      applyBounds(ui, content)
+      return
+    }
+
+    const host = alive(mpvHost)
+    if (!host) return
+    // Compat: place mpv over exactly the region the renderer reserved for it.
+    applyBounds(host, {
+      x: content.x + Math.round(videoRegion.x),
+      y: content.y + Math.round(videoRegion.y),
+      width: Math.max(1, Math.round(videoRegion.width)),
+      height: Math.max(1, Math.round(videoRegion.height))
+    })
   })
+}
+
+function applyBounds(win: BrowserWindow, b: Rectangle): void {
+  const cur = win.getBounds()
+  if (cur.x === b.x && cur.y === b.y && cur.width === b.width && cur.height === b.height) return
+  win.setBounds(b)
 }
 
 export function syncOverlay(): void {
   syncBounds()
 }
 
-export function createWindows(): Windows {
+/** Called from IPC when the renderer's video area moves or resizes. */
+export function setVideoRegion(r: Rectangle): void {
+  videoRegion = r
+  if (layout === 'compat') syncBounds()
+}
+
+function rendererPreload(): Electron.WebPreferences {
+  return {
+    preload: path.join(__dirname, '../preload/index.js'),
+    nodeIntegration: false,
+    contextIsolation: true,
+    sandbox: false,
+    backgroundThrottling: false
+  }
+}
+
+function loadUi(win: BrowserWindow): void {
+  if (!app.isPackaged && process.env['ELECTRON_RENDERER_URL']) {
+    void win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/index.html`)
+  } else {
+    void win.loadFile(path.join(__dirname, '../renderer/index.html'))
+  }
+  // The UI must never navigate away or open browser windows of its own.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//.test(url)) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  win.webContents.on('will-navigate', (e) => e.preventDefault())
+}
+
+export function createWindows(): void {
   const cfg = loadConfig()
+  layout = cfg.layoutMode === 'compat' ? 'compat' : 'overlay'
 
   const bounds = clampToDisplay({
     x: cfg.window.x,
@@ -87,7 +166,7 @@ export function createWindows(): Windows {
     height: cfg.window.height
   })
 
-  videoWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     ...bounds,
     minWidth: 480,
     minHeight: 320,
@@ -95,40 +174,52 @@ export function createWindows(): Windows {
     show: false,
     backgroundColor: '#000000',
     title: 'RLPlayer',
-    webPreferences: { nodeIntegration: false, contextIsolation: true }
+    webPreferences:
+      layout === 'compat'
+        ? rendererPreload()
+        : { nodeIntegration: false, contextIsolation: true }
   })
+  mainWindow.setMenu(null)
 
-  // The video window paints nothing: mpv's child HWND covers it entirely.
-  void videoWindow.loadURL('data:text/html,<body style="margin:0;background:#000"></body>')
+  if (layout === 'compat') {
+    // The shell paints the whole UI; mpv gets its own inset child window.
+    rendererWindow = mainWindow
+    loadUi(mainWindow)
 
-  uiWindow = new BrowserWindow({
-    parent: videoWindow,
-    transparent: true,
-    frame: false,
-    hasShadow: false,
-    resizable: false,
-    skipTaskbar: true,
-    show: false,
-    // Movement is driven from the parent; letting Windows animate the child
-    // separately is what produces the trailing-overlay effect while dragging.
-    thickFrame: false,
-    webPreferences: {
-      preload: path.join(__dirname, '../preload/index.js'),
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: false,
-      backgroundThrottling: false
-    }
-  })
-  uiWindow.setMenu(null)
-
-  if (!app.isPackaged && process.env['ELECTRON_RENDERER_URL']) {
-    void uiWindow.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/index.html`)
+    mpvHost = new BrowserWindow({
+      parent: mainWindow,
+      frame: false,
+      show: false,
+      backgroundColor: '#000000',
+      resizable: false,
+      skipTaskbar: true,
+      // Clicks on the video must not pull keyboard focus away from the shell,
+      // which is the only window that can see key events.
+      focusable: false,
+      hasShadow: false,
+      webPreferences: { nodeIntegration: false, contextIsolation: true }
+    })
+    void mpvHost.loadURL('data:text/html,<body style="margin:0;background:#000"></body>')
   } else {
-    void uiWindow.loadFile(path.join(__dirname, '../renderer/index.html'))
+    // mpv fills the main window; the UI floats above it in an owned window.
+    void mainWindow.loadURL('data:text/html,<body style="margin:0;background:#000"></body>')
+
+    rendererWindow = new BrowserWindow({
+      parent: mainWindow,
+      transparent: true,
+      frame: false,
+      hasShadow: false,
+      resizable: false,
+      skipTaskbar: true,
+      show: false,
+      thickFrame: false,
+      webPreferences: rendererPreload()
+    })
+    rendererWindow.setMenu(null)
+    loadUi(rendererWindow)
   }
 
-  for (const ev of [
+  const syncEvents = [
     'move',
     'resize',
     'restore',
@@ -136,49 +227,51 @@ export function createWindows(): Windows {
     'unmaximize',
     'enter-full-screen',
     'leave-full-screen'
-  ] as const) {
-    videoWindow.on(ev, syncBounds)
+  ] as const
+  for (const ev of syncEvents) {
+    // These event-name overloads are mutually exclusive, so the union has to be
+    // narrowed to one of them for the call to typecheck.
+    mainWindow.on(ev as 'move', syncBounds)
   }
 
-  videoWindow.on('minimize', () => uiWindow?.hide())
-  videoWindow.on('restore', () => {
-    uiWindow?.showInactive()
+  const secondary = layout === 'compat' ? mpvHost : rendererWindow
+  mainWindow.on('minimize', () => secondary?.hide())
+  mainWindow.on('restore', () => {
+    secondary?.showInactive()
     syncBounds()
-    uiWindow?.focus()
+    if (layout === 'overlay') rendererWindow?.focus()
   })
 
-  videoWindow.on('close', () => {
+  mainWindow.on('close', () => {
     persistBounds()
-    if (uiWindow && !uiWindow.isDestroyed()) uiWindow.destroy()
+    if (secondary && !secondary.isDestroyed() && secondary !== mainWindow) secondary.destroy()
   })
-  videoWindow.on('closed', () => {
-    videoWindow = null
+  mainWindow.on('closed', () => {
+    mainWindow = null
+    rendererWindow = null
+    mpvHost = null
   })
-  uiWindow.on('closed', () => {
-    uiWindow = null
-  })
-
-  // Never let the overlay navigate away or spawn browser windows.
-  uiWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//.test(url)) void shell.openExternal(url)
-    return { action: 'deny' }
-  })
-  uiWindow.webContents.on('will-navigate', (e) => e.preventDefault())
 
   if (cfg.alwaysOnTop) setAlwaysOnTop(true)
-
-  return { videoWindow, uiWindow }
 }
 
 export function showWindows(maximized: boolean): void {
-  if (!videoWindow || !uiWindow) return
-  videoWindow.show()
-  if (maximized) videoWindow.maximize()
+  const main = alive(mainWindow)
+  if (!main) return
+  main.show()
+  if (maximized) main.maximize()
   syncBounds()
-  uiWindow.showInactive()
-  // The overlay, not the video window, must own keyboard focus: it is the only
+
+  if (layout === 'compat') {
+    alive(mpvHost)?.showInactive()
+    main.focus()
+    return
+  }
+  const ui = alive(rendererWindow)
+  ui?.showInactive()
+  // The overlay, not the main window, must own keyboard focus: it is the only
   // window that can see input.
-  uiWindow.focus()
+  ui?.focus()
 }
 
 function clampToDisplay(b: {
@@ -190,84 +283,92 @@ function clampToDisplay(b: {
   const width = Math.max(480, Math.round(b.width))
   const height = Math.max(320, Math.round(b.height))
   if (b.x === undefined || b.y === undefined) return { width, height }
-  // A saved position on a monitor that is no longer attached would open the
-  // window off-screen; fall back to centering in that case.
+  // A position saved on a monitor that is no longer attached would open the
+  // window off-screen; centre it instead.
   const area = screen.getDisplayMatching({ x: b.x, y: b.y, width, height }).workArea
   const visible =
-    b.x + width > area.x && b.x < area.x + area.width &&
-    b.y + height > area.y && b.y < area.y + area.height
+    b.x + width > area.x &&
+    b.x < area.x + area.width &&
+    b.y + height > area.y &&
+    b.y < area.y + area.height
   return visible ? { x: Math.round(b.x), y: Math.round(b.y), width, height } : { width, height }
 }
 
 export function persistBounds(): void {
-  if (!videoWindow || videoWindow.isDestroyed()) return
-  if (videoWindow.isFullScreen()) return
-  const maximized = videoWindow.isMaximized()
-  const b = maximized ? videoWindow.getNormalBounds() : videoWindow.getBounds()
+  const main = alive(mainWindow)
+  if (!main || main.isFullScreen()) return
+  const maximized = main.isMaximized()
+  const b = maximized ? main.getNormalBounds() : main.getBounds()
   saveConfig({ window: { x: b.x, y: b.y, width: b.width, height: b.height, maximized } })
 }
 
 export function setAlwaysOnTop(on: boolean): void {
-  videoWindow?.setAlwaysOnTop(on)
-  // The overlay must outrank the video window even when that is topmost.
-  uiWindow?.setAlwaysOnTop(on, 'pop-up-menu')
+  alive(mainWindow)?.setAlwaysOnTop(on)
+  // The secondary window has to outrank the main one even when it is topmost.
+  if (layout === 'overlay') alive(rendererWindow)?.setAlwaysOnTop(on, 'pop-up-menu')
+  else alive(mpvHost)?.setAlwaysOnTop(on, 'pop-up-menu')
   saveConfig({ alwaysOnTop: on })
 }
 
 export function setFullScreen(on: boolean): void {
-  if (!videoWindow) return
-  videoWindow.setFullScreen(on)
+  const main = alive(mainWindow)
+  if (!main) return
+  main.setFullScreen(on)
   syncBounds()
 }
 
 export function toggleFullScreen(): boolean {
-  if (!videoWindow) return false
-  const next = !videoWindow.isFullScreen()
+  const main = alive(mainWindow)
+  if (!main) return false
+  const next = !main.isFullScreen()
   setFullScreen(next)
   return next
 }
 
 export function toggleMaximize(): void {
-  if (!videoWindow) return
-  if (videoWindow.isMaximized()) videoWindow.unmaximize()
-  else videoWindow.maximize()
+  const main = alive(mainWindow)
+  if (!main) return
+  if (main.isMaximized()) main.unmaximize()
+  else main.maximize()
 }
 
 // --- manual move / resize -------------------------------------------------
-// The overlay covers the video window completely, so Windows never delivers
-// hit-test messages for the frame. We drive both gestures ourselves by polling
-// the cursor while the overlay holds pointer capture.
+// In overlay mode the UI window covers the frame completely, so Windows never
+// delivers hit-test messages for it. Both gestures are driven here by polling
+// the cursor while the renderer holds pointer capture.
 
 type Edge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
 
 let dragTimer: NodeJS.Timeout | null = null
 
 export function beginDrag(mode: 'move' | 'resize', edge?: Edge): void {
-  if (!videoWindow || videoWindow.isFullScreen()) return
+  const main = alive(mainWindow)
+  if (!main || main.isFullScreen()) return
   endDrag()
 
   const start = screen.getCursorScreenPoint()
-  const origin = videoWindow.getBounds()
-  const wasMaximized = videoWindow.isMaximized()
+  const origin = main.getBounds()
+  const wasMaximized = main.isMaximized()
 
   dragTimer = setInterval(() => {
-    if (!videoWindow || videoWindow.isDestroyed()) return endDrag()
+    const win = alive(mainWindow)
+    if (!win) return endDrag()
     const now = screen.getCursorScreenPoint()
     const dx = now.x - start.x
     const dy = now.y - start.y
 
     if (mode === 'move') {
-      // Dragging a maximized window restores it and continues the drag, the
-      // way a normal Windows titlebar behaves.
+      // Dragging a maximized window restores it and keeps dragging, the way a
+      // normal Windows titlebar behaves.
       if (wasMaximized && (Math.abs(dx) > 6 || Math.abs(dy) > 6)) {
-        videoWindow.unmaximize()
-        const nb = videoWindow.getBounds()
-        videoWindow.setPosition(Math.round(now.x - nb.width / 2), Math.round(now.y - 20))
+        win.unmaximize()
+        const nb = win.getBounds()
+        win.setPosition(Math.round(now.x - nb.width / 2), Math.round(now.y - 20))
         endDrag()
         beginDrag('move')
         return
       }
-      videoWindow.setPosition(origin.x + dx, origin.y + dy)
+      win.setPosition(origin.x + dx, origin.y + dy)
       return
     }
 
@@ -284,7 +385,7 @@ export function beginDrag(mode: 'move' | 'resize', edge?: Edge): void {
       height = Math.max(minH, origin.height - dy)
       y = origin.y + (origin.height - height)
     }
-    videoWindow.setBounds({ x, y, width, height })
+    win.setBounds({ x, y, width, height })
   }, 16)
 }
 

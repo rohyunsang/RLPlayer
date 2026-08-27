@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "RLPlayer - a free, ad-free, no-nag Windows video player powered by mpv",
   "main": "./out/main/index.js",
-  "author": "sso06052",
+  "author": "rohyunsang",
   "license": "MIT",
   "private": true,
   "scripts": {

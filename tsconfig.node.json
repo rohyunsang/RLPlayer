@@ -18,6 +18,9 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
+    // Node 24 runs the .test.ts files directly via type stripping, which
+    // requires explicit .ts extensions in their imports.
+    "allowImportingTsExtensions": true,
     "baseUrl": ".",
     "paths": { "@shared/*": ["src/shared/*"] }
   }

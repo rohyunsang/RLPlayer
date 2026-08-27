@@ -1,0 +1,861 @@
+/*
+ * RLPlayer overlay styles.
+ *
+ * This document is painted in a TRANSPARENT window sitting directly on top of
+ * mpv's video output. Anything with a solid background hides video, so every
+ * surface here is either translucent or explicitly sized to the chrome.
+ */
+
+:root {
+  --accent: #5b9dff;
+  --accent-dim: #3f7ad4;
+  --text: #f2f4f8;
+  --text-dim: #a9b0bd;
+  --panel: rgba(18, 20, 26, 0.92);
+  --panel-solid: #12141a;
+  --hover: rgba(255, 255, 255, 0.12);
+  --danger: #e5484d;
+  --radius: 8px;
+  --chrome-fade: 220ms;
+  --font: 'Segoe UI', 'Malgun Gothic', system-ui, -apple-system, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/*
+ * A class selector outranks the UA stylesheet, so `.modal { display: grid }`
+ * and `.playlist { display: flex }` silently defeat the [hidden] attribute.
+ * Without this rule the shortcut sheet and the drop overlay render permanently
+ * and black out the video behind them.
+ */
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  user-select: none;
+  cursor: default;
+}
+
+body.hide-cursor,
+body.hide-cursor * {
+  cursor: none;
+}
+
+svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+svg .fill {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* --- click / wheel surface over the video ------------------------------- */
+
+.stage {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+}
+
+/* --- resize handles ----------------------------------------------------- */
+
+.resize-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+}
+
+.rz {
+  position: absolute;
+  pointer-events: auto;
+}
+
+body.fullscreen .resize-layer {
+  display: none;
+}
+
+.rz-n { top: 0; left: 6px; right: 6px; height: 5px; cursor: ns-resize; }
+.rz-s { bottom: 0; left: 6px; right: 6px; height: 5px; cursor: ns-resize; }
+.rz-w { left: 0; top: 6px; bottom: 6px; width: 5px; cursor: ew-resize; }
+.rz-e { right: 0; top: 6px; bottom: 6px; width: 5px; cursor: ew-resize; }
+.rz-nw { left: 0; top: 0; width: 8px; height: 8px; cursor: nwse-resize; }
+.rz-se { right: 0; bottom: 0; width: 8px; height: 8px; cursor: nwse-resize; }
+.rz-ne { right: 0; top: 0; width: 8px; height: 8px; cursor: nesw-resize; }
+.rz-sw { left: 0; bottom: 0; width: 8px; height: 8px; cursor: nesw-resize; }
+
+/* --- chrome (titlebar + controls) --------------------------------------- */
+
+.chrome {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity var(--chrome-fade) ease;
+}
+
+.chrome > * {
+  pointer-events: auto;
+}
+
+body.chrome-hidden .chrome {
+  opacity: 0;
+  pointer-events: none;
+}
+
+body.chrome-hidden .chrome > * {
+  pointer-events: none;
+}
+
+/* --- titlebar ----------------------------------------------------------- */
+
+.titlebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 40px;
+  display: flex;
+  align-items: stretch;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.82), rgba(0, 0, 0, 0));
+  padding-left: 12px;
+}
+
+.titlebar-drag {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  /* Dragging is driven manually through IPC; see main/windows.ts beginDrag. */
+  cursor: default;
+}
+
+.app-name {
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  color: var(--accent);
+  flex: none;
+}
+
+.title {
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--text-dim);
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.titlebar-actions {
+  display: flex;
+  align-items: stretch;
+  flex: none;
+}
+
+/* --- buttons ------------------------------------------------------------ */
+
+.icon-btn {
+  appearance: none;
+  background: none;
+  border: 0;
+  color: var(--text);
+  padding: 0;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.icon-btn svg {
+  width: 17px;
+  height: 17px;
+}
+
+.icon-btn:hover {
+  background: var(--hover);
+}
+
+.icon-btn:focus-visible,
+.text-btn:focus-visible,
+input[type='range']:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.icon-btn[aria-pressed='true'] {
+  color: var(--accent);
+}
+
+.icon-btn.small {
+  width: 30px;
+  height: 30px;
+}
+
+.icon-btn.small svg {
+  width: 14px;
+  height: 14px;
+}
+
+.win-btn {
+  border-radius: 0;
+  width: 44px;
+  height: 40px;
+}
+
+.win-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.win-btn.close:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+.icon-btn.play {
+  width: 46px;
+  height: 46px;
+  background: var(--accent);
+  color: #fff;
+}
+
+.icon-btn.play:hover {
+  background: #6faaff;
+}
+
+.icon-btn.play svg {
+  width: 20px;
+  height: 20px;
+}
+
+.text-btn {
+  appearance: none;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  min-width: 58px;
+}
+
+.text-btn:hover {
+  background: var(--hover);
+}
+
+.text-btn.primary {
+  background: var(--accent);
+  color: #fff;
+  padding: 9px 20px;
+}
+
+/* --- control bar -------------------------------------------------------- */
+
+.controls {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 40px 14px 10px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.9) 35%, rgba(0, 0, 0, 0));
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+body.playlist-open .controls,
+body.playlist-open .titlebar {
+  right: 320px;
+}
+
+.seek-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.time {
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  flex: none;
+  min-width: 46px;
+  text-align: center;
+}
+
+.seek-wrap {
+  position: relative;
+  flex: 1;
+  height: 20px;
+  display: flex;
+  align-items: center;
+}
+
+.seek-buffer {
+  position: absolute;
+  left: 0;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.28);
+  border-radius: 2px;
+  pointer-events: none;
+  width: 0;
+}
+
+/* Range inputs are real <input type="range"> for keyboard + screen-reader
+   support; the visuals below are purely cosmetic. */
+input[type='range'] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  background: transparent;
+  margin: 0;
+  cursor: pointer;
+}
+
+input[type='range']::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0 var(--fill, 0%),
+    rgba(255, 255, 255, 0.18) var(--fill, 0%) 100%
+  );
+}
+
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 13px;
+  height: 13px;
+  margin-top: -4.5px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  transition: transform 120ms ease;
+}
+
+.seek::-webkit-slider-thumb {
+  transform: scale(0);
+}
+
+.seek-wrap:hover .seek::-webkit-slider-thumb,
+.seek:focus-visible::-webkit-slider-thumb,
+body.scrubbing .seek::-webkit-slider-thumb {
+  transform: scale(1);
+}
+
+.seek {
+  position: relative;
+  z-index: 1;
+}
+
+.seek-hover {
+  position: absolute;
+  bottom: 24px;
+  transform: translateX(-50%);
+  background: var(--panel-solid);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  padding: 3px 8px;
+  border-radius: 5px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.button-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.volume-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 6px;
+}
+
+.volume {
+  width: 92px;
+}
+
+.vol-readout {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  min-width: 38px;
+}
+
+.vol-readout.boosted {
+  color: #ffb547;
+  font-weight: 600;
+}
+
+/* --- compatibility layout ------------------------------------------------
+ *
+ * Used when the transparent overlay window cannot be trusted (Electron
+ * issue #40515 renders it black on some Windows GPUs). Here the page IS the
+ * window: chrome is laid out in normal flow and mpv gets an inset child window
+ * sized to .video-region, so no Chromium pixel ever sits under mpv's HWND.
+ */
+
+.video-region {
+  display: none;
+}
+
+body.compat {
+  background: #000;
+}
+
+body.compat .chrome {
+  position: static;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+body.compat .video-region {
+  display: block;
+  flex: 1;
+  min-height: 0;
+}
+
+body.compat .titlebar,
+body.compat .controls {
+  position: static;
+  flex: none;
+  background: #0d0f14;
+}
+
+body.compat .controls {
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+body.compat .titlebar {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+/* The video is owned by a separate window here, so it cannot receive clicks;
+   the always-visible control bar is the affordance instead. */
+body.compat .stage,
+body.compat .idle-hint {
+  display: none;
+}
+
+body.compat.playlist-open .chrome {
+  margin-right: 320px;
+}
+
+body.compat.playlist-open .controls,
+body.compat.playlist-open .titlebar {
+  right: auto;
+}
+
+/* Chrome never auto-hides in compat mode: hiding it would resize the video. */
+body.compat.chrome-hidden .chrome {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+body.compat.chrome-hidden .chrome > * {
+  pointer-events: auto;
+}
+
+/* --- playlist ----------------------------------------------------------- */
+
+.playlist {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 320px;
+  z-index: 30;
+  background: var(--panel);
+  backdrop-filter: blur(18px);
+  border-left: 1px solid rgba(255, 255, 255, 0.09);
+  display: flex;
+  flex-direction: column;
+}
+
+.playlist-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 8px 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex: none;
+}
+
+.playlist-head h2 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.count {
+  color: var(--text-dim);
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+.playlist-tools {
+  display: flex;
+  gap: 2px;
+}
+
+.playlist-tools .icon-btn {
+  position: relative;
+}
+
+.badge {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  font-size: 9px;
+  font-weight: 700;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 6px;
+  padding: 0 3px;
+  line-height: 11px;
+}
+
+.playlist-items {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  counter-reset: pl;
+}
+
+.pl-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--text-dim);
+  counter-increment: pl;
+}
+
+.pl-item::before {
+  content: counter(pl);
+  flex: none;
+  width: 22px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  opacity: 0.55;
+}
+
+.pl-item:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.pl-item.current {
+  background: rgba(91, 157, 255, 0.16);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.pl-item.current::before {
+  color: var(--accent);
+  opacity: 1;
+}
+
+.pl-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pl-item.drag-over {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.pl-item.dragging {
+  opacity: 0.4;
+}
+
+.pl-remove {
+  flex: none;
+  opacity: 0;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+}
+
+.pl-remove svg {
+  width: 11px;
+  height: 11px;
+}
+
+.pl-item:hover .pl-remove {
+  opacity: 0.7;
+}
+
+.pl-remove:hover {
+  opacity: 1 !important;
+  background: var(--danger);
+  color: #fff;
+}
+
+/* --- OSD ---------------------------------------------------------------- */
+
+.osd {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 40;
+  background: rgba(0, 0, 0, 0.72);
+  border-radius: 12px;
+  padding: 16px 26px;
+  font-size: 24px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.osd.show {
+  opacity: 1;
+}
+
+/* --- toasts ------------------------------------------------------------- */
+
+.toasts {
+  position: fixed;
+  left: 16px;
+  bottom: 116px;
+  z-index: 45;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(420px, 60vw);
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--panel);
+  backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 11px 13px;
+  font-size: 13px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  animation: toast-in 180ms ease;
+}
+
+.toast.error {
+  border-left-color: var(--danger);
+}
+
+.toast-msg {
+  flex: 1;
+  min-width: 0;
+}
+
+.toast-action {
+  flex: none;
+  background: rgba(255, 255, 255, 0.12);
+  border: 0;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  padding: 5px 11px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.toast-action:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.toast-close {
+  flex: none;
+  background: none;
+  border: 0;
+  color: var(--text-dim);
+  cursor: pointer;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+}
+
+.toast-close svg {
+  width: 11px;
+  height: 11px;
+}
+
+.toast-close:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* --- dropzone ----------------------------------------------------------- */
+
+.dropzone {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(10, 12, 18, 0.78);
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.dropzone-inner {
+  border: 2px dashed var(--accent);
+  border-radius: 16px;
+  padding: 42px 66px;
+  text-align: center;
+  color: var(--text);
+}
+
+.dropzone-inner svg {
+  width: 42px;
+  height: 42px;
+  stroke-width: 1.5;
+  margin-bottom: 10px;
+}
+
+.dropzone-inner p {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* --- idle hint ---------------------------------------------------------- */
+
+.idle-hint {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  color: var(--text-dim);
+  font-size: 14px;
+  pointer-events: none;
+}
+
+body:not(.idle) .idle-hint {
+  display: none;
+}
+
+kbd {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+/* --- modal -------------------------------------------------------------- */
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(5, 6, 10, 0.7);
+  display: grid;
+  place-items: center;
+}
+
+.modal-card {
+  background: var(--panel-solid);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 22px 24px;
+  width: min(560px, 84vw);
+  max-height: 78vh;
+  overflow-y: auto;
+  text-align: center;
+}
+
+.modal-card h2 {
+  margin: 0 0 16px;
+  font-size: 16px;
+}
+
+.shortcut-list {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 7px 16px;
+  text-align: left;
+  font-size: 13px;
+  margin-bottom: 20px;
+}
+
+.shortcut-list dt {
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.shortcut-list dd {
+  margin: 0;
+  color: var(--text-dim);
+}

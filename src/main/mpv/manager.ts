@@ -49,6 +49,7 @@ export interface MpvOptions {
   audioDevice: string
   subScale: number
   subAssOverride: boolean
+  vo: string
 }
 
 export class MpvManager extends EventEmitter {
@@ -84,7 +85,9 @@ export class MpvManager extends EventEmitter {
     alwaysOnTop: false,
     maximized: false,
     aspect: '-1',
-    rotate: 0
+    rotate: 0,
+    // Overwritten from the real window topology on every pushState().
+    layoutMode: 'overlay'
   }
 
   async start(opts: MpvOptions): Promise<void> {
@@ -124,8 +127,11 @@ export class MpvManager extends EventEmitter {
       `--speed=${opts.speed}`,
       `--sub-scale=${opts.subScale}`,
       `--hwdec=${opts.hwdec || 'auto-safe'}`,
-      '--vo=gpu-next',
-      '--profile=high-quality',
+      // gpu-next + d3d11 is both the most efficient path for a --wid child
+      // window and the only one that can do HDR passthrough. `--vo=gpu` is the
+      // documented fallback for old hardware; see docs/03-architecture.md.
+      `--vo=${opts.vo || 'gpu-next'}`,
+      '--gpu-context=d3d11',
       // Cheap and kills most judder on non-24Hz displays.
       '--video-sync=display-resample',
       // Subtitle auto-loading is mpv's job, not ours: `fuzzy` matches

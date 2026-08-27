@@ -1,13 +1,20 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { app, clipboard, dialog, nativeImage } from 'electron'
+import { app, clipboard, ClipboardItem, dialog } from 'electron'
 import { MpvManager } from './mpv/manager'
 import { loadConfig, saveConfig } from './services/config'
 import { recordPosition, lookupPosition, forget } from './services/resume'
 import { scanFolder, shuffleOrder, isMediaFile } from './services/playlist'
-import { findExternalSubs } from './services/subtitles'
-import { getHwnd, getUiWindow, getVideoWindow, setAlwaysOnTop, toggleFullScreen } from './windows'
+import {
+  getHwnd,
+  getLayoutMode,
+  getMpvHostWindow,
+  getUiWindow,
+  getVideoWindow,
+  setAlwaysOnTop,
+  toggleFullScreen
+} from './windows'
 import type { PlayerAction, PlaylistItem, PlaylistState, ToastPayload } from '@shared/types'
 
 const POSITION_SAVE_INTERVAL_MS = 5000
@@ -21,20 +28,24 @@ export class Player {
   private saveTimer: NodeJS.Timeout | null = null
   private currentFile: string | null = null
   private started = false
+  private boostActive = false
 
   async start(): Promise<void> {
-    const video = getVideoWindow()
-    if (!video) throw new Error('video window missing')
+    // In compat mode this is a separate inset child window, not the shell.
+    const host = getMpvHostWindow()
+    if (!host) throw new Error('mpv host window missing')
     const cfg = loadConfig()
 
     await this.mpv.start({
-      hwnd: getHwnd(video),
+      hwnd: getHwnd(host),
       volume: cfg.volume,
       muted: cfg.muted,
       speed: cfg.speed,
       hwdec: cfg.hwdec,
       audioDevice: cfg.audioDevice,
-      subScale: cfg.subScale
+      subScale: cfg.subScale,
+      subAssOverride: cfg.subAssOverride,
+      vo: cfg.vo
     })
     this.started = true
 
@@ -121,18 +132,28 @@ export class Player {
       })
     }
 
-    if (cfg.autoLoadSubs) await this.loadExternalSubs(item.path)
+    // External subtitles are found by mpv itself via --sub-auto=fuzzy and
+    // --sub-file-paths; see MpvManager.start().
+    await this.applyBoostFilter(this.mpv.state.volume)
     this.pushPlaylist()
     this.pushState()
   }
 
-  private async loadExternalSubs(video: string): Promise<void> {
-    const subs = findExternalSubs(video)
-    for (let i = 0; i < subs.length; i++) {
-      // First match becomes the active track; the rest are merely available.
-      await this.mpv.client
-        .command(['sub-add', subs[i]!, i === 0 ? 'select' : 'auto'])
-        .catch(() => {})
+  /**
+   * Attach a subtitle file to whatever is already playing, rather than
+   * replacing playback with it. This is what dropping a .srt on the window
+   * should do.
+   */
+  async attachSubtitle(file: string): Promise<void> {
+    if (this.mpv.state.idle) {
+      this.toast({ kind: 'error', message: '먼저 동영상을 재생해 주세요' })
+      return
+    }
+    try {
+      await this.mpv.client.command(['sub-add', file, 'select'])
+      this.toast({ kind: 'info', message: `자막 추가됨: ${path.basename(file)}` })
+    } catch (e) {
+      this.toast({ kind: 'error', message: `자막을 불러올 수 없습니다: ${(e as Error).message}` })
     }
   }
 
@@ -293,12 +314,14 @@ export class Player {
       case 'setVolume': {
         const v = clamp(action.value, 0, 150)
         await c.setProperty('volume', v)
+        await this.applyBoostFilter(v)
         saveConfig({ volume: v })
         break
       }
       case 'volumeBy': {
         const v = clamp(Math.round(s.volume + action.delta), 0, 150)
         await c.setProperty('volume', v)
+        await this.applyBoostFilter(v)
         saveConfig({ volume: v })
         break
       }
@@ -375,6 +398,37 @@ export class Player {
     }
   }
 
+  // --- volume boost -------------------------------------------------------
+
+  /**
+   * Above 100%, raw gain clips badly on exactly the content people boost for:
+   * quiet dialogue in a wide-dynamic-range film. Swap in a soft limiter on the
+   * boost path instead -- dynaudnorm lifts the quiet passages, alimiter catches
+   * the peaks before they square off.
+   *
+   * The filter is added and removed rather than left permanently in the chain,
+   * so normal playback at <=100% is bit-exact and costs nothing.
+   */
+  private async applyBoostFilter(volume: number): Promise<void> {
+    const want = loadConfig().volumeBoostLimiter && volume > 100
+    if (want === this.boostActive) return
+    try {
+      if (want) {
+        await this.mpv.client.command([
+          'af',
+          'add',
+          '@rlboost:lavfi=[dynaudnorm=f=250:g=9:p=0.85:m=4.0,alimiter=limit=0.94:level=false]'
+        ])
+      } else {
+        await this.mpv.client.command(['af', 'remove', '@rlboost'])
+      }
+      this.boostActive = want
+    } catch (e) {
+      // A build without those lavfi filters should still play audio; just log.
+      console.error('[player] volume boost filter failed:', (e as Error).message)
+    }
+  }
+
   // --- screenshots --------------------------------------------------------
 
   private async screenshot(target: 'file' | 'clipboard'): Promise<void> {
@@ -382,10 +436,13 @@ export class Player {
     if (target === 'clipboard') {
       const tmp = path.join(os.tmpdir(), `rlplayer-shot-${Date.now()}.png`)
       try {
+        // mpv has no clipboard output, so render to a temp PNG and hand the
+        // bytes to Electron's clipboard.
         await this.mpv.client.command(['screenshot-to-file', tmp, 'subtitles'])
-        const img = nativeImage.createFromPath(tmp)
-        if (img.isEmpty()) throw new Error('empty image')
-        clipboard.writeImage(img)
+        const png = await fs.promises.readFile(tmp)
+        if (png.length === 0) throw new Error('empty image')
+        const blob = new Blob([new Uint8Array(png)], { type: 'image/png' })
+        await clipboard.write([new ClipboardItem({ 'image/png': blob })])
         this.toast({ kind: 'info', message: '스크린샷을 클립보드에 복사했습니다' })
       } catch (e) {
         this.toast({ kind: 'error', message: `스크린샷 실패: ${(e as Error).message}` })
@@ -437,6 +494,7 @@ export class Player {
     s.fullscreen = video?.isFullScreen() ?? false
     s.maximized = video?.isMaximized() ?? false
     s.alwaysOnTop = video?.isAlwaysOnTop() ?? false
+    s.layoutMode = getLayoutMode()
     ui.webContents.send('player:state', s)
   }
 

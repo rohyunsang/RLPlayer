@@ -52,6 +52,7 @@ export interface PlayerState {
   maximized: boolean
   aspect: string
   rotate: number
+  layoutMode: 'overlay' | 'compat'
 }
 
 export interface Keybinds {
@@ -69,10 +70,25 @@ export interface AppConfig {
   repeat: 'off' | 'one' | 'all'
   shuffle: boolean
   subScale: number
+  /** Force our own subtitle styling over the file's ASS styling. Off by default. */
+  subAssOverride: boolean
+  /** Soft-limit the audio when volume goes above 100%. */
+  volumeBoostLimiter: boolean
   screenshotDir: string
   audioDevice: string
   hwdec: string
+  /** mpv video output driver. gpu-next by default; gpu is the safe fallback. */
+  vo: string
+  /**
+   * 'overlay'  transparent UI window floating over the video (default)
+   * 'compat'   no transparent window anywhere: the UI is docked around an
+   *            inset video area. Escape hatch for Electron issue #40515, where
+   *            transparent windows render black on some Windows GPUs.
+   */
+  layoutMode: 'overlay' | 'compat'
   window: { x?: number; y?: number; width: number; height: number; maximized: boolean }
+  keybindPreset: 'default' | 'potplayer' | 'mpv'
+  /** User overrides layered on top of the chosen preset. */
   keybinds: Keybinds
 }
 

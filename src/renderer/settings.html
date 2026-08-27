@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    />
+    <title>RLPlayer 설정</title>
+    <link rel="stylesheet" href="./src/settings.css" />
+  </head>
+  <body>
+    <main>
+      <section>
+        <h2>재생</h2>
+        <label class="row">
+          <input type="checkbox" id="resumePlayback" />
+          <span>
+            <strong>이어서 재생</strong>
+            <small>마지막으로 본 위치를 기억했다가 다음에 열 때 이어서 재생합니다.</small>
+          </span>
+        </label>
+        <label class="row">
+          <span class="label">하드웨어 가속</span>
+          <select id="hwdec">
+            <option value="auto-safe">자동 (권장)</option>
+            <option value="auto">자동 (모두 허용)</option>
+            <option value="d3d11va">D3D11VA</option>
+            <option value="no">사용 안 함</option>
+          </select>
+        </label>
+      </section>
+
+      <section>
+        <h2>화면</h2>
+        <label class="row">
+          <span class="label">화면 구성</span>
+          <select id="layoutMode">
+            <option value="overlay">기본 (조작부가 영상 위에 겹침)</option>
+            <option value="compat">호환 모드 (조작부를 영상 밖에 배치)</option>
+          </select>
+        </label>
+        <p class="hint">
+          <strong>화면이 검게 나오나요?</strong>
+          일부 그래픽 드라이버에서 투명 창이 검은색으로 렌더링되는 문제가 있습니다
+          (Electron #40515). 호환 모드는 투명 창을 전혀 쓰지 않고 조작부를 영상
+          바깥쪽에 배치하므로 이 문제를 피할 수 있습니다. 대신 전체화면에서
+          조작부가 자동으로 숨겨지지 않고, 영상 부분을 클릭해도 반응하지 않습니다.
+        </p>
+        <label class="row">
+          <span class="label">비디오 출력</span>
+          <select id="vo">
+            <option value="gpu-next">gpu-next (권장, HDR 지원)</option>
+            <option value="gpu">gpu (구형 하드웨어 대체용)</option>
+          </select>
+        </label>
+        <p class="hint">두 설정 모두 적용하려면 다시 시작해야 합니다.</p>
+        <button type="button" id="relaunch" class="btn">RLPlayer 다시 시작</button>
+      </section>
+
+      <section>
+        <h2>오디오</h2>
+        <label class="row">
+          <span class="label">출력 장치</span>
+          <select id="audioDevice"></select>
+        </label>
+        <label class="row">
+          <input type="checkbox" id="volumeBoostLimiter" />
+          <span>
+            <strong>볼륨 증폭 시 소프트 리미터</strong>
+            <small>
+              100%를 넘길 때 단순 증폭 대신 다이내믹 정규화와 리미터를 적용해
+              조용한 대사를 키우면서 피크가 찌그러지는 것을 막습니다.
+            </small>
+          </span>
+        </label>
+      </section>
+
+      <section>
+        <h2>자막</h2>
+        <label class="row">
+          <input type="checkbox" id="autoLoadSubs" />
+          <span>
+            <strong>자막 자동 불러오기</strong>
+            <small>같은 폴더와 Subs / Subtitles 하위 폴더에서 이름이 비슷한 자막을 찾습니다.</small>
+          </span>
+        </label>
+        <label class="row">
+          <input type="checkbox" id="subAssOverride" />
+          <span>
+            <strong>ASS 자막 스타일 덮어쓰기</strong>
+            <small>
+              기본값은 꺼짐입니다. 켜면 제작자가 지정한 글꼴·위치 대신 아래 크기 설정을 강제합니다.
+            </small>
+          </span>
+        </label>
+        <label class="row">
+          <span class="label">자막 크기</span>
+          <input type="range" id="subScale" min="0.4" max="2.5" step="0.05" />
+          <output id="subScaleOut">1.00×</output>
+        </label>
+      </section>
+
+      <section>
+        <h2>단축키</h2>
+        <label class="row">
+          <span class="label">프리셋</span>
+          <select id="keybindPreset">
+            <option value="default">RLPlayer 기본</option>
+            <option value="potplayer">PotPlayer 호환</option>
+            <option value="mpv">mpv 호환</option>
+          </select>
+        </label>
+        <p class="hint">
+          개별 단축키는 <code id="cfgPath"></code> 의 <code>keybinds</code> 항목에서 바꿀 수 있습니다.
+          프리셋 위에 덮어쓰는 방식이라 바꾸고 싶은 키만 적으면 됩니다.
+        </p>
+        <button type="button" id="openConfig" class="btn">설정 폴더 열기</button>
+      </section>
+
+      <section>
+        <h2>스크린샷</h2>
+        <label class="row">
+          <span class="label">저장 폴더</span>
+          <input type="text" id="screenshotDir" readonly placeholder="사진\RLPlayer (기본값)" />
+          <button type="button" id="pickDir" class="btn">변경</button>
+        </label>
+      </section>
+
+      <section>
+        <h2>파일 연결</h2>
+        <p class="hint">
+          Windows 10/11은 앱이 스스로 기본 프로그램으로 등록하는 것을 허용하지 않습니다.
+          아래 버튼으로 설정을 연 뒤 동영상 형식마다 RLPlayer를 직접 선택해 주세요.
+        </p>
+        <button type="button" id="openDefaults" class="btn">Windows 기본 앱 설정 열기</button>
+      </section>
+
+      <section>
+        <h2>정보</h2>
+        <dl class="info">
+          <dt>버전</dt><dd id="version">-</dd>
+          <dt>모드</dt><dd id="mode">-</dd>
+          <dt>설정 파일</dt><dd id="configPath" class="mono">-</dd>
+          <dt>재생 엔진</dt><dd id="mpvPath" class="mono">-</dd>
+        </dl>
+        <p class="hint">
+          RLPlayer는 자동 업데이트를 하지 않고, 실행 중 어떤 네트워크 요청도 보내지 않습니다.
+          업데이트는 도움말 메뉴에서 직접 확인하세요.
+        </p>
+      </section>
+
+      <footer>
+        <button type="button" id="reset" class="btn danger">기본값으로 초기화</button>
+        <button type="button" id="close" class="btn primary">닫기</button>
+      </footer>
+    </main>
+    <script type="module" src="./src/settings.ts"></script>
+  </body>
+</html>

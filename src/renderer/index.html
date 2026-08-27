@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- No remote origins: the overlay is entirely local. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'"
+    />
+    <title>RLPlayer</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <!-- Resize handles: the overlay covers the real window frame, so the -->
+    <!-- eight hit zones have to be recreated here. -->
+    <div class="resize-layer" id="resizeLayer" aria-hidden="true">
+      <div class="rz rz-n" data-edge="n"></div>
+      <div class="rz rz-s" data-edge="s"></div>
+      <div class="rz rz-e" data-edge="e"></div>
+      <div class="rz rz-w" data-edge="w"></div>
+      <div class="rz rz-ne" data-edge="ne"></div>
+      <div class="rz rz-nw" data-edge="nw"></div>
+      <div class="rz rz-se" data-edge="se"></div>
+      <div class="rz rz-sw" data-edge="sw"></div>
+    </div>
+
+    <!-- Click/scroll surface over the video. -->
+    <div class="stage" id="stage"></div>
+
+    <div class="chrome" id="chrome">
+      <header class="titlebar" id="titlebar">
+        <div class="titlebar-drag" id="titlebarDrag">
+          <span class="app-name">RLPlayer</span>
+          <h1 class="title" id="mediaTitle">재생 중인 파일 없음</h1>
+        </div>
+        <div class="titlebar-actions">
+          <button type="button" id="menuBtn" class="icon-btn" aria-label="메뉴" title="메뉴">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" /></svg>
+          </button>
+          <button type="button" id="minBtn" class="icon-btn win-btn" aria-label="최소화" title="최소화">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10" /></svg>
+          </button>
+          <button type="button" id="maxBtn" class="icon-btn win-btn" aria-label="최대화" title="최대화">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" /></svg>
+          </button>
+          <button type="button" id="closeBtn" class="icon-btn win-btn close" aria-label="닫기" title="닫기">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- Compat layout only: reserves the area mpv's inset window covers. -->
+      <div class="video-region" id="videoRegion"></div>
+
+      <footer class="controls" id="controls">
+        <div class="seek-row">
+          <span class="time" id="timeNow">0:00</span>
+          <div class="seek-wrap">
+            <div class="seek-buffer" id="seekBuffer"></div>
+            <input
+              type="range"
+              id="seek"
+              class="seek"
+              min="0"
+              max="1000"
+              value="0"
+              step="1"
+              aria-label="재생 위치"
+            />
+            <div class="seek-hover" id="seekHover" hidden></div>
+          </div>
+          <span class="time" id="timeTotal">0:00</span>
+        </div>
+
+        <div class="button-row">
+          <button type="button" id="prevBtn" class="icon-btn" aria-label="이전 파일" title="이전 파일 (Ctrl+←)">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3v10M13 3L6 8l7 5z" class="fill" /></svg>
+          </button>
+          <button type="button" id="playBtn" class="icon-btn play" aria-label="재생" title="재생/일시정지 (Space)">
+            <svg viewBox="0 0 16 16" aria-hidden="true" id="playIcon"><path d="M4 2.5l9 5.5-9 5.5z" class="fill" /></svg>
+          </button>
+          <button type="button" id="nextBtn" class="icon-btn" aria-label="다음 파일" title="다음 파일 (Ctrl+→)">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M12 3v10M3 3l7 5-7 5z" class="fill" /></svg>
+          </button>
+
+          <div class="volume-group">
+            <button type="button" id="muteBtn" class="icon-btn" aria-label="음소거" title="음소거 (M)">
+              <svg viewBox="0 0 16 16" aria-hidden="true" id="volIcon">
+                <path d="M3 6h2.5L9 3v10L5.5 10H3z" class="fill" />
+                <path d="M11 5.5a3.5 3.5 0 010 5M12.8 3.6a6 6 0 010 8.8" />
+              </svg>
+            </button>
+            <input
+              type="range"
+              id="volume"
+              class="volume"
+              min="0"
+              max="150"
+              value="100"
+              step="1"
+              aria-label="볼륨"
+            />
+            <output class="vol-readout" id="volReadout" for="volume">100%</output>
+          </div>
+
+          <div class="spacer"></div>
+
+          <button type="button" id="speedBtn" class="text-btn" aria-label="재생 속도" title="재생 속도 ([ / ])">
+            1.00×
+          </button>
+          <button type="button" id="subBtn" class="icon-btn" aria-label="자막" title="자막 켜기/끄기 (V)">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="1.5" y="3.5" width="13" height="9" rx="1.5" />
+              <path d="M4 9.5h3M9 9.5h3" />
+            </svg>
+          </button>
+          <button type="button" id="playlistBtn" class="icon-btn" aria-label="재생목록" title="재생목록 (L)" aria-pressed="false">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h9M2 8h9M2 12h6M13 8v6l3-3z" /></svg>
+          </button>
+          <button type="button" id="fsBtn" class="icon-btn" aria-label="전체화면" title="전체화면 (F)">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" /></svg>
+          </button>
+        </div>
+      </footer>
+    </div>
+
+    <!-- Playlist side panel -->
+    <aside class="playlist" id="playlist" hidden aria-label="재생목록">
+      <div class="playlist-head">
+        <h2>재생목록 <span class="count" id="plCount"></span></h2>
+        <div class="playlist-tools">
+          <button type="button" id="shuffleBtn" class="icon-btn small" aria-label="무작위 재생" aria-pressed="false" title="무작위 재생">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h3l6 8h3M2 12h3l6-8h3M12 2l2 2-2 2M12 10l2 2-2 2" /></svg>
+          </button>
+          <button type="button" id="repeatBtn" class="icon-btn small" aria-label="반복" title="반복">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 6a3 3 0 013-3h7M13 10a3 3 0 01-3 3H3M11 1l2 2-2 2M5 11l-2 2 2 2" /></svg>
+            <span class="badge" id="repeatBadge" hidden>1</span>
+          </button>
+          <button type="button" id="plCloseBtn" class="icon-btn small" aria-label="재생목록 닫기">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+          </button>
+        </div>
+      </div>
+      <ol class="playlist-items" id="plItems"></ol>
+    </aside>
+
+    <!-- Centre OSD for volume / seek / speed feedback -->
+    <div class="osd" id="osd" role="status" aria-live="polite"></div>
+
+    <!-- Toasts (resume prompt lives here) -->
+    <div class="toasts" id="toasts" role="region" aria-label="알림"></div>
+
+    <!-- Drop target feedback -->
+    <div class="dropzone" id="dropzone" hidden>
+      <div class="dropzone-inner">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M4 17v2a1 1 0 001 1h14a1 1 0 001-1v-2" /></svg>
+        <p>여기에 놓아 재생</p>
+      </div>
+    </div>
+
+    <!-- Shortcut cheat sheet -->
+    <div class="modal" id="shortcutModal" hidden role="dialog" aria-modal="true" aria-labelledby="shortcutTitle">
+      <div class="modal-card">
+        <h2 id="shortcutTitle">단축키</h2>
+        <div class="shortcut-list" id="shortcutList"></div>
+        <button type="button" id="shortcutClose" class="text-btn primary">닫기</button>
+      </div>
+    </div>
+
+    <div class="idle-hint" id="idleHint">
+      <p>동영상 파일을 끌어다 놓거나 <kbd>Ctrl</kbd>+<kbd>O</kbd> 로 여세요</p>
+    </div>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

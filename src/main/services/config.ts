@@ -2,48 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
 import type { AppConfig, Keybinds } from '@shared/types'
-
-/**
- * Default keybinds. Deliberately the conventions people already have muscle
- * memory for from PotPlayer / VLC / mpv. Users can edit these in config.json.
- */
-export const DEFAULT_KEYBINDS: Keybinds = {
-  Space: 'playPause',
-  K: 'playPause',
-  ArrowRight: 'seek:5',
-  ArrowLeft: 'seek:-5',
-  'Shift+ArrowRight': 'seek:60',
-  'Shift+ArrowLeft': 'seek:-60',
-  'Ctrl+ArrowRight': 'seek:30',
-  'Ctrl+ArrowLeft': 'seek:-30',
-  ArrowUp: 'volume:5',
-  ArrowDown: 'volume:-5',
-  F: 'fullscreen',
-  Escape: 'exitFullscreen',
-  M: 'mute',
-  '[': 'speed:-0.25',
-  ']': 'speed:0.25',
-  Backspace: 'speedReset',
-  ',': 'frameBack',
-  '.': 'frameForward',
-  S: 'screenshot',
-  'Ctrl+S': 'screenshotClipboard',
-  N: 'next',
-  P: 'previous',
-  L: 'togglePlaylist',
-  T: 'alwaysOnTop',
-  V: 'toggleSubs',
-  J: 'cycleSub',
-  A: 'cycleAudio',
-  'Ctrl+O': 'open',
-  'Ctrl+,': 'settings',
-  'Shift+G': 'subDelay:0.1',
-  'Shift+F': 'subDelay:-0.1',
-  'Shift+A': 'audioDelay:0.1',
-  'Shift+Z': 'audioDelay:-0.1',
-  Home: 'seekStart',
-  End: 'seekEnd'
-}
+import { resolveKeybinds } from '@shared/keybinds'
 
 export const DEFAULT_CONFIG: AppConfig = {
   volume: 100,
@@ -56,11 +15,24 @@ export const DEFAULT_CONFIG: AppConfig = {
   repeat: 'off',
   shuffle: false,
   subScale: 1,
+  subAssOverride: false,
+  volumeBoostLimiter: true,
   screenshotDir: '',
   audioDevice: 'auto',
   hwdec: 'auto-safe',
+  vo: 'gpu-next',
+  layoutMode: 'overlay',
   window: { width: 1100, height: 660, maximized: false },
-  keybinds: DEFAULT_KEYBINDS
+  keybindPreset: 'default',
+  // Empty by default: the preset supplies the bindings, and anything the user
+  // puts here layers on top of it.
+  keybinds: {}
+}
+
+/** The active bindings: chosen preset with the user's overrides applied. */
+export function activeKeybinds(): Keybinds {
+  const cfg = loadConfig()
+  return resolveKeybinds(cfg.keybindPreset, cfg.keybinds)
 }
 
 /**
