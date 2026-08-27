@@ -14,9 +14,11 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "dist": "npm run build && electron-builder --win --publish never",
-    "test": "node --test src/main/services/*.test.ts",
+    "test": "node --test \"src/**/*.test.ts\"",
     "verify:sort": "node scripts/verify-natural-sort.mjs",
-    "make:icon": "electron scripts/make-icon.js"
+    "make:icon": "electron scripts/make-icon.js",
+    "check:forbidden": "node scripts/check-forbidden.mjs",
+    "verify": "npm run typecheck && npm run test && npm run verify:sort && npm run check:forbidden"
   },
   "devDependencies": {
     "@types/node": "^26.4.0",

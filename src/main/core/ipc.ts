@@ -22,7 +22,11 @@ export type WindowLookup = (target: 'ui' | 'settings' | 'all') => BrowserWindow[
 export class FeatureIpc {
   private readonly channels = new Map<IpcChannel, string>()
 
-  constructor(private readonly windows: WindowLookup) {}
+  private readonly windows: WindowLookup
+
+  constructor(windows: WindowLookup) {
+    this.windows = windows
+  }
 
   private claim(ownerId: string, channel: IpcChannel): void {
     if (!CHANNEL_RE.test(channel)) {

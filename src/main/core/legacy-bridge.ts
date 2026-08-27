@@ -67,10 +67,13 @@ export const LEGACY_ACTIONS: Record<string, LegacyTarget> = {
 const warned = new Set<string>()
 
 export class LegacyBridge {
-  constructor(
-    private readonly commands: CommandRegistry,
-    private readonly osd: OsdBus
-  ) {}
+  private readonly commands: CommandRegistry
+  private readonly osd: OsdBus
+
+  constructor(commands: CommandRegistry, osd: OsdBus) {
+    this.commands = commands
+    this.osd = osd
+  }
 
   /** Run a legacy binding string such as 'seek:-5'. */
   async run(binding: string): Promise<void> {

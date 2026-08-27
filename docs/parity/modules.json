@@ -905,7 +905,8 @@
       "pitch",
       "speed",
       "volume",
-      "volume-gain"
+      "volume-gain",
+      "volume-max"
     ],
     "requestsProperties": [],
     "ownedFilterLabels": [
@@ -951,6 +952,7 @@
       "aid",
       "alang",
       "audio-display",
+      "audio-file-auto",
       "cover-art-auto",
       "cover-art-whitelist",
       "subs-with-matching-audio",
@@ -1510,20 +1512,7 @@
       "core-mpv-bus"
     ],
     "ownedProperties": [
-      "screenshot-directory",
-      "screenshot-format",
-      "screenshot-high-bit-depth",
-      "screenshot-jpeg-quality",
-      "screenshot-jxl-distance",
-      "screenshot-jxl-effort",
-      "screenshot-png-compression",
-      "screenshot-png-filter",
-      "screenshot-sw",
-      "screenshot-tag-colorspace",
-      "screenshot-template",
-      "screenshot-webp-compression",
-      "screenshot-webp-lossless",
-      "screenshot-webp-quality"
+      "screenshot-*"
     ],
     "requestsProperties": [],
     "ownedFilterLabels": [],

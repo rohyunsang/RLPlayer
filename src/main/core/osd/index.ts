@@ -20,10 +20,13 @@ export class OsdBus {
   private readonly toastActions = new Map<number, () => void>()
   private readonly progressCancelled = new Set<string>()
 
-  constructor(
-    private readonly send: OsdSend,
-    private readonly isKindEnabled: (kind: OsdKind) => boolean = () => true
-  ) {}
+  private readonly send: OsdSend
+  private readonly isKindEnabled: (kind: OsdKind) => boolean
+
+  constructor(send: OsdSend, isKindEnabled: (kind: OsdKind) => boolean = () => true) {
+    this.send = send
+    this.isKindEnabled = isKindEnabled
+  }
 
   show(msg: { kind: OsdKind; text: string; value?: number; durationMs?: number }): void {
     if (!this.isKindEnabled(msg.kind)) return

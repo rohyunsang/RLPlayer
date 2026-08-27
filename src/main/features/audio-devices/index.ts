@@ -22,6 +22,7 @@ const mod: FeatureModule = {
     'audio-samplerate',
     'audio-format',
     'audio-buffer',
+    'wasapi-exclusive-buffer',
     'audio-stream-silence',
     'audio-wait-open',
     'audio-fallback-to-null'

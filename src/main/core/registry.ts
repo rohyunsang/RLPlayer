@@ -52,7 +52,11 @@ export class Registry {
   private readonly processes = new Set<{ pid?: number | undefined; kill(s?: string): boolean }>()
   private owners: OwnerMap | null = null
 
-  constructor(private readonly deps: RegistryDeps) {}
+  private readonly deps: RegistryDeps
+
+  constructor(deps: RegistryDeps) {
+    this.deps = deps
+  }
 
   ownerMap(): OwnerMap | null {
     return this.owners

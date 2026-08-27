@@ -23,7 +23,10 @@ export class SettingsRegistry {
   private readonly listeners = new Map<SettingId, Set<Listener>>()
   private values: Record<string, unknown>
 
-  constructor(private readonly backing: ValueBacking) {
+  private readonly backing: ValueBacking
+
+  constructor(backing: ValueBacking) {
+    this.backing = backing
     this.values = { ...backing.read() }
   }
 

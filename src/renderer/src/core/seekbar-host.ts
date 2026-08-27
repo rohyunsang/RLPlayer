@@ -56,7 +56,11 @@ export class SeekbarHost {
   private hostScrubbing = false
   private focused: { layerId: string; handle: string } | null = null
 
-  constructor(private readonly deps: SeekbarHostDeps) {}
+  private readonly deps: SeekbarHostDeps
+
+  constructor(deps: SeekbarHostDeps) {
+    this.deps = deps
+  }
 
   register(layer: SeekbarLayer): () => void {
     if (this.layers.some((l) => l.id === layer.id)) {

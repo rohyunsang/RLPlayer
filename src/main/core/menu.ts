@@ -31,7 +31,11 @@ export class MenuRegistry {
   private readonly sections: Section[] = []
   private readonly ids = new Set<string>()
 
-  constructor(private readonly commands: CommandRegistry) {}
+  private readonly commands: CommandRegistry
+
+  constructor(commands: CommandRegistry) {
+    this.commands = commands
+  }
 
   contribute(ownerId: string, section: Omit<Section, 'ownerId'>): void {
     const id = section.id

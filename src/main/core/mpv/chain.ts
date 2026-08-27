@@ -52,7 +52,11 @@ export class FilterChain {
   private pending = false
   private applying: Promise<void> | null = null
 
-  constructor(private readonly cfg: ChainConfig) {}
+  private readonly cfg: ChainConfig
+
+  constructor(cfg: ChainConfig) {
+    this.cfg = cfg
+  }
 
   /** Boot-time label claim. Two modules claiming one label is a boot error. */
   claim(ownerId: string, labels: readonly string[]): void {

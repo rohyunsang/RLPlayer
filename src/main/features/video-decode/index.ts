@@ -34,6 +34,10 @@ const mod: FeatureModule = {
     'd3d11-output-csp',
     'background',
     'background-color',
+    'background-tile-color-0',
+    'background-tile-color-1',
+    'background-tile-size',
+    'background-blur-radius',
     'corner-rounding'
   ],
 

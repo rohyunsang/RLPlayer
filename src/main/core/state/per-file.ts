@@ -86,13 +86,19 @@ export class PerFileManager {
   private readonly slices: RegisteredSlice[] = []
   private current: { path: string; key: string } | null = null
 
-  constructor(
-    private readonly stores: {
-      resume: StoreLike<ResumeFile>
-      history: StoreLike<HistoryFile>
-      opts: StoreLike<OptsFile>
-    }
-  ) {}
+  private readonly stores: {
+    resume: StoreLike<ResumeFile>
+    history: StoreLike<HistoryFile>
+    opts: StoreLike<OptsFile>
+  }
+
+  constructor(stores: {
+    resume: StoreLike<ResumeFile>
+    history: StoreLike<HistoryFile>
+    opts: StoreLike<OptsFile>
+  }) {
+    this.stores = stores
+  }
 
   registerSlice(ownerId: string, slice: PerFileSlice<Record<string, unknown>>): void {
     this.slices.push({ ownerId, slice, baseline: null })
