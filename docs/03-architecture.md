@@ -162,13 +162,48 @@ Three behaviours that a naive comparator gets wrong:
 | `a1.mkv` before `a-b.mkv` | `-` is *ignorable*, so `a-b` sorts as `ab` | |
 | `S01E10` before `S1E2` | zero padding decides before the later digit run | |
 
+## Input paths verified end to end
+
+Embedding via `--wid` has an undocumented input cost: mpv's child HWND consumes
+Win32 messages the parent would normally see, and players that embed mpv often
+have to hand-forward a couple of dozen message types. Because our overlay owns
+all input and drives mpv purely over IPC, we mostly sidestep that — but it was
+worth confirming rather than assuming. Driven with synthetic Win32 input against
+the packaged build:
+
+| Interaction | Result |
+| --- | --- |
+| Mouse wheel over the video | works — volume 100% → 120% |
+| Double-click over the video | works — window went to 0,0,1440,2560 |
+| `Esc` to leave fullscreen | works — returned to windowed bounds |
+| Titlebar drag to move | works — moved exactly +120,+80 |
+| Keyboard bindings (`Shift`+`→`, `Ctrl`+`Q`) | works — seek and quit |
+| File drag-and-drop onto the window | **not automated** — OLE drag-drop is impractical to synthesise; the code path exists but has not been machine-verified |
+
+## A screenshot caveat worth recording
+
+Several automated screenshots show the video area as black even while playback
+is demonstrably running (the seek bar advances, the UI updates). Other captures
+of the same build show the video frame normally.
+
+This is characteristic of GDI screen capture (`Graphics.CopyFromScreen`) being
+unable to read a swapchain that DWM has promoted to a hardware overlay plane —
+the capture gets black where the overlay is. It is a property of the *capture*,
+not necessarily of the app. Video rendering was confirmed visually in several
+independent captures.
+
+The practical consequence: **do not use a black region in a GDI screenshot as
+evidence that embedding is broken.** Check whether the seek bar is advancing and
+whether mpv's `MainWindowHandle` is 0 (embedded) or non-zero (mpv opened its own
+window, meaning `--wid` was rejected).
+
 ## Known limitations in v0.1
 
-- Restoring a window geometry saved under a different monitor layout could
-  leave the window straddling two displays, which was observed to leave mpv's
-  D3D11 swapchain rendering black. `clampToDisplay()` now restores strictly
-  inside a single display's work area; a window the user *manually* drags to
-  straddle two monitors may still hit the underlying mpv/driver behaviour.
 - Compat mode's video area is not clickable (see above).
-- If the main process is killed forcibly (not a normal quit or crash), the mpv
-  child process can survive as an orphan. Normal quit paths dispose of it.
+- If the main process is killed forcibly with `taskkill /F`, the mpv child
+  process can survive as an orphan and reparent its window to the desktop.
+  Normal quit paths, including `Ctrl`+`Q`, dispose of it correctly — verified
+  by checking that no `mpv.exe` survives a graceful quit.
+- `clampToDisplay()` restores a saved window geometry strictly inside a single
+  display's work area, so a layout saved under a different monitor arrangement
+  cannot reopen the window straddling two displays or off-screen.
