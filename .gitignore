@@ -1,0 +1,8 @@
+node_modules/
+out/
+dist/
+.cache/
+resources/mpv/
+samples/
+*.log
+.DS_Store
