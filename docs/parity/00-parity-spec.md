@@ -39,6 +39,11 @@
 >   **do** account for rotation), and C22's capture keys (8/8 correct).
 > - **The scope claim is corrected from 27% to ~20%**, with the arithmetic shown (§1.1).
 >
+> **Wave 0 has landed.** The plugin API described in §3 exists and is enforced;
+> `docs/parity/02-wave0-api.md` is the module author's guide and is authoritative
+> for anyone writing a feature module, including for the six places where this
+> document's design was changed during implementation.
+>
 > Last updated: 2026-08-28
 
 ---

@@ -300,7 +300,6 @@
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/core/state/per-file.ts",
-      "src/main/services/resume.ts",
       "src/main/services/resume-rules.ts"
     ],
     "features": [
@@ -330,7 +329,7 @@
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/core/window/",
-      "src/main/windows.ts"
+      "src/main/core/window/windows.ts"
     ],
     "features": [],
     "mustNotTouch": [
@@ -355,7 +354,7 @@
       "src/main/core/legacy-bridge.ts",
       "src/main/ipc.ts",
       "src/main/player.ts",
-      "src/main/menu.ts",
+      "src/main/core/menu.ts",
       "src/preload/index.ts",
       "src/shared/types.ts"
     ],
@@ -430,7 +429,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -498,7 +497,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -553,7 +552,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -595,7 +594,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -652,7 +651,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -737,7 +736,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -797,7 +796,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -840,7 +839,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -883,7 +882,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -933,7 +932,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -980,7 +979,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -1021,7 +1020,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -1069,7 +1068,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -1113,7 +1112,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -1168,7 +1167,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -1210,7 +1209,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -1271,7 +1270,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -1314,7 +1313,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -1412,7 +1411,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -1458,7 +1457,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -1496,7 +1495,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -1542,7 +1541,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -1587,7 +1586,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -1630,7 +1629,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -1680,7 +1679,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -1728,7 +1727,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -1766,7 +1765,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -1842,7 +1841,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -1896,7 +1895,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -1934,7 +1933,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -2000,7 +1999,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -2038,7 +2037,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -2082,7 +2081,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -2126,7 +2125,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -2202,7 +2201,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -2248,7 +2247,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -2291,7 +2290,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -2331,7 +2330,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -2365,7 +2364,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
@@ -2401,7 +2400,7 @@
       "src/main/menu.ts",
       "src/shared/keybinds.ts",
       "src/main/mpv/manager.ts",
-      "src/main/windows.ts",
+      "src/main/core/window/windows.ts",
       "src/main/player.ts",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
       "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
