@@ -16,7 +16,9 @@
     "ownedFiles": [
       "src/main/core/no-network.test.ts",
       "src/main/core/no-network.ts",
-      "src/main/core/paths.ts"
+      "src/main/core/paths.ts",
+      "src/main/core/profile-cleanup.test.ts",
+      "src/main/core/profile-cleanup.ts"
     ],
     "features": [
       "P36",

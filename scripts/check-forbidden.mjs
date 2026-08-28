@@ -286,7 +286,18 @@ forbid(
   /https?:\/\/(?!www\.w3\.org\/|github\.com\/rohyunsang)/,
   'no remote origin in shipped code; the releases link is the one exception ' +
     'and it is opened in the user’s browser, never fetched',
-  () => false,
+  /**
+   * ONE exemption, and it is the file whose entire job is to name the host.
+   *
+   * `profile-cleanup.test.ts` builds a fixture profile containing the exact
+   * `Network Persistent State` that 0.1.0 left on real machines, and that record
+   * names redirector.gvt1.com. Spelling the host around (`'https://' + 'gvt1'`)
+   * to satisfy a grep would make the fixture stop resembling the artefact it
+   * asserts about, which is worse than the grep being told the truth. Same
+   * reasoning as the `core/no-network.ts` exemption: the file that documents
+   * what we do not do has to be able to write it down.
+   */
+  (relPath) => relPath === 'src/main/core/profile-cleanup.test.ts',
   'code'
 )
 

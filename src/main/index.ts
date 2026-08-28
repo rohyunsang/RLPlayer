@@ -2,7 +2,21 @@
 // for it, and Chromium picks its disk-cache directory during startup. Redirect
 // either one late and a "portable" build has already written to %APPDATA%.
 import { initPaths, filePath, portableFallback } from './core/paths.ts'
-initPaths()
+const dataRoot = initPaths()
+
+/**
+ * Third, and it has to be here rather than after `app.whenReady()`.
+ *
+ * Anyone who ran 0.1.0 still has Chromium's downloaded spellcheck dictionary and
+ * a `Network Persistent State` naming redirector.gvt1.com, its round-trip time
+ * and this machine's public address. 0.1.1 stopped the request and asked users
+ * to delete a folder by hand; this does it for them, once. Chromium READS that
+ * state file during startup and rewrites it on shutdown, so removing it after
+ * ready removes a copy that is about to be written back.
+ */
+import { describeCleanup, purgeLeakedProfileState } from './core/profile-cleanup.ts'
+const cleanup = describeCleanup(purgeLeakedProfileState(dataRoot))
+if (cleanup) console.log(cleanup)
 
 // Second, and for the same reason: Chromium reads its command line during
 // startup, so every background-networking switch has to be appended before
