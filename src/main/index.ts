@@ -4,6 +4,13 @@
 import { initPaths, filePath, portableFallback } from './core/paths.ts'
 initPaths()
 
+// Second, and for the same reason: Chromium reads its command line during
+// startup, so every background-networking switch has to be appended before
+// anything touches `app.whenReady()`. See core/no-network.ts for why an
+// absence we do not switch off is an absence we are only guessing about.
+import { describeNoNetwork, disableBackgroundNetworking } from './core/no-network.ts'
+const networkPolicy = disableBackgroundNetworking()
+
 import fs from 'node:fs'
 import path from 'node:path'
 import { app, dialog, Menu } from 'electron'
@@ -59,6 +66,16 @@ import type { OsdKind } from '@shared/feature-api'
  */
 
 app.setAppUserModelId('com.rohyunsang.rlplayer')
+// One line in the log, every launch, naming what was switched off. A promise
+// nobody can see the enforcement of is a promise nobody can check.
+console.log(
+  `[no-network] ${networkPolicy.switches.length} switches, ` +
+    `${networkPolicy.features.length} features disabled, host resolution off`
+)
+if (process.argv.includes('--print-network-policy')) {
+  console.log(describeNoNetwork())
+  app.exit(0)
+}
 // The custom titlebar in the overlay replaces it; a native menu bar would sit
 // behind mpv's child HWND anyway.
 Menu.setApplicationMenu(null)

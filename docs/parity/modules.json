@@ -2,7 +2,7 @@
   {
     "id": "core-paths",
     "path": "src/main/core/paths.ts",
-    "title": "Portable paths and Electron redirection",
+    "title": "Portable paths, Electron redirection and the no-network switches",
     "wave": 0,
     "priority": "P0",
     "dependsOn": [],
@@ -12,6 +12,7 @@
     "arbitrates": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
+      "src/main/core/no-network.ts",
       "src/main/core/paths.ts"
     ],
     "features": [
@@ -176,6 +177,7 @@
     "arbitrates": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
+      "src/main/core/mpv/arg-owner.test.ts",
       "src/main/core/mpv/bus.ts",
       "src/main/core/mpv/reserved.test.ts",
       "src/main/core/mpv/reserved.ts",
@@ -205,6 +207,7 @@
     "arbitrates": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
+      "src/main/core/mpv/guards.test.ts",
       "src/main/core/mpv/ownership.test.ts",
       "src/main/core/mpv/ownership.ts"
     ],

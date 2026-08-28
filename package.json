@@ -22,9 +22,9 @@
     "make:icon": "electron scripts/make-icon.js",
     "check:forbidden": "node scripts/check-forbidden.mjs",
     "check:partition": "node scripts/check-partition.mjs",
-    "check:network": "node scripts/check-network.mjs",
     "verify": "npm run typecheck && npm run test && npm run verify:sort && npm run check:forbidden && npm run check:partition",
-    "e2e:overlay": "node scripts/e2e-overlay.mjs"
+    "e2e:overlay": "node scripts/e2e-overlay.mjs",
+    "net:watch": "node scripts/watch-network.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.4.0",

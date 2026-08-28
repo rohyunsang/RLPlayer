@@ -22,9 +22,50 @@ RLPlayer's design constraints:
   when *you* click it.
 - **No network access at startup or during playback.** mpv itself is launched
   with `--ytdl=no --load-scripts=no`. The only outbound request the program can
-  ever make is the releases page you explicitly asked for.
+  ever make is the releases page you explicitly asked for — and that opens in
+  your browser, it is not fetched. See "Zero network, and how it is enforced"
+  below, because the interesting half of that promise is not our code.
 - **No telemetry, no analytics, no crash reporting.**
 - **No ads, no bundled software, no upsell.**
+
+### Zero network, and how it is enforced
+
+Our own code makes no network request. That is the easy half, and
+`npm run check:forbidden` greps for `fetch`, `net.request`, `XMLHttpRequest`,
+`WebSocket`, `sendBeacon`, `node:http(s)` and any remote origin so it stays
+true.
+
+The hard half is Chromium. RLPlayer is an Electron app, and Chromium does its
+own background networking whether or not the app asks for it: a captive-portal
+probe to `gstatic.com/generate_204`, a component-updater poll, a network-time
+query, an optimization-hints fetch. We measured one outbound TCP:443 to a Google
+host attributed to RLPlayer's own NetworkService child on a single launch, which
+then did not reproduce over three later runs. An intermittent violation you
+cannot reproduce is indistinguishable from one you have fixed, so guessing was
+not good enough.
+
+Every one of those subsystems is now switched off by name, before Chromium
+finishes reading its command line (`src/main/core/no-network.ts`). Run
+`RLPlayer.exe --print-network-policy` to see the exact list any build applies.
+In summary:
+
+| Switched off | Stops |
+|---|---|
+| `--disable-background-networking` | the whole background-request family: the component updater's first poll, the safe-browsing update, the captive-portal probe, the sync fetcher |
+| `--disable-component-update` | the component updater specifically — the likeliest source of the TCP:443 we saw |
+| `--disable-domain-reliability` | network-failure telemetry uploads |
+| `--no-pings` | hyperlink auditing, CSP `report-uri`, NEL reports |
+| `--disable-client-side-phishing-detection` | the phishing-model download |
+| `--disable-sync`, `--disable-default-apps`, `--no-first-run`, `--no-default-browser-check` | Chrome-browser features that fetch on startup |
+| `--disable-breakpad` | Chromium's own crash uploader (Electron's `crashReporter` is never started either) |
+| `--disable-features=NetworkTimeServiceQuerying,OptimizationHints,OptimizationHintsFetching,OptimizationTargetPrediction,OptimizationGuideModelDownloading,MediaRouter,DialMediaRouteProvider,AutofillServerCommunication,CertificateTransparencyComponentUpdater,SegmentationPlatform,Translate` | the network-time query, the optimization-hint and model downloads, Cast/DIAL discovery on your LAN, autofill server round-trips, the certificate-transparency log-list download |
+| `--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE localhost` | **everything else.** Nothing in RLPlayer resolves a hostname — not one line — so mapping every host to NOTFOUND cannot break a feature that exists, and it turns "we disabled the subsystems we know about" into "a subsystem we have never heard of cannot reach one either" |
+
+`npm run net:watch` is the proof: it cold-launches the app five times, walks the
+whole process tree (browser, GPU, renderers, the NetworkService child and mpv)
+with `Get-NetTCPConnection` once a second, and fails on any remote address that
+is not loopback. Five cold launches, thirty seconds each, zero outbound
+connections.
 
 ## Features
 

@@ -1,0 +1,116 @@
+name: CI
+
+# Wave 1 puts thirty-eight modules into this repo in parallel. Every guarantee
+# they rely on -- one owner per property, one owner per file, no module editing
+# a shared path, no network -- was enforced only by someone remembering to run
+# `npm run verify` before pushing. There was no `.github/` directory at all, so
+# the no-updater grep that the product's entire premise rests on was a manual
+# step. This is that step, made unskippable.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    # windows-latest, not ubuntu: the natural-sort differential calls the real
+    # StrCmpLogicalW out of shlwapi.dll through PowerShell, and it is the only
+    # honest way to check that playlist order matches File Explorer. Running it
+    # anywhere else would mean asserting our reimplementation against itself.
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Node 24 runs the .test.ts files directly by stripping types, which
+          # is why there is no test-time build step anywhere in this repo.
+          node-version: '24'
+          cache: npm
+
+      # --ignore-scripts skips the `postinstall` that downloads a ~40 MB pinned
+      # mpv build. None of the checks below need the binary -- they are
+      # typecheck, unit tests and greps -- and pulling it on every push would
+      # make the guard slower than the thing it guards.
+      - name: Install
+        run: npm ci --ignore-scripts
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      # The named suites the code comments cite. They add no coverage over
+      # `npm test` -- they are the same files -- but a failure here says which
+      # guarantee broke instead of "one of 150 tests".
+      - name: 'test:property-ownership'
+        if: '!cancelled()'
+        run: npm run test:property-ownership
+
+      - name: 'test:reserved-args'
+        if: '!cancelled()'
+        run: npm run test:reserved-args
+
+      - name: 'test:renderer-hosts'
+        if: '!cancelled()'
+        run: npm run test:renderer-hosts
+
+      # 27,225 ordered pairs against the real Win32 API.
+      - name: 'verify:sort'
+        if: '!cancelled()'
+        run: npm run verify:sort
+
+      # No UserChoice hijack, no updater, NO NETWORK API, no module importing a
+      # shared core file or another module.
+      - name: 'check:forbidden'
+        if: '!cancelled()'
+        run: npm run check:forbidden
+
+      # Every tracked file under src/ has exactly one owner in modules.json.
+      # This is the check that makes "thirty-eight modules in parallel" true
+      # rather than hoped-for.
+      - name: 'check:partition'
+        if: '!cancelled()'
+        run: npm run check:partition
+
+      # It has to actually build. `npm test` never touches the bundler, and a
+      # renderer that does not compile is not caught by anything above.
+      - name: Build
+        if: '!cancelled()'
+        run: npm run build
+
+  # A second, deliberately dumb job. `check:forbidden` skips comment lines so it
+  # can explain what we do NOT do; this one does not, so a commented-out
+  # `autoUpdater` cannot creep back in as "just documentation" and then be
+  # uncommented by someone who did not read the README. The absence IS the
+  # product.
+  no-updater:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: No updater dependency, anywhere
+        shell: bash
+        run: |
+          if grep -RInE '"(electron-updater|update-electron-app)"' package.json package-lock.json; then
+            echo "::error::an auto-update dependency was added; the absence is the product"
+            exit 1
+          fi
+          echo "no updater dependency"
+      - name: No auto-update code, even commented out
+        shell: bash
+        run: |
+          if grep -RInE 'electron-updater|autoUpdater|checkForUpdatesAndNotify' src/ scripts/; then
+            echo "::error::auto-update code found under src/ or scripts/"
+            exit 1
+          fi
+          echo "no auto-update code"
