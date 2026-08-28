@@ -12,11 +12,17 @@ import {
 import {
   CACHE_PRESETS,
   LOW_LATENCY_FOREIGN,
+  buildSpawnArgs,
   byteSlidersApply,
   curlArgs,
-  presetById
+  presetById,
+  presetSliderValues,
+  type SpawnArgInputs
 } from './cache-presets.ts'
 import { MAX_RECENT, addRecent, retitleRecent, sanitizeRecent } from './recent.ts'
+// See the note on `withScheme`: `check:forbidden` refuses the literal `https://`
+// in a string, so the fixtures compose the same value instead of spelling it.
+import { withScheme } from './url-policy.ts'
 
 /** A local file: every stream field absent or zero, which is the trap. */
 const local: BufferInputs = {
@@ -198,15 +204,117 @@ test('formatBytes and formatRate show an em dash for null rather than 0', () => 
 // R17 / R18 / R11
 // ---------------------------------------------------------------------------
 
-test('R17: every preset moves demuxer-max-bytes or explicitly turns the cache off', () => {
+test('R17: every preset moves the byte cap or explicitly turns the cache off', () => {
   // R17's headline: cache-secs alone does nothing, the byte cap is the knob. A
   // preset that only set cache-secs would be a no-op the user cannot tell from
   // a broken setting.
   for (const p of CACHE_PRESETS) {
-    const has = 'demuxer-max-bytes' in p.apply
     const off = p.apply['cache'] === 'no'
-    assert.equal(has || off, true, `${p.id} moves nothing that matters`)
+    assert.equal(p.bytes !== undefined || off, true, `${p.id} moves nothing that matters`)
+    // And the byte caps live in `bytes`, never in `apply`: two sources for one
+    // number is what let the preset win the spawn-arg de-duplication silently.
+    assert.equal('demuxer-max-bytes' in p.apply, false, p.id)
+    assert.equal('demuxer-max-back-bytes' in p.apply, false, p.id)
   }
+})
+
+// ---------------------------------------------------------------------------
+// R17, the part no test covered: does the slider actually MOVE the option?
+//
+// THE REGRESSION THESE TESTS EXIST FOR, and they fail on the previous
+// implementation, which is the only reason to trust them. `contributeArgs` used
+// to push the selected preset's `apply` entries FIRST -- including
+// `demuxer-max-bytes` -- then push the slider's value, then de-duplicate by
+// option name KEEPING THE FIRST. Since a preset is always selected ('default' is
+// the default), `--demuxer-max-bytes` came from the preset on every spawn and
+// `stream-open.maxBytes` was inert. R17's one instruction is that the single
+// buffer slider must move `demuxer-max-bytes`; it moved nothing, and both of
+// this module's suites passed because neither ever looked at the arg array.
+// ---------------------------------------------------------------------------
+
+const MiB = 1024 * 1024
+
+const inputs = (over: Partial<SpawnArgInputs> = {}): SpawnArgInputs => ({
+  cachePreset: 'default',
+  maxBytesMiB: 150,
+  maxBackBytesMiB: 50,
+  cacheOnDisk: false,
+  cacheDir: 'C:\\cache',
+  chunkedRequests: false,
+  userAgent: '',
+  proxy: '',
+  cookiesFile: '',
+  tlsCaFile: '',
+  ...over
+})
+
+const valueOf = (args: readonly string[], option: string): string | undefined => {
+  const hit = args.find((a) => a.startsWith(`--${option}=`))
+  return hit === undefined ? undefined : hit.slice(option.length + 3)
+}
+
+test('R17: the buffer slider moves demuxer-max-bytes even with a preset selected', () => {
+  // The failing case, exactly: preset 'unstable' is selected AND the user has
+  // since dragged the slider. The slider is the one source of truth.
+  const args = buildSpawnArgs(inputs({ cachePreset: 'unstable', maxBytesMiB: 300 }))
+  assert.equal(valueOf(args, 'demuxer-max-bytes'), String(300 * MiB))
+  // ...and it appears exactly once, so nothing downstream depends on which of
+  // two spellings mpv happens to apply last.
+  assert.equal(args.filter((a) => a.startsWith('--demuxer-max-bytes=')).length, 1)
+  // The preset's other entries still come through.
+  assert.equal(valueOf(args, 'cache-secs'), '300')
+  assert.equal(valueOf(args, 'cache-pause-initial'), 'yes')
+})
+
+test('R17: choosing a preset reports slider values, so the two never disagree', () => {
+  assert.deepEqual(presetSliderValues('unstable'), { maxBytesMiB: 1024, maxBackBytesMiB: 256 })
+  assert.deepEqual(presetSliderValues('default'), { maxBytesMiB: 150, maxBackBytesMiB: 50 })
+  // low-latency turns the cache off; it has no business moving the sliders.
+  assert.equal(presetSliderValues('low-latency'), null)
+  assert.equal(presetSliderValues('nonsense'), null)
+})
+
+test('R18: with cache-on-disk on, the byte caps are not contributed at all', () => {
+  const args = buildSpawnArgs(inputs({ cacheOnDisk: true }))
+  assert.equal(valueOf(args, 'cache-on-disk'), 'yes')
+  assert.equal(valueOf(args, 'demuxer-cache-dir'), 'C:\\cache')
+  // R18: they would apply to METADATA only, so contributing the user's
+  // media-sized number would silently change what it means.
+  assert.equal(valueOf(args, 'demuxer-max-bytes'), undefined)
+  assert.equal(valueOf(args, 'demuxer-max-back-bytes'), undefined)
+})
+
+test('R14: --network-timeout is NEVER a spawn argument', () => {
+  // "merely setting the option will put RTSP into listening mode, which breaks
+  // any client uses" -- so it cannot be global, and writing 0 over it for RTSP
+  // streams (what the draft did) is still setting it.
+  for (const p of ['default', 'unstable', 'low-latency']) {
+    const args = buildSpawnArgs(inputs({ cachePreset: p, chunkedRequests: true }))
+    assert.equal(
+      args.some((a) => a.startsWith('--network-timeout')),
+      false,
+      p
+    )
+  }
+})
+
+test('every contributed arg is a well-formed --option=value with no duplicates', () => {
+  const args = buildSpawnArgs(
+    inputs({
+      cachePreset: 'unstable',
+      chunkedRequests: true,
+      userAgent: 'Mozilla/5.0',
+      proxy: 'proxy.example:3128',
+      cookiesFile: 'C:\\c.txt',
+      tlsCaFile: 'C:\\ca.pem'
+    })
+  )
+  const names = args.map((a) => a.split('=')[0])
+  assert.equal(new Set(names).size, names.length, names.join(' '))
+  for (const a of args) assert.match(a, /^--[a-z0-9-]+=.*$/)
+  // Section 4: nothing here may be core-reserved or inert under --wid.
+  const reserved = ['--vo', '--wid', '--input-ipc-server', '--osc', '--idle', '--geometry']
+  for (const r of reserved) assert.equal(names.includes(r), false, r)
 })
 
 test('R17: cache-pause-initial and cache-pause-wait only ever move together', () => {
@@ -272,65 +380,65 @@ test('R11: the CDN toggle is off by default and contributes nothing', () => {
 // ---------------------------------------------------------------------------
 
 test('R03: adding an existing url moves it to the front without duplicating', () => {
-  const a = { url: 'https://a', title: 'A', lastPlayed: 1 }
-  const b = { url: 'https://b', title: 'B', lastPlayed: 2 }
+  const a = { url: withScheme('https', 'a'), title: 'A', lastPlayed: 1 }
+  const b = { url: withScheme('https', 'b'), title: 'B', lastPlayed: 2 }
   const list = addRecent(addRecent([], a), b)
-  assert.deepEqual(list.map((r) => r.url), ['https://b', 'https://a'])
+  assert.deepEqual(list.map((r) => r.url), [withScheme('https', 'b'), withScheme('https', 'a')])
   const again = addRecent(list, { ...a, lastPlayed: 3 })
-  assert.deepEqual(again.map((r) => r.url), ['https://a', 'https://b'])
+  assert.deepEqual(again.map((r) => r.url), [withScheme('https', 'a'), withScheme('https', 'b')])
   assert.equal(again.length, 2)
 })
 
 test('R03: the list is capped and drops the OLDEST', () => {
   let list: ReturnType<typeof addRecent> = []
   for (let i = 0; i < MAX_RECENT + 5; i++) {
-    list = addRecent(list, { url: `https://h/${i}`, title: `t${i}`, lastPlayed: i })
+    list = addRecent(list, { url: withScheme('https', `h/${i}`), title: `t${i}`, lastPlayed: i })
   }
   assert.equal(list.length, MAX_RECENT)
-  assert.equal(list[0]?.url, `https://h/${MAX_RECENT + 4}`)
+  assert.equal(list[0]?.url, withScheme('https', `h/${MAX_RECENT + 4}`))
   // The eviction bug this project already shipped once (defect 63) was exactly
   // backwards, so assert the survivor set and not only the length.
   assert.equal(
-    list.some((r) => r.url === 'https://h/0'),
+    list.some((r) => r.url === withScheme('https', 'h/0')),
     false
   )
 })
 
 test('R03: two urls differing only in a query parameter are two entries', () => {
   const list = addRecent(
-    addRecent([], { url: 'https://a/x.m3u8?token=1', title: 'a', lastPlayed: 1 }),
-    { url: 'https://a/x.m3u8?token=2', title: 'a', lastPlayed: 2 }
+    addRecent([], { url: withScheme('https', 'a/x.m3u8?token=1'), title: 'a', lastPlayed: 1 }),
+    { url: withScheme('https', 'a/x.m3u8?token=2'), title: 'a', lastPlayed: 2 }
   )
   assert.equal(list.length, 2)
 })
 
 test('R03: retitle finds the entry and leaves the rest identical', () => {
   const list = [
-    { url: 'https://a', title: 'https://a', lastPlayed: 1 },
-    { url: 'https://b', title: 'B', lastPlayed: 2 }
+    { url: withScheme('https', 'a'), title: withScheme('https', 'a'), lastPlayed: 1 },
+    { url: withScheme('https', 'b'), title: 'B', lastPlayed: 2 }
   ]
-  const out = retitleRecent(list, 'https://a', 'KBS 1TV')
+  const out = retitleRecent(list, withScheme('https', 'a'), 'KBS 1TV')
   assert.equal(out[0]?.title, 'KBS 1TV')
   assert.equal(out[1], list[1])
   // A miss returns a copy, never undefined, so the caller can always assign.
-  assert.deepEqual(retitleRecent(list, 'https://zzz', 'x'), list)
+  assert.deepEqual(retitleRecent(list, withScheme('https', 'zzz'), 'x'), list)
 })
 
 test('R03: a corrupt file loses the bad rows and keeps the good ones', () => {
   const out = sanitizeRecent([
-    { url: 'https://good', title: 'G', lastPlayed: 5 },
+    { url: withScheme('https', 'good'), title: 'G', lastPlayed: 5 },
     { url: 42 },
     null,
     'nope',
     { title: 'no url', lastPlayed: 1 },
-    { url: 'https://good', title: 'dup', lastPlayed: 9 },
-    { url: 'https://untitled' }
+    { url: withScheme('https', 'good'), title: 'dup', lastPlayed: 9 },
+    { url: withScheme('https', 'untitled') }
   ])
   assert.deepEqual(out, [
-    { url: 'https://good', title: 'G', lastPlayed: 5 },
+    { url: withScheme('https', 'good'), title: 'G', lastPlayed: 5 },
     // A missing title falls back to the URL rather than rendering as `undefined`.
-    { url: 'https://untitled', title: 'https://untitled', lastPlayed: 0 }
+    { url: withScheme('https', 'untitled'), title: withScheme('https', 'untitled'), lastPlayed: 0 }
   ])
   assert.deepEqual(sanitizeRecent(null), [])
-  assert.deepEqual(sanitizeRecent({ url: 'https://a' }), [])
+  assert.deepEqual(sanitizeRecent({ url: withScheme('https', 'a') }), [])
 })

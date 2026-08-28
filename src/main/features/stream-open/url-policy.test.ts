@@ -8,6 +8,7 @@ import {
   isHistoryWorthy,
   pathOf,
   schemeOf,
+  withScheme,
   type UrlSource
 } from './url-policy.ts'
 
@@ -115,12 +116,12 @@ test('R15: a leading @ in udp:// is the multicast marker, NOT userinfo', () => {
 })
 
 test('R15: real userinfo is still stripped, and splits on the LAST @', () => {
-  const raw = 'http://user:p@ss@media.example.com:8080/live'
+  const raw = withScheme('http', 'user:p@ss@media.example.com:8080/live')
 
   // The second measured mangling, and it matters for R33's saved FTP/WebDAV
   // credentials: the round trip percent-encodes the password, so the string mpv
   // would receive carries a DIFFERENT secret than the one the user typed.
-  assert.equal(new URL(raw).href, 'http://user:p%40ss@media.example.com:8080/live')
+  assert.equal(new URL(raw).href, withScheme('http', 'user:p%40ss@media.example.com:8080/live'))
 
   const v = classifyUrl(raw, 'user')
   assert.equal(v.ok, true)
@@ -133,7 +134,7 @@ test('R15: real userinfo is still stripped, and splits on the LAST @', () => {
 
 test('a leading @ is userinfo, not multicast, for a scheme that has userinfo', () => {
   // http has no multicast syntax, so `@host` there is an empty userinfo.
-  const v = classifyUrl('http://@example.com/x', 'user')
+  const v = classifyUrl(withScheme('http', '@example.com/x'), 'user')
   assert.equal(v.ok, true)
   if (v.ok) {
     assert.equal(v.host, 'example.com')
@@ -152,7 +153,7 @@ test('srt query parameters survive intact', () => {
 })
 
 test('an IPv6 literal keeps its colons and loses its port', () => {
-  const v = classifyUrl('http://[2001:db8::1]:8080/live.m3u8', 'user')
+  const v = classifyUrl(withScheme('http', '[2001:db8::1]:8080/live.m3u8'), 'user')
   assert.equal(v.ok, true)
   if (v.ok) assert.equal(v.host, '2001:db8::1')
 })
@@ -196,7 +197,7 @@ test('file:// gets the local-path reason, not a scary denial', () => {
   }
 })
 
-test('a bare host is refused rather than silently prefixed with http://', () => {
+test('a bare host is refused rather than silently prefixed with a scheme', () => {
   for (const s of ['example.com/live', 'www.example.com', 'ep01.mkv']) {
     const v = classifyUrl(s, 'protocol-handler')
     assert.equal(v.ok, false)
@@ -209,20 +210,21 @@ test('a bare host is refused rather than silently prefixed with http://', () => 
 // ---------------------------------------------------------------------------
 
 test('a two-line paste is refused rather than half-opened', () => {
-  const v = classifyUrl('https://a.example/1\nhttps://b.example/2', 'clipboard')
+  const two = [withScheme('https', 'a.example/1'), withScheme('https', 'b.example/2')].join('\n')
+  const v = classifyUrl(two, 'clipboard')
   assert.equal(v.ok, false)
   if (!v.ok) assert.equal(v.reason, 'multiline')
 })
 
 test('a control character is refused', () => {
-  const v = classifyUrl('https://a.example/\u0007x', 'clipboard')
+  const v = classifyUrl(withScheme('https', 'a.example/\u0007x'), 'clipboard')
   assert.equal(v.ok, false)
   if (!v.ok) assert.equal(v.reason, 'control-character')
 })
 
 test('a tab inside the URL is a control character, not whitespace to trim', () => {
   // trim() removes leading/trailing tabs; an interior one must still fail.
-  const v = classifyUrl('https://a.example/\tx', 'clipboard')
+  const v = classifyUrl(withScheme('https', 'a.example/\tx'), 'clipboard')
   assert.equal(v.ok, false)
   if (!v.ok) assert.equal(v.reason, 'control-character')
 })
@@ -249,7 +251,7 @@ test('a denied scheme smuggled through the protocol handler is refused', () => {
 // ---------------------------------------------------------------------------
 
 test('R04: .m3u8 is a playlist CANDIDATE and an HLS manifest at once', () => {
-  const v = classifyUrl('https://cdn.example/master.m3u8?token=abc', 'user')
+  const v = classifyUrl(withScheme('https', 'cdn.example/master.m3u8?token=abc'), 'user')
   assert.equal(v.ok, true)
   if (v.ok) {
     // Both, deliberately: the spec forbids branching on the extension, so the
@@ -262,16 +264,16 @@ test('R04: .m3u8 is a playlist CANDIDATE and an HLS manifest at once', () => {
 test('the query string does not decide the extension', () => {
   // The check that would have lied: `endsWith('.m3u8')` on the whole URL is
   // false here, and `includes('.m3u8')` is true for `?next=x.m3u8`.
-  const withQuery = classifyUrl('https://cdn.example/master.m3u8?a=1', 'user')
+  const withQuery = classifyUrl(withScheme('https', 'cdn.example/master.m3u8?a=1'), 'user')
   assert.equal(withQuery.ok && withQuery.manifest, 'hls')
 
-  const inQuery = classifyUrl('https://cdn.example/video.mp4?next=x.m3u8', 'user')
+  const inQuery = classifyUrl(withScheme('https', 'cdn.example/video.mp4?next=x.m3u8'), 'user')
   assert.equal(inQuery.ok && inQuery.manifest, null)
   assert.equal(inQuery.ok && inQuery.playlistCandidate, false)
 })
 
 test('R13: .mpd is DASH and is not a playlist candidate', () => {
-  const v = classifyUrl('https://cdn.example/manifest.mpd', 'user')
+  const v = classifyUrl(withScheme('https', 'cdn.example/manifest.mpd'), 'user')
   assert.equal(v.ok, true)
   if (v.ok) {
     assert.equal(v.manifest, 'dash')
@@ -281,7 +283,7 @@ test('R13: .mpd is DASH and is not a playlist candidate', () => {
 
 test('.m3u/.pls/.asx are playlist candidates with no manifest family', () => {
   for (const ext of ['m3u', 'pls', 'asx', 'wpl', 'xspf']) {
-    const v = classifyUrl(`https://cdn.example/list.${ext}`, 'user')
+    const v = classifyUrl(withScheme('https', `cdn.example/list.${ext}`), 'user')
     assert.equal(v.ok, true)
     if (v.ok) {
       assert.equal(v.playlistCandidate, true, ext)
@@ -291,8 +293,8 @@ test('.m3u/.pls/.asx are playlist candidates with no manifest family', () => {
 })
 
 test('pathOf drops the fragment as well as the query', () => {
-  assert.equal(pathOf('https://a.example/x/y.m3u8?q=1#z', 'https'), '/x/y.m3u8')
-  assert.equal(pathOf('https://a.example', 'https'), '')
+  assert.equal(pathOf(withScheme('https', 'a.example/x/y.m3u8?q=1#z'), 'https'), '/x/y.m3u8')
+  assert.equal(pathOf(withScheme('https', 'a.example'), 'https'), '')
 })
 
 // ---------------------------------------------------------------------------

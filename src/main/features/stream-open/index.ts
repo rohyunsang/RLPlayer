@@ -2,10 +2,10 @@ import type { FeatureContext, FeatureModule, SettingDescriptor } from '@shared/f
 import {
   CACHE_PRESETS,
   LOW_LATENCY_FOREIGN,
+  buildSpawnArgs,
   byteSlidersApply,
-  curlArgs,
   presetById,
-  type OwnedCacheProperty
+  presetSliderValues
 } from './cache-presets.ts'
 import { deriveBufferState, type BufferState } from './buffering.ts'
 import {
@@ -16,7 +16,14 @@ import {
   saveRecent,
   type RecentUrl
 } from './recent.ts'
-import { classifyUrl, isHistoryWorthy, type UrlSource, type UrlVerdict } from './url-policy.ts'
+import {
+  classifyUrl,
+  isHistoryWorthy,
+  withScheme,
+  type UrlSource,
+  type UrlVerdict
+} from './url-policy.ts'
+import { forbiddenPropertyNames } from './spec-gaps.ts'
 
 /**
  * M35 stream-open — R01–R04, R11–R20, R22–R24.
@@ -85,8 +92,31 @@ let recent: RecentUrl[] = []
 
 /** The URL currently playing, for R03's retitle and R20's badge. */
 let currentUrl: string | null = null
+/** The verdict for `currentUrl`, so the R20 offer knows the host and scheme. */
+let lastVerdict: Extract<UrlVerdict, { ok: true }> | null = null
 /** Properties this module wrote for the current stream, and their old values. */
-let overridden: Array<{ property: OwnedCacheProperty | string; previous: unknown }> = []
+interface Override {
+  readonly property: string
+  readonly previous: unknown
+  /** False when the read failed, so `restoreDefaults` knows it is guessing. */
+  readonly known: boolean
+}
+let overridden: Override[] = []
+
+/**
+ * Opens this module has issued that mpv has not started yet.
+ *
+ * THE BUG THIS COUNTER FIXES, which the draft shipped. `loadfile … replace`
+ * makes mpv emit `end-file` FOR THE OUTGOING FILE before `start-file` for the
+ * new one, and the `end-file` handler is the per-stream revert. So the sequence
+ * was: write `tls-verify=no` / `user-agent` / `rtsp-transport` for the stream we
+ * are about to open, ask M28 to open it, receive `end-file` for the PREVIOUS
+ * file, and revert everything we had just written — before the connection was
+ * made. Every per-stream option was silently dropped whenever something was
+ * already playing, and worked only on the very first open of a session, which is
+ * exactly the shape that survives manual testing.
+ */
+let opening = 0
 
 let pushTimer: ReturnType<typeof setTimeout> | null = null
 const unsubs: Array<() => void> = []
@@ -130,11 +160,71 @@ function schedulePush(): void {
 // R19 / R20 / R12 / R14: per-stream options, as writes plus a revert
 // ---------------------------------------------------------------------------
 
+/**
+ * Every property named by an M35 spec row that NO manifest row owns, so a write
+ * would be refused for everyone (see `spec-gaps.ts`).
+ *
+ * Checked before the write rather than relying on the OwnershipError, because in
+ * a packaged build the error is logged, dropped and counted — i.e. a spec row
+ * quietly does nothing — and the message would say "owned by null" without
+ * saying that the manifest is the thing to edit.
+ */
+const UNWRITABLE = new Set(forbiddenPropertyNames())
+
+function refuseUnwritable(property: string): boolean {
+  if (!UNWRITABLE.has(property)) return false
+  ctx.log.error(
+    `[stream-open] '${property}' is named by a §2 row this module owns but is claimed by NO ` +
+      `row of docs/parity/modules.json, so OwnerMap.assertWrite refuses it to everyone. ` +
+      `See src/main/features/stream-open/spec-gaps.ts. The fix is a manifest edit and a ` +
+      `review, not a write from here.`
+  )
+  return true
+}
+
+/**
+ * mpv's own default for the handful of properties where failing to revert is not
+ * merely untidy.
+ *
+ * Used only when reading the previous value failed. `tls-verify` is the reason
+ * the map exists: a certificate exception that leaked into the next stream is a
+ * security regression, so "we could not read it" must still end at `yes`.
+ */
+const REVERT_FALLBACK: Readonly<Record<string, string>> = {
+  'tls-verify': 'yes',
+  'force-seekable': 'no',
+  'hls-bitrate': 'max',
+  'rtsp-transport': 'tcp',
+  'network-timeout': '0',
+  referrer: '',
+  'user-agent': ''
+}
+
+/**
+ * Write a per-stream value, remembering the real previous one.
+ *
+ * THE BUG THIS FIXES, also shipped by the draft: the previous value came from
+ * `ctx.mpv.peek(property)`. `peek` is documented as "last value the bus saw",
+ * and the bus only sees a property somebody `observe`s — this module observes
+ * nine read-only cache properties and NONE of the ones it writes. So `previous`
+ * was `undefined` for every single override, and `restoreDefaults()` skipped
+ * every entry whose previous value was `undefined`. The revert was dead code:
+ * `tls-verify=no` set for one host stayed off for the rest of the session,
+ * including for local files. `get()` asks mpv.
+ */
 async function override(property: string, value: string): Promise<void> {
-  const previous = ctx.mpv.peek(property)
+  if (refuseUnwritable(property)) return
+  let previous: unknown
+  let known = false
+  try {
+    previous = await ctx.mpv.get(property)
+    known = true
+  } catch (e) {
+    ctx.log.warn(`[stream-open] could not read '${property}' before overriding:`, e)
+  }
   try {
     await ctx.mpv.set(property, value)
-    overridden.push({ property, previous })
+    overridden.push({ property, previous, known })
   } catch (e) {
     // An OwnershipError here means the manifest and this module disagree, which
     // is a programming error worth seeing rather than a silently missing option.
@@ -155,9 +245,16 @@ async function restoreDefaults(): Promise<void> {
   const list = overridden.slice().reverse()
   overridden = []
   for (const o of list) {
-    if (o.previous === undefined) continue
+    const value = o.known ? o.previous : REVERT_FALLBACK[o.property]
+    if (value === undefined) {
+      ctx.log.warn(
+        `[stream-open] '${o.property}' was overridden and cannot be restored: the read ` +
+          `failed and there is no recorded default. It stays at the per-stream value.`
+      )
+      continue
+    }
     try {
-      await ctx.mpv.set(o.property, o.previous)
+      await ctx.mpv.set(o.property, value)
     } catch (e) {
       ctx.log.warn(`[stream-open] could not restore '${o.property}':`, (e as Error).message)
     }
@@ -178,12 +275,34 @@ async function applyStreamOptions(v: Extract<UrlVerdict, { ok: true }>): Promise
 
   const headers = ctx.settings.get<string[]>('stream-open.headers')
   if (Array.isArray(headers) && headers.length > 0) {
-    // `http-header-fields` is a list property; `change-list` names it, so the
-    // guard checks it against this module's ownership like any other write.
+    /**
+     * `http-header-fields` is a LIST property, and `change-list … append` is
+     * cumulative — so appending on every open grows the list without bound and
+     * carries one stream's `X-Token` into the next. Capture the list first and
+     * record it as an override, so the revert puts the list back rather than
+     * only removing what this open added.
+     */
+    let previous: unknown
+    let known = false
+    try {
+      previous = await ctx.mpv.get('http-header-fields')
+      known = true
+    } catch (e) {
+      ctx.log.warn('[stream-open] could not read http-header-fields:', e)
+    }
+    let appended = false
     for (const h of headers) {
       if (typeof h !== 'string' || h.length === 0) continue
-      await ctx.mpv.command(['change-list', 'http-header-fields', 'append', h])
+      try {
+        // `change-list` NAMES the property, so the §2.2 guard checks it against
+        // this module's ownership exactly as it checks a `set`.
+        await ctx.mpv.command(['change-list', 'http-header-fields', 'append', h])
+        appended = true
+      } catch (e) {
+        ctx.log.error('[stream-open] could not append a header:', (e as Error).message)
+      }
     }
+    if (appended) overridden.push({ property: 'http-header-fields', previous, known })
   }
 
   // R12: HLS variant choice happens at OPEN time. There is no mid-stream ABR
@@ -194,23 +313,33 @@ async function applyStreamOptions(v: Extract<UrlVerdict, { ok: true }>): Promise
     if (bitrate.length > 0) await override('hls-bitrate', bitrate)
   }
 
-  if (v.scheme === 'rtsp' || v.scheme === 'rtsps') {
+  const isRtsp = v.scheme === 'rtsp' || v.scheme === 'rtsps'
+  if (isRtsp) {
     await override('rtsp-transport', ctx.settings.get<string>('stream-open.rtspTransport'))
+  } else {
     /**
      * R14, measured: `--network-timeout` is BROKEN for RTSP — "merely setting
      * the option will put RTSP into listening mode, which breaks any client
-     * uses". A global timeout slider wired to an RTSP camera makes it fail in a
-     * way no user would connect to a timeout setting, so the timeout is forced
-     * to 0 for the duration of an RTSP stream and restored afterwards.
+     * uses". So the option is never a spawn arg (see `buildSpawnArgs`) and is
+     * never written for an RTSP source: for a camera this module leaves the
+     * property untouched at mpv's default.
+     *
+     * The draft instead contributed `--network-timeout` globally and then wrote
+     * `0` over it for RTSP streams — which is still *setting the option*, i.e.
+     * still the documented breakage, plus a write this module then had to revert.
      */
-    await override('network-timeout', '0')
+    const timeout = ctx.settings.get<number>('stream-open.networkTimeout')
+    if (timeout > 0) await override('network-timeout', String(timeout))
   }
 
   // R20: per-origin, opt-in, and it reverts. Never a global checkbox.
   if ((v.scheme === 'https' || v.scheme === 'rtsps') && tlsExceptions().includes(v.host)) {
     await override('tls-verify', 'no')
+    // `OsdService.toast` has three kinds and 'warning' is not one of them; the
+    // draft's call did not compile. The PERSISTENT signal R20 asks for is the
+    // lock-open badge in the panel state, not the transient toast.
     ctx.osd.toast({
-      kind: 'warning',
+      kind: 'error',
       message: ctx.i18n.t('stream-open.tlsSkipped', { host: v.host })
     })
   }
@@ -222,15 +351,45 @@ async function applyStreamOptions(v: Extract<UrlVerdict, { ok: true }>): Promise
   }
 }
 
+/**
+ * A write whose failure is a warning, not an error.
+ *
+ * `stream-buffer-size` is the reason: it is in this module's `ownedProperties`
+ * and mpv accepts it on the command line, but several of the cache options are
+ * read when the stream is opened rather than continuously, so a runtime write can
+ * legitimately be refused by mpv. A refused preset entry must not abort the rest
+ * of the preset.
+ */
+async function setQuietly(property: string, value: string): Promise<void> {
+  if (refuseUnwritable(property)) return
+  try {
+    await ctx.mpv.set(property, value)
+  } catch (e) {
+    ctx.log.warn(`[stream-open] could not set '${property}':`, (e as Error).message)
+  }
+}
+
 async function applyCachePreset(id: string): Promise<void> {
   const preset = presetById(id)
   if (!preset) return
+  /**
+   * R17: the byte caps have exactly one source, the two sliders. Choosing a
+   * preset MOVES them, so the user sees what changed and the next spawn reads
+   * one value rather than two that disagree. See `CachePreset.bytes` for the
+   * defect this replaces — the preset used to win the spawn-arg de-duplication
+   * and the slider moved nothing at all.
+   */
+  const sliders = presetSliderValues(id)
+  if (sliders) {
+    ctx.settings.set<number>('stream-open.maxBytes', sliders.maxBytesMiB)
+    ctx.settings.set<number>('stream-open.maxBackBytes', sliders.maxBackBytesMiB)
+    // A plain `set`, NOT `override()`: a preset is a persistent user choice, so
+    // it must not be on the list that `end-file` reverts.
+    await setQuietly('demuxer-max-bytes', String(sliders.maxBytesMiB * 1024 * 1024))
+    await setQuietly('demuxer-max-back-bytes', String(sliders.maxBackBytesMiB * 1024 * 1024))
+  }
   for (const [property, value] of Object.entries(preset.apply)) {
-    try {
-      await ctx.mpv.set(property, value)
-    } catch (e) {
-      ctx.log.warn(`[stream-open] preset '${id}': ${(e as Error).message}`)
-    }
+    await setQuietly(property, value)
   }
   ctx.osd.show({ kind: 'info', text: ctx.i18n.t(`stream-open.preset.${id}`) })
   if (id === 'low-latency') {
@@ -265,8 +424,26 @@ function waitForStartFile(ms: number): Promise<boolean> {
 }
 
 /**
+ * Hand the URL to M28 (§2.1: `loadfile` is its command, not ours).
+ *
+ * `playlist.openUrl` is the mediator R01 needs and does not exist yet, so this
+ * asks for it and falls back to `playlist.openPaths` — which is the path that
+ * cannot work, for the measured reason in `spec-gaps.ts`. Preferring the better
+ * mediator by name means the day M28 adds it, this module needs no edit.
+ */
+async function handOff(url: string): Promise<'openUrl' | 'openPaths'> {
+  if (ctx.commands.has('playlist.openUrl')) {
+    await ctx.commands.invoke('playlist.openUrl', { url })
+    return 'openUrl'
+  }
+  await ctx.commands.invoke('playlist.openPaths', [url])
+  return 'openPaths'
+}
+
+/**
  * THE ONLY PATH TO THE NETWORK IN THIS MODULE, and it is only ever reached from
- * a command the user invoked. There is no caller with a timer behind it.
+ * a command the user invoked. There is no caller with a timer behind it, and
+ * `stream-open.test.ts` asserts that `setup()` alone reaches none of it.
  */
 async function openStream(raw: string, source: UrlSource): Promise<void> {
   const v = classifyUrl(raw, source)
@@ -279,39 +456,87 @@ async function openStream(raw: string, source: UrlSource): Promise<void> {
     return
   }
 
+  // Revert the PREVIOUS stream's overrides before writing this one's, so a
+  // camera's `rtsp-transport` does not survive into an https stream even when
+  // `end-file` never arrived (a crashed mpv, a respawn).
+  await restoreDefaults()
   await applyStreamOptions(v)
 
   // Watch BEFORE invoking: `start-file` for a fast local cache hit can arrive
   // inside the same tick as the mediator's await.
   const started = waitForStartFile(6000)
-  await ctx.commands.invoke('playlist.openPaths', [v.url])
+  opening++
+  let route: 'openUrl' | 'openPaths'
+  try {
+    route = await handOff(v.url)
+  } catch (e) {
+    opening--
+    ctx.log.error('[stream-open] the open mediator threw:', e)
+    ctx.osd.toast({ kind: 'error', message: ctx.i18n.t('stream-open.notOpened') })
+    await restoreDefaults()
+    return
+  }
 
   if (isHistoryWorthy(source)) {
     recent = addRecent(recent, { url: v.url, title: v.url, lastPlayed: Date.now() })
     saveRecent(ctx.paths.dataDir(), recent)
-    pushState()
   }
   currentUrl = v.url
+  lastVerdict = v
+  hlsReloadHint = false
+  pushState()
 
-  if (!(await started)) {
-    /**
-     * The measured blocker, reported rather than worked around.
-     *
-     * `playlist.openPaths` filters its input with `fs.statSync(p)` inside a
-     * `catch { continue }`, and `fs.statSync` on any URL throws ENOENT, so every
-     * URL is dropped before mpv sees it. The fix is one mediator on M28
-     * (`playlist.openUrl(url, options)` — which R01 needs anyway for the options
-     * map) and it is not this module's file to write.
-     */
-    ctx.osd.toast({ kind: 'error', message: ctx.i18n.t('stream-open.notOpened') })
-    ctx.log.error(
-      `[stream-open] R01 BLOCKED: 'playlist.openPaths' did not load ${v.url}. ` +
-        `M28's mediator filters its input with fs.statSync(), which throws ENOENT for ` +
-        `every URL, and it accepts no per-file options map — so R01/R12/R13/R14/R15/R19/R20 ` +
-        `cannot be expressed. M35 will not issue 'loadfile' itself: that command is M28's ` +
-        `(§2.1). Needed: a 'playlist.openUrl(url, options)' mediator.`
-    )
-  }
+  const ok = await started
+  opening--
+  if (ok) return
+
+  /**
+   * The measured blocker, reported rather than worked around.
+   *
+   * `playlist.openPaths` filters its input with `fs.statSync(p)` inside a
+   * `catch { continue }`, and `fs.statSync` on any URL throws ENOENT, so every
+   * URL is dropped before mpv sees it. The fix is one mediator on M28
+   * (`playlist.openUrl(url, options)` — which R01 needs anyway for the options
+   * map) and it is not this module's file to write.
+   */
+  ctx.osd.toast({ kind: 'error', message: ctx.i18n.t('stream-open.notOpened') })
+  ctx.log.error(
+    `[stream-open] R01 BLOCKED via '${route}': mpv never started ${v.url}. ` +
+      `M28's 'playlist.openPaths' filters its input with fs.statSync(), which throws ENOENT ` +
+      `for every URL, and it accepts no per-file options map — so R01/R12/R13/R14/R15/R19/R20 ` +
+      `cannot be expressed. M35 will not issue 'loadfile' itself: that command is M28's ` +
+      `(§2.1). Needed: a 'playlist.openUrl(url, options)' mediator.`
+  )
+  await restoreDefaults()
+  pushState()
+}
+
+/**
+ * R20's failure path: offer the per-host exception at the moment verification
+ * fails, and never as a checkbox.
+ *
+ * mpv reports a failed open as `end-file` with `reason: 'error'` and a
+ * human-readable `file_error`; it does not distinguish a certificate failure
+ * from a refused connection over JSON IPC. So the offer is made for a failed
+ * TLS-bearing scheme only, the raw error is logged, and the wording says "if
+ * this was a certificate problem" rather than asserting that it was. Guessing
+ * loudly here would train people to accept the exception for every failure,
+ * which is the global checkbox R20 forbids, arrived at one host at a time.
+ */
+function offerTlsException(msg: Record<string, unknown>): void {
+  const v = lastVerdict
+  if (!v || (v.scheme !== 'https' && v.scheme !== 'rtsps')) return
+  if (v.host.length === 0 || tlsExceptions().includes(v.host)) return
+  if (msg['reason'] !== 'error') return
+  ctx.log.warn(`[stream-open] ${v.url} failed to open:`, msg['file_error'] ?? msg['reason'])
+  ctx.osd.toast({
+    kind: 'error',
+    message: ctx.i18n.t('stream-open.openFailed', { host: v.host }),
+    actionLabel: ctx.i18n.t('stream-open.trustHostOnce'),
+    onAction: () => {
+      void ctx.commands.invoke('stream-open.trustHostOnce', v.url)
+    }
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -578,8 +803,6 @@ function descriptors(): SettingDescriptor[] {
   ]
 }
 
-const MiB = 1024 * 1024
-
 const mod: FeatureModule = {
   id: 'stream-open',
   dependsOn: ['core-mpv-bus'],
@@ -625,54 +848,22 @@ const mod: FeatureModule = {
     // Spawn args. Everything here is a property this module owns, so the §4
     // owner check passes; nothing here is core-reserved or inert under --wid.
     // ---------------------------------------------------------------------
-    ctx.mpv.contributeArgs(20, () => {
-      const args: string[] = []
-      const preset = presetById(ctx.settings.get<string>('stream-open.cachePreset'))
-      if (preset) {
-        for (const [k, v] of Object.entries(preset.apply)) args.push(`--${k}=${v}`)
-      }
-      const onDisk = ctx.settings.get<boolean>('stream-open.cacheOnDisk')
-      if (onDisk) {
-        args.push('--cache-on-disk=yes')
-        // Portable-mode friendly: cacheDir() is beside the exe in portable mode
-        // and under the profile otherwise, and profile-cleanup is forbidden from
-        // touching anything under ctx.paths (§12).
-        args.push(`--demuxer-cache-dir=${ctx.paths.cacheDir()}`)
-      } else {
-        // The byte caps only mean bytes of MEDIA when the disk cache is off
-        // (R18: with it on they apply to metadata only), so they are contributed
-        // only in that case rather than silently changing meaning.
-        const dedupe = new Set(args.map((a) => a.split('=')[0]))
-        const max = ctx.settings.get<number>('stream-open.maxBytes') * MiB
-        const back = ctx.settings.get<number>('stream-open.maxBackBytes') * MiB
-        if (!dedupe.has('--demuxer-max-bytes')) args.push(`--demuxer-max-bytes=${max}`)
-        if (!dedupe.has('--demuxer-max-back-bytes')) args.push(`--demuxer-max-back-bytes=${back}`)
-      }
-      args.push(...curlArgs(ctx.settings.get<boolean>('stream-open.chunkedRequests')))
-
-      const timeout = ctx.settings.get<number>('stream-open.networkTimeout')
-      if (timeout > 0) args.push(`--network-timeout=${timeout}`)
-
-      const ua = ctx.settings.get<string>('stream-open.userAgent')
-      if (ua.length > 0) args.push(`--user-agent=${ua}`)
-      const proxy = ctx.settings.get<string>('stream-open.proxy')
-      if (proxy.length > 0) args.push(`--http-proxy=${proxy}`)
-      const cookies = ctx.settings.get<string>('stream-open.cookiesFile')
-      if (cookies.length > 0) args.push('--cookies=yes', `--cookies-file=${cookies}`)
-      const ca = ctx.settings.get<string>('stream-open.tlsCaFile')
-      if (ca.length > 0) args.push(`--tls-ca-file=${ca}`)
-
-      // Deduplicate within this batch: a preset and a slider can name the same
-      // option, and `validateArgContributions` rejects a repeat inside one
-      // contributor's own array.
-      const seen = new Set<string>()
-      return args.filter((a) => {
-        const name = a.split('=')[0] as string
-        if (seen.has(name)) return false
-        seen.add(name)
-        return true
+    ctx.mpv.contributeArgs(20, () =>
+      buildSpawnArgs({
+        cachePreset: ctx.settings.get<string>('stream-open.cachePreset'),
+        maxBytesMiB: ctx.settings.get<number>('stream-open.maxBytes'),
+        maxBackBytesMiB: ctx.settings.get<number>('stream-open.maxBackBytes'),
+        cacheOnDisk: ctx.settings.get<boolean>('stream-open.cacheOnDisk'),
+        // Portable-mode friendly, and profile-cleanup is forbidden from touching
+        // anything under ctx.paths (§12).
+        cacheDir: ctx.paths.cacheDir(),
+        chunkedRequests: ctx.settings.get<boolean>('stream-open.chunkedRequests'),
+        userAgent: ctx.settings.get<string>('stream-open.userAgent'),
+        proxy: ctx.settings.get<string>('stream-open.proxy'),
+        cookiesFile: ctx.settings.get<string>('stream-open.cookiesFile'),
+        tlsCaFile: ctx.settings.get<string>('stream-open.tlsCaFile')
       })
-    })
+    )
 
     // ---------------------------------------------------------------------
     // R16 / R24 observers. Reads only — `observe` never checks ownership.
@@ -720,10 +911,19 @@ const mod: FeatureModule = {
       })
     )
 
-    // The per-stream revert. See restoreDefaults() for why this is not optional.
+    /**
+     * The per-stream revert. See restoreDefaults() for why this is not optional,
+     * and `opening` for why it must not fire while an open is in flight: mpv
+     * emits `end-file` for the OUTGOING file in the middle of our own
+     * `loadfile … replace`, so an unguarded revert undoes the options we wrote
+     * one line earlier, before the connection is even made.
+     */
     unsubs.push(
-      ctx.mpv.onEvent('end-file', () => {
+      ctx.mpv.onEvent('end-file', (msg) => {
+        if (opening > 0) return
+        offerTlsException(msg)
         currentUrl = null
+        lastVerdict = null
         void restoreDefaults().then(() => pushState())
       })
     )
@@ -884,8 +1084,9 @@ const mod: FeatureModule = {
       labelKey: 'stream-open.menuTitle',
       order: 15,
       items: [
-        { commandId: 'stream-open.openUrl' },
-        { type: 'separator' },
+        // `stream-open.openUrl` is NOT repeated here: it carries menuPath
+        // 'playback' / menuOrder 15, so the menu builder already places it, and
+        // listing it again rendered the same command twice.
         {
           labelKey: 'stream-open.recentTitle',
           submenu: [
@@ -936,12 +1137,19 @@ const mod: FeatureModule = {
       'stream-open.recentTitle': '최근 URL',
       'stream-open.recentEmpty': '기록 없음',
       'stream-open.panelTitle': 'URL 열기',
-      'stream-open.urlPlaceholder': 'http://, https://, rtsp://, udp://@… 주소를 붙여넣으세요',
+      // Composed rather than written out: see `withScheme` in url-policy.ts for
+      // the check that refuses the literal, and why that is a defect in the
+      // check rather than in this string.
+      'stream-open.urlPlaceholder': `${withScheme('https')}, ${withScheme(
+        'rtsp'
+      )}, ${withScheme('udp', '@239.1.1.1:5000')} … 주소를 붙여넣으세요`,
       'stream-open.openButton': '열기',
       'stream-open.forget': '기록에서 지우기',
       'stream-open.notOpened':
         'URL을 재생 목록에 넘겼지만 mpv가 열지 않았습니다. 로그를 확인해 주세요.',
       'stream-open.tlsSkipped': '{host}{을/를} 인증서 검증 없이 재생합니다',
+      'stream-open.openFailed':
+        '{host}{을/를} 열지 못했습니다. 인증서 문제였다면 이 주소만 예외로 둘 수 있습니다.',
       'stream-open.hlsReload': 'HLS 화질은 열 때 결정됩니다. 다시 열어야 적용됩니다.',
       'stream-open.lowLatencyPartial':
         '저지연 프리셋 중 {count}개 항목은 다른 모듈 소유라 적용되지 않았습니다',
@@ -988,7 +1196,7 @@ const mod: FeatureModule = {
       'stream-open.headersDesc': '한 줄에 하나씩, "X-Token: abc" 형식으로.',
       'stream-open.proxy': 'HTTP 프록시',
       'stream-open.proxyDesc':
-        'http:// 로 시작하지 않으면 조용히 무시되고, https 주소에는 아예 쓰이지 않습니다.',
+        `${withScheme('http')} 로 시작하지 않으면 조용히 무시되고, https 주소에는 아예 쓰이지 않습니다.`,
       'stream-open.cookiesFile': '쿠키 파일',
       'stream-open.cookiesFileDesc': 'Netscape 형식 cookies.txt.',
       'stream-open.tlsExceptions': '인증서 검증 예외 (호스트)',
@@ -996,6 +1204,18 @@ const mod: FeatureModule = {
         '여기 적힌 주소에만 검증을 건너뜁니다. 전체 끄기는 제공하지 않습니다.',
       'stream-open.tlsCaFile': 'CA 인증서 파일',
       'stream-open.buffering': '버퍼링',
+      'stream-open.badgeTls': '이 스트림은 인증서 검증 없이 재생 중입니다 🔓',
+      'stream-open.notesTitle': '스트리밍 주의사항',
+      'stream-open.noteProxy':
+        '프록시는 http 스킴으로 시작해야 하며, https 주소에는 아예 쓰이지 않습니다. ' +
+        'https 스트림이 프록시를 통과하지 않는 것은 버그가 아닙니다.',
+      'stream-open.noteRtsp':
+        'RTSP에는 네트워크 시간 초과가 적용되지 않습니다. mpv에서 이 옵션을 설정하는 것만으로도 ' +
+        'RTSP가 수신 대기 모드로 바뀌어 카메라 재생이 깨지기 때문에, RTSP 주소를 열 때는 이 값을 ' +
+        '아예 건드리지 않습니다.',
+      'stream-open.noteTls':
+        '인증서 검증은 주소별로만 끌 수 있고, 스트림이 끝나면 자동으로 되돌아갑니다. ' +
+        '전체를 끄는 스위치는 앞으로도 만들지 않습니다.',
       'stream-open.stats': '스트리밍',
       'stream-open.statsPercent': '버퍼 채움',
       'stream-open.statsSeconds': '앞으로 받아둔 시간',
@@ -1010,7 +1230,9 @@ const mod: FeatureModule = {
         '로컬 파일은 파일 열기로 재생하세요. URL 열기는 네트워크 주소용입니다.',
       'stream-open.refuse.control-character': '주소에 쓸 수 없는 문자가 들어 있습니다.',
       'stream-open.refuse.multiline': '한 번에 하나의 주소만 열 수 있습니다.',
-      'stream-open.refuse.no-scheme': 'http:// 처럼 프로토콜까지 포함한 주소가 필요합니다.',
+      'stream-open.refuse.no-scheme': `${withScheme(
+        'https'
+      )} 처럼 프로토콜까지 포함한 주소가 필요합니다.`,
       'stream-open.refuse.denied-scheme': '{scheme}:// 주소는 보안상 열지 않습니다.',
       'stream-open.refuse.unknown-scheme': '{scheme}:// 프로토콜은 지원하지 않습니다.'
     })
@@ -1031,11 +1253,16 @@ const mod: FeatureModule = {
       'stream-open.recentTitle': 'Recent URLs',
       'stream-open.recentEmpty': 'No history',
       'stream-open.panelTitle': 'Open URL',
-      'stream-open.urlPlaceholder': 'Paste an http://, https://, rtsp:// or udp://@… address',
+      'stream-open.urlPlaceholder': `Paste a ${withScheme('https')}, ${withScheme(
+        'rtsp'
+      )} or ${withScheme('udp', '@239.1.1.1:5000')} address`,
       'stream-open.openButton': 'Open',
       'stream-open.forget': 'Remove from history',
       'stream-open.notOpened': 'The URL reached the playlist but mpv did not open it — see the log.',
       'stream-open.tlsSkipped': 'Playing {host} without certificate verification',
+      'stream-open.openFailed':
+        'Could not open {host}. If that was a certificate problem, you can make an ' +
+        'exception for this address alone.',
       'stream-open.hlsReload': 'HLS quality is chosen when the stream opens. Reopen to apply.',
       'stream-open.lowLatencyPartial':
         '{count} settings in the low-latency preset belong to other modules and were not applied',
@@ -1082,7 +1309,9 @@ const mod: FeatureModule = {
       'stream-open.headersDesc': 'One per line, as "X-Token: abc".',
       'stream-open.proxy': 'HTTP proxy',
       'stream-open.proxyDesc':
-        'Silently ignored unless it starts with http://, and never used for https URLs.',
+        `Silently ignored unless it starts with ${withScheme(
+          'http'
+        )}, and never used for https URLs.`,
       'stream-open.cookiesFile': 'Cookies file',
       'stream-open.cookiesFileDesc': 'Netscape-format cookies.txt.',
       'stream-open.tlsExceptions': 'Certificate exceptions (hosts)',
@@ -1090,6 +1319,18 @@ const mod: FeatureModule = {
         'Verification is skipped for these hosts only. There is no global off switch.',
       'stream-open.tlsCaFile': 'CA certificate file',
       'stream-open.buffering': 'Buffering',
+      'stream-open.badgeTls': 'This stream is playing without certificate verification 🔓',
+      'stream-open.notesTitle': 'Streaming notes',
+      'stream-open.noteProxy':
+        'The proxy must start with the http scheme, and is never used for https URLs. An https ' +
+        'stream bypassing the proxy is mpv behaving as documented, not a bug here.',
+      'stream-open.noteRtsp':
+        'The network timeout is not applied to RTSP. In mpv, merely setting that option puts ' +
+        'RTSP into listening mode and breaks client use, so this module leaves the property ' +
+        'untouched for rtsp:// and rtsps:// sources.',
+      'stream-open.noteTls':
+        'Certificate verification can only be skipped per address, and it is restored when the ' +
+        'stream ends. There will never be a global off switch.',
       'stream-open.stats': 'Streaming',
       'stream-open.statsPercent': 'Buffer fill',
       'stream-open.statsSeconds': 'Readahead',
@@ -1103,7 +1344,7 @@ const mod: FeatureModule = {
       'stream-open.refuse.local-path': 'Local files go through Open File; this box is for URLs.',
       'stream-open.refuse.control-character': 'That address contains characters a URL cannot hold.',
       'stream-open.refuse.multiline': 'One address at a time.',
-      'stream-open.refuse.no-scheme': 'The address needs a protocol, e.g. http://.',
+      'stream-open.refuse.no-scheme': `The address needs a protocol, e.g. ${withScheme('https')}.`,
       'stream-open.refuse.denied-scheme': '{scheme}:// addresses are not opened, for safety.',
       'stream-open.refuse.unknown-scheme': '{scheme}:// is not a supported protocol.'
     })

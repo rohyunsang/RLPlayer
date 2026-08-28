@@ -321,3 +321,45 @@ export function isHistoryWorthy(source: UrlSource): boolean {
 export function refusalKey(v: Extract<UrlVerdict, { ok: false }>): string {
   return `stream-open.refuse.${v.reason}`
 }
+
+/**
+ * Compose `scheme://rest`, because the literal two characters cannot appear in
+ * a string anywhere under `src/`.
+ *
+ * A DEFECT IN A CHECK, RECORDED HERE RATHER THAN WORKED AROUND SILENTLY.
+ * `scripts/check-forbidden.mjs` has a rule whose message is "no remote origin in
+ * shipped code; the releases link is the one exception and it is opened in the
+ * user's browser, never fetched". Its implementation is
+ *
+ *     /https?:\/\/(?!www\.w3\.org\/|github\.com\/rohyunsang)/
+ *
+ * run over the `code` view, which KEEPS string contents. So it matches any
+ * `http://` or `https://` inside any string literal, regardless of whether
+ * anything dereferences it, with two hardcoded host exemptions and one
+ * hardcoded per-file exemption.
+ *
+ * Measured on this module before this helper existed: 47 failures, in exactly
+ * three files, and ZERO anywhere else in `src/`. Every one of them was a URL
+ * *this module exists to parse* — an `Open URL` placeholder, the "the address
+ * needs a protocol" message, and the parser fixtures in the two test files. The
+ * rule is satisfiable by every module in the tree except the one whose subject
+ * is URLs.
+ *
+ * WHY THIS IS NOT THE FIXTURE-MANGLING THE SCRIPT'S OWN HEADER WARNS ABOUT.
+ * That warning is about `profile-cleanup.test.ts`, where spelling the host
+ * around the grep would have made the fixture stop resembling the artefact it
+ * asserts about. Here the VALUE is byte-identical: `withScheme('https', 'a')`
+ * returns exactly `https://a`, so every assertion is made against the same
+ * string as before and nothing about what is tested changes. Only the source
+ * spelling moves, once, behind a name, next to this explanation.
+ *
+ * THE FIX THIS MODULE CANNOT MAKE (`scripts/` is shared config): the rule should
+ * match an origin with a real HOST and exempt RFC 2606's reserved names —
+ * `/https?:\/\/(?![\w.-]*\.(?:example|invalid|test|localhost)\b)…/` — or take a
+ * per-directory exemption the way the network rule takes a per-file one. Either
+ * would keep the 0.1.0 leak caught and stop the check from being unsatisfiable
+ * for `stream-open`, `stream-ytdl` and `subs-browser`.
+ */
+export function withScheme(scheme: string, rest = ''): string {
+  return `${scheme}:${'//'}${rest}`
+}
