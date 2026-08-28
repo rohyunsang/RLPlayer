@@ -41,13 +41,34 @@ export interface AssTrackOptions {
   readonly useSubtitleStyle: boolean
   readonly classStyle?: SmiStyle | undefined
   readonly defaultStyle?: SmiStyle | undefined
-  /** `PlayResX`/`PlayResY`. 384x288 is libass's own default for style-less ASS. */
+  /** `PlayResX`/`PlayResY`. See PLAY_RES_Y for why it is not libass's 384x288. */
   readonly playResX?: number
   readonly playResY?: number
 }
 
 const DEFAULT_FONT = 'Malgun Gothic'
-const DEFAULT_SIZE = 48
+
+/**
+ * The canvas the point sizes are resolved against, and the reason it is not
+ * libass's own default.
+ *
+ * A `Fontsize` in ASS is in PlayRes units, so what the viewer sees is the RATIO
+ * `Fontsize / PlayResY`. The first version paired libass's style-less default
+ * (384x288) with `Fontsize: 48` and `pt * 2.4`, which is 48/288 = **16.7% of the
+ * screen height per line** — three or four lines of Korean would have covered
+ * the picture. A 20pt SMI style is authored against a ~480-line canvas, i.e.
+ * 4.2%, and 4–5% is what every player ships as a subtitle default.
+ *
+ * So: a 720-line canvas, `pt * 1.5` (720/480), and 36 when the file says
+ * nothing — 5.0%. The user's own scaling is `sub-scale` and friends, which are
+ * M19's and multiply on top of this; the converter's job is to land at a sane
+ * 1.0.
+ */
+const PLAY_RES_X = 1280
+const PLAY_RES_Y = 720
+/** 720/480: SMI point sizes are written against a ~480-line canvas. */
+const PT_TO_PLAYRES = 1.5
+const DEFAULT_SIZE = 36
 
 /**
  * Plain text -> an ASS `Text` field.
@@ -71,10 +92,7 @@ export function escapeAssText(text: string): string {
 function styleLine(o: AssTrackOptions): string {
   const s = o.useSubtitleStyle ? { ...(o.defaultStyle ?? {}), ...(o.classStyle ?? {}) } : {}
   const font = s.fontFamily ?? DEFAULT_FONT
-  // SMI writes points against a nominal 640x480-ish canvas; PlayResY 288 is
-  // libass's default, so scale the point size into it rather than emitting `20`
-  // and getting subtitles the size of a caption.
-  const size = s.fontSize !== undefined ? Math.round(s.fontSize * 2.4) : DEFAULT_SIZE
+  const size = s.fontSize !== undefined ? Math.round(s.fontSize * PT_TO_PLAYRES) : DEFAULT_SIZE
   const primary = s.primaryColour ?? '&H00FFFFFF'
   const bold = s.bold ? -1 : 0
   const italic = s.italic ? -1 : 0
@@ -111,7 +129,7 @@ function rubyStyleLine(o: AssTrackOptions): string {
   const font = s.fontFamily ?? DEFAULT_FONT
   const size = Math.max(
     10,
-    Math.round((s.fontSize !== undefined ? s.fontSize * 2.4 : DEFAULT_SIZE) * 0.5)
+    Math.round((s.fontSize !== undefined ? s.fontSize * PT_TO_PLAYRES : DEFAULT_SIZE) * 0.5)
   )
   return [
     'Style: Ruby',
@@ -157,8 +175,8 @@ export function buildAss(cues: readonly Cue[], o: AssTrackOptions): string {
   lines.push('ScriptType: v4.00+')
   lines.push('WrapStyle: 0')
   lines.push('ScaledBorderAndShadow: yes')
-  lines.push(`PlayResX: ${o.playResX ?? 384}`)
-  lines.push(`PlayResY: ${o.playResY ?? 288}`)
+  lines.push(`PlayResX: ${o.playResX ?? PLAY_RES_X}`)
+  lines.push(`PlayResY: ${o.playResY ?? PLAY_RES_Y}`)
   lines.push('')
   lines.push('[V4+ Styles]')
   lines.push(FORMAT_LINE)

@@ -75,9 +75,31 @@ export interface SmiDocument {
   readonly styles: ReadonlyMap<string, SmiStyle>
 }
 
-/** What FFmpeg's `sami_probe` would return for this text. */
+/**
+ * What FFmpeg's `sami_probe` would return for this text.
+ *
+ * A LEADING BOM IS SKIPPED, and that is not a nicety. `sami_probe()` reads its
+ * six bytes through an `FFTextReader`, which strips a BOM and transcodes UTF-16
+ * before the `strncmp` runs — as the header comment above already said. The
+ * first version of this function compared the raw string, so it answered 0 for a
+ * BOM-prefixed `<SAMI>`, i.e. "FFmpeg cannot load this file". Measured:
+ *
+ *   smiProbeScore('\uFEFF<SAMI>…')  ->  0     (before)
+ *   smiProbeScore('\uFEFF<SAMI>…')  ->  100   (after)
+ *
+ * S42 requires our OWN exported `.smi` to be UTF-8 **with** a BOM (without it
+ * Notepad and every Korean subtitle editor opens it as CP949 — the PotPlayer
+ * bug the row quotes). So the model declared the file this module writes
+ * unreadable, and `needsHeaderRepair` inherited it: a well-formed export was
+ * pushed through the S04 repair path and rewritten into the cache on every
+ * load, forever, for nothing.
+ */
 export function smiProbeScore(text: string): 100 | 0 {
-  return text.startsWith('<SAMI>') ? 100 : 0
+  return stripLeadingBom(text).startsWith('<SAMI>') ? 100 : 0
+}
+
+function stripLeadingBom(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
 }
 
 /** The three verified total-silence shapes, and anything else of the same kind. */
@@ -94,7 +116,7 @@ export function needsHeaderRepair(text: string): boolean {
  * place (S04, and the same rule as every other converter here).
  */
 export function repairHeader(text: string): string {
-  const trimmed = text.replace(/^﻿/, '').replace(/^\s+/, '')
+  const trimmed = text.replace(/^\uFEFF/, '').replace(/^\s+/, '')
   const m = /^<\s*sami\s*>/i.exec(trimmed)
   if (!m) return trimmed
   return `<SAMI>${trimmed.slice(m[0].length)}`
@@ -105,7 +127,7 @@ export function repairHeader(text: string): string {
 // ---------------------------------------------------------------------------
 
 const NAMED_ENTITIES: Record<string, string> = {
-  nbsp: ' ',
+  nbsp: '\u00a0',
   amp: '&',
   lt: '<',
   gt: '>',
@@ -174,15 +196,26 @@ export function smiTextToPlain(html: string): { text: string; ruby: string } {
   // HTML, so its source newlines are insignificant and its `<br>` are not.
   const text = bare
     .split('\n')
-    .map((line) => line.replace(/[^\S ]+/g, ' ').trim())
+    .map((line) => line.replace(/[^\S\u00a0]+/g, ' ').trim())
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
+    // …and then the EMPTY leading and trailing lines go, which the first version
+    // did not do. A paragraph is terminated by the newline before the next
+    // `<SYNC>`, so with a CRLF source — which every Windows `.smi` is — EVERY
+    // cue came out of here with a trailing newline. Measured on the SM-F
+    // fixture before this line existed: '안녕하세요 여러분\n',
+    // '두 번째 줄\n계속\n', '대사\n'. `buildAss` turns a trailing newline into a
+    // literal `\N`, so every line of every converted Korean subtitle rendered
+    // with a blank line under it, lifting the text half a line up the screen.
+    // Three assertions in smi.test.ts failed on exactly this.
+    .replace(/^\n+/, '')
+    .replace(/\n+$/, '')
   return { text, ruby }
 }
 
 /** A `&nbsp;`-only paragraph is SMI's "clear the line now". */
 export function isClearText(text: string): boolean {
-  return text.replace(/[\s ]/g, '').length === 0
+  return text.replace(/[\s\u00a0]/g, '').length === 0
 }
 
 // ---------------------------------------------------------------------------

@@ -8,7 +8,7 @@
  */
 
 import { bakeTime, formatSrtTime } from './text.ts'
-import { cuesByClass, decodeEntities, parseSmi } from './smi.ts'
+import { cuesByClass, decodeEntities, langOfStyle, parseSmi } from './smi.ts'
 import type { Cue } from './smi.ts'
 
 export type ExportFormat = 'srt' | 'smi'
@@ -18,20 +18,60 @@ export function isReadableForExport(file: string): boolean {
   return /\.(srt|vtt|ass|ssa|smi|sami)$/i.test(file)
 }
 
-export function readCues(text: string, file: string): Cue[] {
+export interface ReadOptions {
+  /**
+   * For a multi-class SMI, which class to export.
+   *
+   * ONE CLASS, NOT ALL OF THEM. Merging KRCC and ENCC gives a file with two cues
+   * at every timestamp — a "subtitle" that shows both languages stacked, which
+   * is not a thing the user asked for and is not a thing any editor can fix
+   * afterwards. When the caller knows which language is on screen (it does: it
+   * either converted the file or it can read the selected track's class), it
+   * says so; otherwise `preferredLangs` decides and `exportedClass` reports what
+   * was chosen so the UI can say it out loud.
+   */
+  readonly className?: string
+  readonly preferredLangs?: readonly string[]
+}
+
+export interface ReadResult {
+  readonly cues: Cue[]
+  /** The SMI class actually exported, `''` for a class-less or non-SMI source. */
+  readonly exportedClass: string
+  /** Every class the source offered, so the caller can offer the others. */
+  readonly classes: readonly string[]
+}
+
+export function readSubtitle(text: string, file: string, o: ReadOptions = {}): ReadResult {
   if (/\.(smi|sami)$/i.test(file)) {
     const doc = parseSmi(text)
     const byClass = cuesByClass(doc)
-    // For export the classes are merged back in source order: the user asked to
-    // save "the subtitle", and if they wanted one language they picked that
-    // converted track and are exporting THAT file instead.
-    const all: Cue[] = []
-    for (const list of byClass.values()) all.push(...list)
-    return all.sort((a, b) => a.startMs - b.startMs)
+    const real = [...byClass.entries()].filter(([, cues]) => cues.length > 0)
+    const classes = real.map(([id]) => id)
+    let pick = real.find(([id]) => id === o.className)
+    if (!pick) {
+      for (const want of o.preferredLangs ?? []) {
+        pick = real.find(([id]) => langOfStyle(doc.styles.get(id), id) === want)
+        if (pick) break
+      }
+    }
+    if (!pick) pick = real[0]
+    return {
+      cues: [...(pick?.[1] ?? [])].sort((a, b) => a.startMs - b.startMs),
+      exportedClass: pick?.[0] ?? '',
+      classes
+    }
   }
-  if (/\.(ass|ssa)$/i.test(file)) return parseAssCues(text)
-  if (/\.vtt$/i.test(file)) return parseVttCues(text)
-  return parseSrtCues(text)
+  if (/\.(ass|ssa)$/i.test(file)) {
+    return { cues: parseAssCues(text), exportedClass: '', classes: [] }
+  }
+  if (/\.vtt$/i.test(file)) return { cues: parseVttCues(text), exportedClass: '', classes: [] }
+  return { cues: parseSrtCues(text), exportedClass: '', classes: [] }
+}
+
+/** The cue list alone, for callers that do not care which class it came from. */
+export function readCues(text: string, file: string, o: ReadOptions = {}): Cue[] {
+  return readSubtitle(text, file, o).cues
 }
 
 const SRT_TIME = /(\d+):(\d{2}):(\d{2})[.,](\d{1,3})/g
@@ -45,14 +85,30 @@ function timeToMs(h: string, m: string, s: string, frac: string): number {
   )
 }
 
+/**
+ * SRT (and, through `parseVttCues`, WebVTT).
+ *
+ * THE TIMING LINE IS FOUND BY LOOKING FOR `-->`, not by counting lines. The
+ * first version took line 0, or line 1 when line 0 was all digits — which is
+ * true of SRT and false of WebVTT, whose cue identifier is an arbitrary string
+ * (`cue-1`, `intro`, a UUID). Measured on a five-line VTT with named cues:
+ *
+ *   parseVttCues(vtt).length  ->  0   (before)
+ *   parseVttCues(vtt).length  ->  1   (after)
+ *
+ * S42 offers "save the subtitle" for whatever is selected, and a `.vtt` sidecar
+ * is an ordinary thing to have selected, so the export silently wrote an empty
+ * file for a whole format. Searching for the arrow costs nothing and is correct
+ * for both.
+ */
 export function parseSrtCues(text: string): Cue[] {
   const cues: Cue[] = []
   const blocks = text.replace(/\r\n?/g, '\n').split(/\n{2,}/)
   for (const block of blocks) {
     const lines = block.split('\n').filter((l) => l.trim().length > 0)
     if (lines.length === 0) continue
-    let idx = 0
-    if (/^\d+$/.test((lines[0] ?? '').trim())) idx = 1
+    const idx = lines.findIndex((l) => l.includes('-->'))
+    if (idx < 0) continue
     const timing = lines[idx] ?? ''
     SRT_TIME.lastIndex = 0
     const a = SRT_TIME.exec(timing)
@@ -73,18 +129,52 @@ export function parseSrtCues(text: string): Cue[] {
 export function parseVttCues(text: string): Cue[] {
   // WebVTT is SRT with a `WEBVTT` header, `.` for the decimal separator (which
   // `SRT_TIME` already accepts), optional cue ids and `NOTE`/`STYLE` blocks.
+  // A `NOTE` / `STYLE` / `REGION` block runs to the next BLANK LINE, so the
+  // terminator cannot be `$` under /m — that matches the end of the first line
+  // and leaves the rest of the comment behind as a pseudo-cue.
   const stripped = text
-    .replace(/^﻿?WEBVTT[^\n]*\n/i, '')
-    .replace(/^(NOTE|STYLE|REGION)[\s\S]*?(?:\n\n|$)/gim, '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/^\uFEFF?WEBVTT[^\n]*\n/i, '')
+    .replace(/^(?:NOTE|STYLE|REGION)\b[\s\S]*?(?:\n\n|$)/gm, '')
   return parseSrtCues(stripped)
 }
 
+/**
+ * ASS in.
+ *
+ * THE `Format:` LINE IS TAKEN FROM `[Events]` AND NOWHERE ELSE, and getting
+ * that wrong made this function return an EMPTY LIST for every ASS file this
+ * module itself writes. An ASS script has two `Format:` lines and the styles one
+ * comes first:
+ *
+ *   [V4+ Styles]
+ *   Format: Name, Fontname, Fontsize, PrimaryColour, …      <- 23 fields
+ *   [Events]
+ *   Format: Layer, Start, End, Style, Name, …               <- 10 fields
+ *
+ * The first version took the first `Format:` it saw, so `fields.indexOf('start')`
+ * was -1 for every `Dialogue:` line, `assTimeToMs('')` returned null, and every
+ * cue was skipped. Measured on the SM-F split output:
+ *
+ *   parseAssCues(convertedKrcc).length  ->  0   (before)
+ *   parseAssCues(convertedKrcc).length  ->  2   (after)
+ *
+ * S42 exports whatever track is selected, and after S03 the selected Korean
+ * track IS one of these files — so "Save subtitle with sync baked in" wrote an
+ * empty file for the module's own primary output, and four of this module's
+ * acceptance assertions failed on it.
+ */
 export function parseAssCues(text: string): Cue[] {
   const cues: Cue[] = []
   let fields: string[] = []
+  let inEvents = false
   for (const raw of text.replace(/\r\n?/g, '\n').split('\n')) {
     const line = raw.trim()
-    if (/^Format\s*:/i.test(line) && fields.length === 0) {
+    if (/^\[/.test(line)) {
+      inEvents = /^\[events\]/i.test(line)
+      continue
+    }
+    if (inEvents && /^Format\s*:/i.test(line)) {
       fields = line
         .slice(line.indexOf(':') + 1)
         .split(',')
@@ -168,26 +258,53 @@ export function bakeCues(cues: readonly Cue[], o: BakeOptions): Cue[] {
     .filter((c) => c.endMs > c.startMs)
 }
 
+/**
+ * SRT out, CRLF throughout and blank-line terminated.
+ *
+ * A BLANK LINE INSIDE A CUE ENDS THE CUE, in this parser and in every other one,
+ * so an empty line in the text is collapsed rather than written: an SMI
+ * paragraph that happens to contain one would otherwise split into a cue and a
+ * fragment with no timing, and the fragment would be read back as a cue index.
+ */
 export function toSrt(cues: readonly Cue[]): string {
   const out: string[] = []
   let n = 1
   for (const c of cues) {
     out.push(String(n++))
     out.push(`${formatSrtTime(c.startMs / 1000)} --> ${formatSrtTime(c.endMs / 1000)}`)
-    out.push(c.text.replace(/\r\n?/g, '\n'))
+    out.push(
+      c.text
+        .replace(/\r\n?/g, '\n')
+        .split('\n')
+        .filter((l) => l.trim().length > 0)
+        .join('\r\n')
+    )
     out.push('')
   }
-  return out.join('\r\n')
+  return out.join('\r\n') + (out.length > 0 ? '\r\n' : '')
 }
 
 /**
  * SMI out.
  *
- * The header is written as literal `<SAMI>` at byte 0 with no BOM before it,
- * because that is the only shape FFmpeg's probe accepts (S04) — writing our own
- * export in a form our own player cannot read would be a fine joke. Each cue is
- * followed by a `&nbsp;` clear event at its end time, which is how SAMI ends a
- * line and is what makes a round-trip through `readCues` idempotent.
+ * The header is literal uppercase `<SAMI>` with nothing but an optional BOM in
+ * front of it, because that is the only shape FFmpeg's probe accepts (S04) —
+ * writing our own export in a form our own player cannot read would be a fine
+ * joke.
+ *
+ * A BOM IS FINE AND IS WHAT WE WRITE. The first version of this comment said
+ * "no BOM before it, because that is the only shape FFmpeg's probe accepts",
+ * which is wrong and contradicted `smi.ts`'s own header note two files away:
+ * `sami_probe()` reads through an `FFTextReader`, which skips a BOM before the
+ * `strncmp`. That mattered because S42 requires UTF-8 **with** a BOM — without
+ * it Notepad and every Korean subtitle editor on Windows opens the file as CP949
+ * and shows mojibake, which is the exact PotPlayer bug the row quotes ("Hangul
+ * was broken when subtitle sync was saved"). Two of this module's own beliefs
+ * were in conflict and the export sat between them.
+ *
+ * Each cue is followed by a `&nbsp;` clear event at its end time, which is how
+ * SAMI ends a line and is what makes a round-trip through `readSubtitle`
+ * idempotent.
  */
 export function toSmi(cues: readonly Cue[], className: string, lang: string): string {
   const cls = className.length > 0 ? className.toUpperCase() : 'KRCC'
