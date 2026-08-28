@@ -132,6 +132,7 @@ const mod: FeatureModule = {
         labelKey: 'subs-tracks.toggleVisibility',
         category: 'subtitles',
         menuPath: 'subtitles',
+        menuOrder: 10,
         defaults: { default: ['KeyV'], mpv: ['KeyV'] },
         run: async () => {
           const next = ctx.mpv.peek<boolean>('sub-visibility') === false
