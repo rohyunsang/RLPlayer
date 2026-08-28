@@ -82,9 +82,18 @@ const mod: FeatureModule = {
         labelKey: 'nav-seek.seek',
         category: 'navigation',
         internal: true,
+        /**
+         * The mediator every other module seeks through (§3.6: M25's N51
+         * "seeks through M24's command, it does not own seeking" — and so does
+         * M28, whose queue restarts a file at 0 and resumes one at a stored
+         * position). `quiet` exists for those callers: a resume is not a user
+         * seek and must not flash the seek OSD on every file open.
+         */
         run: (arg) => {
-          const a = (arg ?? {}) as { seconds?: number; absolute?: boolean }
-          return a.absolute ? absolute(a.seconds ?? 0) : relative(a.seconds ?? 0)
+          const a = (arg ?? {}) as { seconds?: number; absolute?: boolean; quiet?: boolean }
+          return a.absolute
+            ? absolute(a.seconds ?? 0, a.quiet === true)
+            : relative(a.seconds ?? 0)
         }
       },
       {

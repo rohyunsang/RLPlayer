@@ -533,7 +533,17 @@ export function verbOf(args: readonly unknown[]): { verb: string; at: number } |
  *     property for real (speed came back 2.5 and 3.0), so a module could set
  *     anything it liked by loading a file with options.
  */
-export function propertiesWrittenBy(args: readonly unknown[]): string[] {
+/**
+ * Properties a command names OUTRIGHT: `['set','aid',2]`'s `aid`, and every key
+ * in `loadfile`'s options map.
+ *
+ * These are ALWAYS ownership-checked, including for the module that owns the
+ * command. `loadfile` is M28's, and its options argument was measured to set any
+ * property you like (`['loadfile', f, 'replace', 0, 'speed=2.5']` really set
+ * speed to 2.5) — so "M28 owns loadfile" must never become "M28 may write
+ * anything".
+ */
+export function explicitPropertiesWrittenBy(args: readonly unknown[]): string[] {
   const found = verbOf(args)
   if (!found) return []
   const verb = canonicalCommand(found.verb)
@@ -542,12 +552,6 @@ export function propertiesWrittenBy(args: readonly unknown[]): string[] {
     const name = args[found.at + 1]
     return typeof name === 'string' ? [name] : []
   }
-
-  // Commands that write a property without naming it. This is the table that
-  // did not exist, and its absence is why ['frame-step'] could flip core's
-  // `pause` from an unrelated module without a refusal being counted.
-  const implied = COMMAND_SIDE_EFFECTS[verb]
-  if (implied) return [...implied]
 
   if (verb === 'loadfile' || verb === 'loadlist') {
     // loadfile url [flags [index [options]]] — options is the 5th element.
@@ -563,6 +567,54 @@ export function propertiesWrittenBy(args: readonly unknown[]): string[] {
     }
   }
   return []
+}
+
+/**
+ * Properties a command writes WITHOUT naming them, from COMMAND_SIDE_EFFECTS.
+ *
+ * These are checked for everyone EXCEPT the module that owns the command, and
+ * the asymmetry is the whole design:
+ *
+ *   - An unrelated module issuing `['frame-step']` is refused, because it does
+ *     not own `frame-step`. That is the bug this table was written for.
+ *   - M24, which DOES own `frame-step`, is allowed the `pause` write that comes
+ *     with it. Refusing it would mean nobody could frame-step at all, since
+ *     `pause` is core's and always will be.
+ *
+ * The decision about who may cause a given side effect is therefore made ONCE,
+ * in `modules.json`, where `commands.test.ts` checks it — a module owning a
+ * command whose side effect lands in a THIRD module's property has to declare
+ * that property in `requestsProperties` and the holder has to answer for it.
+ * It is not re-litigated per call, where the only available answer is "drop it
+ * silently".
+ */
+export function impliedPropertiesWrittenBy(args: readonly unknown[]): string[] {
+  const found = verbOf(args)
+  if (!found) return []
+  return [...(COMMAND_SIDE_EFFECTS[canonicalCommand(found.verb)] ?? [])]
+}
+
+/** Every property a command writes, named or not. */
+export function propertiesWrittenBy(args: readonly unknown[]): string[] {
+  const explicit = explicitPropertiesWrittenBy(args)
+  return explicit.length > 0 ? explicit : impliedPropertiesWrittenBy(args)
+}
+
+/**
+ * The properties `MpvService.command()` must ownership-check for this caller.
+ *
+ * Pure, and split out of the bus on purpose: this one boolean is the difference
+ * between "seeking works" and "resume silently stopped working in packaged
+ * builds", and that is not a decision that should only be reachable through
+ * Electron. See `impliedPropertiesWrittenBy` for why the owner is exempt from
+ * the implied set and never from the explicit one.
+ */
+export function propertiesNeedingOwnership(
+  args: readonly unknown[],
+  ownsCommand: boolean
+): string[] {
+  const explicit = explicitPropertiesWrittenBy(args)
+  return ownsCommand ? explicit : [...explicit, ...impliedPropertiesWrittenBy(args)]
 }
 
 /** Kept for callers that only need the first one. */

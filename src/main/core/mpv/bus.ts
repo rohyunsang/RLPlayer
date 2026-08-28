@@ -5,7 +5,7 @@ import {
   commandNameOf,
   isBannedCommand,
   isChainCommand,
-  propertiesWrittenBy
+  propertiesNeedingOwnership
 } from './ownership.ts'
 import { composeArgs, validateArgContributions, type ArgContribution } from './reserved.ts'
 import { ContributionError } from '../errors.ts'
@@ -529,8 +529,11 @@ class MpvBus {
       if (name !== null && bus.owners && !bus.owners.assertCommand(ownerId, name, strict, log)) {
         return false
       }
-      // Prefixes and loadfile options included; see propertiesWrittenBy.
-      for (const prop of propertiesWrittenBy(args)) {
+      // Named properties are checked for EVERYONE (`loadfile` is M28's and its
+      // options argument can set any property at all); side effects a command
+      // does not name are the OWNER's to cause. See propertiesNeedingOwnership.
+      const ownsThis = name !== null && bus.owners?.commandOwnerOf(name) === ownerId
+      for (const prop of propertiesNeedingOwnership(args, ownsThis)) {
         if (!checkWrite(prop)) return false
       }
       return true

@@ -2053,7 +2053,9 @@
     ],
     "requestsProperties": [],
     "arbitrates": [],
-    "mediates": {},
+    "mediates": {
+      "nav-seek.seek": []
+    },
     "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
@@ -2117,7 +2119,9 @@
     "requestsProperties": [],
     "arbitrates": [],
     "mediates": {},
-    "usesMediators": [],
+    "usesMediators": [
+      "nav-seek.seek"
+    ],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/nav-chapters/",
@@ -2302,7 +2306,9 @@
       ],
       "playlist.seriesPrefix": []
     },
-    "usesMediators": [],
+    "usesMediators": [
+      "nav-seek.seek"
+    ],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/playlist/",

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import {
   CORE_OWNERSHIP,
   isBannedCommand,
+  propertiesNeedingOwnership,
   propertiesWrittenBy,
   OwnerMap,
   isChainCommand,
@@ -142,6 +143,38 @@ test('commands that write a property WITHOUT naming it are caught', () => {
   assert.deepEqual(propertiesWrittenBy(['async', 'no-osd', 'ab-loop']), ['ab-loop-a', 'ab-loop-b'])
   // Underscore spelling, which mpv accepts.
   assert.deepEqual(propertiesWrittenBy(['frame_step']), ['pause', 'time-pos'])
+})
+
+/**
+ * THE REGRESSION THIS TEST EXISTS FOR, and it is a regression the FIX
+ * introduced.
+ *
+ * Giving `seek` an owner immediately broke seeking: `['seek', 200,
+ * 'absolute+exact']` implies a write to `time-pos`, which nobody owns, so M24 —
+ * the module that owns seeking — was refused its own command. In a packaged
+ * build a refusal is DROPPED, and M28's four seek call sites all had
+ * `.catch(() => undefined)` on them, so resume simply stopped working and
+ * nothing said a word. It was caught by driving the packaged app and finding
+ * resume.json empty, not by any test that existed.
+ */
+test('a command owner may cause the side effects its command implies', () => {
+  // Not owning it: the implied write is checked, and refused.
+  assert.deepEqual(propertiesNeedingOwnership(['frame-step'], false), ['pause', 'time-pos'])
+  assert.deepEqual(propertiesNeedingOwnership(['seek', 200, 'absolute+exact'], false), ['time-pos'])
+  // Owning it: the decision was already made in modules.json, so the implied
+  // set is not re-litigated at a call site whose only answer is "drop silently".
+  assert.deepEqual(propertiesNeedingOwnership(['frame-step'], true), [])
+  assert.deepEqual(propertiesNeedingOwnership(['seek', 200, 'absolute+exact'], true), [])
+})
+
+test('owning a command never means owning the properties it NAMES', () => {
+  // `loadfile` is M28's, and `['loadfile', f, 'replace', 0, 'speed=2.5']` was
+  // measured to really set speed to 2.5. If ownership of the command exempted
+  // the options map, M28 would own every property in the app through it.
+  const withOptions = ['loadfile', 'x.mkv', 'replace', 0, 'speed=2.5,sub-delay=1']
+  assert.deepEqual(propertiesNeedingOwnership(withOptions, true), ['speed', 'sub-delay'])
+  assert.deepEqual(propertiesNeedingOwnership(['set', 'aid', 2], true), ['aid'])
+  assert.deepEqual(propertiesNeedingOwnership(['no-osd', 'set', 'speed', 2], true), ['speed'])
 })
 
 test('apply-profile is banned outright: its side effects are unbounded', () => {

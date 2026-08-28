@@ -97,7 +97,7 @@ async function playCurrent(): Promise<void> {
     // frame right; the exact seek is what makes resume land on the frame the
     // user left rather than the nearest keyframe.
     await once('playback-restart', 8000)
-    await ctx.mpv.command(['seek', startAt, 'absolute+exact']).catch(() => undefined)
+    await seekTo(startAt)
   } else {
     await ctx.mpv.command(['loadfile', item.path, 'replace'])
   }
@@ -220,7 +220,7 @@ async function next(auto = false): Promise<void> {
   if (items.length === 0) return
 
   if (auto && cfg.repeat === 'one') {
-    await ctx.mpv.command(['seek', 0, 'absolute']).catch(() => undefined)
+    await seekTo(0)
     await ctx.commands.invoke('core.play')
     return
   }
@@ -251,7 +251,7 @@ async function previous(): Promise<void> {
   // Match every other player: within the first 3s go back a file, otherwise
   // restart the current one.
   if (state().timePos > 3) {
-    await ctx.mpv.command(['seek', 0, 'absolute']).catch(() => undefined)
+    await seekTo(0)
     return
   }
   const cfg = loadConfig()
@@ -271,7 +271,7 @@ async function stopAtEnd(): Promise<void> {
 
 async function restartCurrent(): Promise<void> {
   if (currentFile) ctx.perFile.forget(currentFile)
-  await ctx.mpv.command(['seek', 0, 'absolute']).catch(() => undefined)
+  await seekTo(0)
   await ctx.commands.invoke('core.play')
 }
 
@@ -280,6 +280,22 @@ function savePosition(): void {
   if (!currentFile || s.idle) return
   if (s.duration <= 0 || s.timePos <= 0) return
   ctx.perFile.recordPosition(currentFile, s.timePos, s.duration)
+}
+
+/**
+ * M28 does not own seeking; M24 does (§3.6). The queue restarts a file at 0 and
+ * resumes one at a stored position, and both of those are seeks — so they go
+ * through M24's command, exactly as §3.6 says M25's N51 must.
+ *
+ * This used to be four raw `ctx.mpv.command(['seek', ...])` calls with
+ * `.catch(() => undefined)` on each. Once `seek` acquired an owner they were
+ * refused, and in a packaged build a refusal is DROPPED — so resume stopped
+ * working and the swallowed catch meant nothing said so. It is the exact shape
+ * of bug the ownership map exists to make impossible, arriving through the fix
+ * for it.
+ */
+async function seekTo(seconds: number): Promise<void> {
+  await ctx.commands.invoke('nav-seek.seek', { seconds, absolute: true, quiet: true })
 }
 
 const mod: FeatureModule = {
