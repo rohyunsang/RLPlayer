@@ -99,11 +99,37 @@ export async function press(s, code, key, vk, modifiers = 0) {
  * child's stdout+stderr so a caller can assert on the app's own markers, which
  * is the only evidence available for anything that happens in the main process.
  */
-export async function launch({ port = 9411, sample = 'samples/bbb_long.mp4', args = [], mpvConf } = {}) {
+/**
+ * The sample to play, resolved the way `make:sample` actually names things.
+ *
+ * `launch()` hard-defaulted to `samples/bbb_long.mp4` and threw `sample
+ * missing` otherwise, while `scripts/make-sample.mjs` -- the script that exists
+ * precisely because `samples/` is gitignored -- writes `samples/bbb.mp4`. So on
+ * any tree without a developer's own Big Buck Bunny, which is every fresh
+ * checkout and every CI runner, `npm run make:sample && npm run e2e:wave1`
+ * produced `Error: sample missing`. That is the reason this suite could not
+ * simply be added to the workflow, and it is a harness defect rather than a
+ * runner limitation.
+ *
+ * One list, in the same preference order make-sample uses, and the error names
+ * the command that fixes it.
+ */
+export function resolveSample(explicit) {
+  const candidates = explicit ? [explicit] : ['samples/bbb_long.mp4', 'samples/bbb.mp4']
+  for (const rel of candidates) {
+    const abs = path.join(repo, rel)
+    if (fs.existsSync(abs)) return abs
+  }
+  throw new Error(
+    `no sample video: looked for ${candidates.join(', ')} under ${repo}. ` +
+      `Run \`npm run make:sample\` (it encodes one with the pinned mpv; no download).`
+  )
+}
+
+export async function launch({ port = 9411, sample, args = [], mpvConf } = {}) {
   const exe = path.join(repo, 'dist', 'win-unpacked', 'RLPlayer.exe')
   if (!fs.existsSync(exe)) throw new Error(`packaged build missing: ${exe}`)
-  const file = path.join(repo, sample)
-  if (!fs.existsSync(file)) throw new Error(`sample missing: ${file}`)
+  const file = resolveSample(sample)
 
   /**
    * A FRESH PROFILE, via `RLPLAYER_HOME`.

@@ -20,7 +20,8 @@
  * that the position survives a real quit, and that it is applied on reopen.
  *
  * Run:  node scripts/e2e-resume.mjs
- * Windows, needs a desktop session and a packaged build, so it is not in CI.
+ * Windows, needs a desktop session and a packaged build. It IS in CI now, in
+ * the same job that packages the app and drives the overlay over CDP.
  */
 import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
@@ -29,20 +30,93 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+
+/** The same preference order `make:sample` and `lib/drive.mjs` use. */
+function resolveSample() {
+  for (const rel of ['samples/bbb_long.mp4', 'samples/bbb.mp4']) {
+    const abs = path.join(repo, rel)
+    if (fs.existsSync(abs)) return abs
+  }
+  console.error(
+    `no sample video: looked for samples/bbb_long.mp4 and samples/bbb.mp4. ` +
+      `Run \`npm run make:sample\`.`
+  )
+  process.exit(1)
+}
+
+/** Duration in seconds, from the pinned mpv rather than from an assumption. */
+function probeDuration(file) {
+  const mpv = [
+    path.join(repo, 'dist', 'win-unpacked', 'resources', 'mpv', 'mpv.exe'),
+    path.join(repo, 'resources', 'mpv', 'mpv.exe')
+  ].find((p) => fs.existsSync(p))
+  if (!mpv) {
+    console.error('no mpv binary to probe the sample with; run npm run fetch:mpv')
+    process.exit(1)
+  }
+  const out = execFileSync(
+    mpv,
+    [
+      '--no-config',
+      '--vo=null',
+      '--ao=null',
+      '--frames=1',
+      '--term-playing-msg=RLDUR=${=duration}',
+      file
+    ],
+    { encoding: 'utf8', cwd: repo }
+  )
+  const m = /RLDUR=([0-9.]+)/.exec(out)
+  if (!m) {
+    console.error(`mpv did not report a duration for ${file}`)
+    process.exit(1)
+  }
+  return Number(m[1])
+}
 const exe = path.join(repo, 'dist', 'win-unpacked', 'RLPlayer.exe')
-const sample = path.join(repo, 'samples', 'bbb_long.mp4')
 const PORT = 9444
-const SEEK_TO = 200
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 if (!fs.existsSync(exe)) {
   console.error(`no packaged build at ${exe}. Run: npm run build && npx electron-builder --win --dir`)
   process.exit(1)
 }
-if (!fs.existsSync(sample)) {
-  console.error(`samples/bbb_long.mp4 is required: resume needs a file longer than ${SEEK_TO}s`)
+
+/**
+ * THE SEEK TARGET IS DERIVED FROM THE FILE, not hardcoded at 200 s.
+ *
+ * It was 200, with the only guard being `existsSync('samples/bbb_long.mp4')`
+ * and a message claiming the file is "longer than 200s" that nothing checked.
+ * `scripts/make-sample.mjs` -- the script a fresh checkout or a CI runner has to
+ * use, because `samples/` is gitignored -- produces a 200 SECOND file named
+ * `bbb.mp4`. So this suite could not run there twice over: wrong name, and a
+ * seek target at the exact end of the file.
+ *
+ * And 200 s in a 200 s file is not merely "the end", it is outside the resumable
+ * window by design: `src/main/services/resume-rules.ts` refuses to remember a
+ * position in the last max(90 s, 5%) of a file, because reaching the end means
+ * finished. A hardcoded target that lands there would have produced a red run
+ * reading `resume.json: 0 entries` and looked exactly like the regression this
+ * script was written to catch.
+ *
+ * So: ask mpv for the duration, compute the window the rules actually allow, and
+ * refuse a file too short for one rather than guessing. On the 596 s Big Buck
+ * Bunny this still picks 200, so a local run is byte-for-byte what it was.
+ */
+const sample = resolveSample()
+const duration = probeDuration(sample)
+const END_MARGIN = Math.max(90, duration * 0.05) // resume-rules.ts
+const LO = 75 // > MIN_RESUME_SECONDS (60), with room for this script's +/-15
+const HI = duration - END_MARGIN - 15
+if (!(HI > LO)) {
+  console.error(
+    `${path.relative(repo, sample)} is ${duration.toFixed(1)}s long, which leaves no resumable ` +
+      `window: resume-rules.ts wants a position above ${LO}s and below ` +
+      `${(duration - END_MARGIN).toFixed(1)}s. Use a longer sample.`
+  )
   process.exit(1)
 }
+const SEEK_TO = Math.min(200, Math.floor((LO + HI) / 2))
 
 // A profile of its own, so a developer's real resume history is neither read
 // nor written, and run 1 genuinely starts from nothing.
@@ -115,7 +189,21 @@ async function positionSeconds(s) {
 }
 
 async function quit(child, s, label) {
-  await s.send('Runtime.evaluate', { expression: 'window.rlplayer.window.close()' })
+  /**
+   * NOT `await`ed, and that is the fix for an intermittent exit-13 hang.
+   *
+   * `window.rlplayer.window.close()` destroys the page this very evaluate was
+   * sent to, so whether a CDP response ever comes back is a race with the
+   * renderer's teardown. Awaiting it hung 2 runs in 5 -- Node's
+   * "unsettled top-level await", which exits 13 having lost every buffered
+   * console.log, so the run looked like a silent failure with no output at all.
+   * A harness whose own quit path can hang is the quit-timer lesson again: what
+   * is being measured is the app's exit, which the loop below measures directly
+   * from `child.exitCode`.
+   */
+  s.send('Runtime.evaluate', { expression: 'window.rlplayer.window.close()' }).catch(
+    () => undefined
+  )
   for (let i = 0; i < 40 && child.exitCode === null; i++) await sleep(250)
   s.close()
   if (child.exitCode === null) {

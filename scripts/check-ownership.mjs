@@ -221,15 +221,31 @@ export function evaluate(files, actorName, opts = {}) {
       problems.push(`--as ${detail}`)
       return { problems, notes, attributed, actor: null }
     }
-    // Auto-detected and wrong: say so, then check anyway under rule A.
+    /**
+     * Auto-detected and PARTLY wrong: keep what resolved, say what did not.
+     *
+     * This used to clear the whole list, and on this repository's own
+     * integration branch that was the difference between a readable run and an
+     * unreadable one. `main...HEAD` carries 22 `Module:` trailers, one of which
+     * is `Module: WIP`; dropping all 22 because of that one put the run back on
+     * rule A over thirteen modules' files at once.
+     *
+     * An UNRESOLVABLE name still may not widen anything: it is simply not an
+     * actor. What it must not do is silently switch the check off, which is the
+     * defect this branch already carries a fixture for.
+     */
     notes.push(
-      `NOTE (not a violation): the actor was auto-detected as ${detail}
-` +
-        `    Falling back to RULE A, because an actor this script cannot resolve must not be ` +
-        `able to
-    switch every rule off. Pass --as explicitly to get RULE B.`
+      `NOTE (not a violation): ${detail}` +
+        (declaredRows.length > 0
+          ? `
+    ${declaredRows.length} name(s) DID resolve and rule B runs on those; the ` +
+            `unresolvable one is not an actor.`
+          : `
+    Nothing resolved, so this falls back to RULE A - an actor this script ` +
+            `cannot resolve must not be able to
+    switch every rule off. Pass --as ` +
+            `explicitly to get RULE B.`)
     )
-    declaredRows.length = 0
   }
   const declared = declaredRows[0] ?? null
 
@@ -264,16 +280,85 @@ export function evaluate(files, actorName, opts = {}) {
   }
 
   if (declaredRows.length > 0) {
-    // RULE B. Every changed file must be owned by one of the declared rows.
+    /**
+     * RULE B. Every changed file must be owned by one of the declared rows.
+     *
+     * TWO DEFECTS, BOTH MEASURED ON THE DELIVERED TREE, BOTH FIXED HERE.
+     *
+     * 1. THE BLAME WAS ARBITRARY. `check(blamed, ...)` picked the first DECLARED
+     *    row whose mustNotTouch happens to name the file, which for anything
+     *    under `src/main/core/` is whichever core row was declared first. Every
+     *    one of the 163 lines from `--base main` read
+     *    `M36 changed src/main/core/input/registry.ts` or
+     *    `core-renderer changed src/main/core/paths.ts` -- a row that did not
+     *    touch it, named as if it had. A message that names the wrong actor is
+     *    read once and then the whole run is discounted.
+     *
+     *    The file's OWNER is a fact; who among N declared rows edited it is not
+     *    recoverable from a diff. So the report states the fact and stops
+     *    guessing, and it is COLLAPSED to one line per owning row -- the same
+     *    fix rule A already had, which rule B never got.
+     *
+     * 2. AN AUTO-DETECTED MULTI-ROW ACTOR IS AN INTEGRATION RANGE, NOT A MODULE
+     *    BRANCH. `--base main` resolves 20 rows from 20 commit trailers.
+     *    Demanding that every one of 171 changed files be owned by one of those
+     *    20 is not rule B's contract ("the declared actor stayed inside its own
+     *    rows"); it is "these commits do not say who changed core/paths.ts",
+     *    which is a gap in COMMIT METADATA on work that already landed.
+     *
+     *    Conflating the two is what produced a red run on a clean tree, and a
+     *    gate that red-lights a clean tree gets switched off by the first person
+     *    it blocks. So on an AUTO-DETECTED multi-row actor an undeclared owner is
+     *    an attribution NOTE. With an EXPLICIT `--as` it stays a hard failure,
+     *    for the same reason an explicit `--as` typo does: a list somebody typed
+     *    is a claim about the change set, and this script does not soften those.
+     *
+     * A file that no row owns at all stays a violation in both modes -- that is
+     * not an attribution gap, it is a hole in the partition.
+     */
     const ids = new Set(declaredRows.map((r) => r.id))
+    const integration = opts.actorWasExplicit !== true && declaredRows.length > 1
+    /** owner id -> files, for the collapsed report. */
+    const undeclared = new Map()
     for (const f of scoped) {
       if (ownersOf(f).some((o) => ids.has(o))) continue
-      // Report against the row whose own mustNotTouch names the file, so the
-      // message names the contribution point rather than an arbitrary row.
-      const blamed =
-        declaredRows.find((r) => forbiddenFor(r).rules.some((rule) => rule.test(f))) ??
-        declaredRows[0]
-      check(blamed, f, `RULE B (declared actor${ids.size > 1 ? 's' : ''})`)
+      const owners = ownersOf(f)
+      if (owners.length === 0) {
+        // Nobody owns it. check:partition says the same from the other side, and
+        // it is a violation whoever is acting.
+        problems.push(
+          `RULE B (declared actor${ids.size > 1 ? 's' : ''}): ${f}\n` +
+            `    is owned by NO row of docs/parity/modules.json, so there is no owner to ` +
+            `attribute it to.\n` +
+            `    Every file under src/ belongs to exactly one row -- add it to one, or delete ` +
+            `it.\n` +
+            `    ${hintFor(f)}`
+        )
+        continue
+      }
+      if (!integration) {
+        check(declaredRows[0], f, `RULE B (declared actor${ids.size > 1 ? 's' : ''})`)
+        continue
+      }
+      const owner = owners.join('+')
+      undeclared.set(owner, [...(undeclared.get(owner) ?? []), f])
+    }
+    if (undeclared.size > 0) {
+      notes.push(
+        `NOTE (not a violation): ${[...undeclared.values()].reduce((n, l) => n + l.length, 0)} ` +
+          `changed file(s) are owned by ${undeclared.size} row(s) that no commit in this range\n` +
+          `    declares with a \`Module:\` trailer. This is an ATTRIBUTION GAP in the commit ` +
+          `metadata, not a\n` +
+          `    mustNotTouch violation: each file is owned by exactly one row, and which of the ` +
+          `${ids.size}\n` +
+          `    declared actors edited it is not recoverable from a diff.\n` +
+          [...undeclared]
+            .sort()
+            .map(([owner, list]) => `      ${owner}: ${list.length} file(s) -- ${list[0]}${list.length > 1 ? ', …' : ''}`)
+            .join('\n') +
+          `\n    To make these violations instead of notes, name the actors: --as ` +
+          `${[...ids].join(',')},${[...undeclared.keys()].join(',')}`
+      )
     }
   } else {
     // RULE A. Any feature row in the set claims the whole set.
@@ -333,6 +418,62 @@ export function evaluate(files, actorName, opts = {}) {
             `either make it a path or teach scripts/check-ownership.mjs about it.`
         )
       }
+    }
+
+    /**
+     * RULE C - AN UNATTRIBUTED HOTSPOT EDIT. The hole rule A left open, and the
+     * one this script's own header (lines 7-14) says it exists to close.
+     *
+     * MEASURED, on the delivered tree: three lines appended to
+     * `src/renderer/src/main.ts` - the exact edit the header names - and
+     *
+     *     node scripts/check-ownership.mjs --self-test
+     *       -> `1 under src/`, `check:ownership: clean`, EXIT 0
+     *
+     * Rule A needs a FEATURE file co-present to have an actor to attribute the
+     * set to. With the shared edit alone there is no feature row in the set, so
+     * rule A finds no actor and reports nothing. That makes the remedy this
+     * script prints - "split it into its own commit against the owning row" -
+     * into the evasion: do exactly as told and the check goes quiet.
+     *
+     * So an edit to a file that FEATURE rows are forbidden to touch is not
+     * "clean" merely because nobody claimed it. It is unattributed, and the
+     * difference between a legitimate `core-renderer` change and a module
+     * author's shared-file edit is a declaration - one word, and the branch name
+     * or a `Module:` trailer supplies it without anyone remembering a flag.
+     *
+     * This DOES mean an undeclared core commit fails. That is the point: 40 of
+     * the 55 rows are told not to touch these files, 25 more modules land on
+     * them, and "who changed this" has to have an answer. It is deliberately
+     * NARROW - only files a feature row's own mustNotTouch names, only when no
+     * actor resolved, and never for a file some feature row in the set owns
+     * (rule A already reports those, above).
+     */
+    const featureRows = modules.filter(isFeatureRow)
+    for (const f of scoped) {
+      if (shared.has(f) || crossed.has(f)) continue
+      const owners = ownersOf(f)
+      if (featureRows.some((r) => owners.includes(r.id))) continue
+      const named = featureRows.find((r) => forbiddenFor(r).rules.some((rule) => rule.test(f)))
+      if (!named) continue
+      const why = forbiddenFor(named).rules.find((r) => r.test(f))?.why
+      const forbidding = featureRows.filter((r) =>
+        forbiddenFor(r).rules.some((rule) => rule.test(f))
+      ).length
+      problems.push(
+        `RULE C (unattributed): ${f}\n` +
+          `    is owned by ${owners.join(', ') || '(nobody)'} and named as '${why}' in the ` +
+          `mustNotTouch list of ${forbidding} feature row(s),\n` +
+          `    and this change set declares NO actor - so nothing here distinguishes a ` +
+          `legitimate ${owners[0] ?? 'core'} change\n` +
+          `    from a module author's shared-file edit in its own commit, which is the ` +
+          `evasion rule A could not see.\n` +
+          `    SAY WHO IS ACTING: --as ${owners[0] ?? '<row>'}, a \`Module: ${owners[0] ?? '<row>'}\`` +
+          ` commit trailer, or a branch named\n` +
+          `    core/${(owners[0] ?? '').replace(/^core-/, '') || '<piece>'}. If the answer is a ` +
+          `feature module, the answer is the contribution point:\n` +
+          `    ${hintFor(f)}`
+      )
     }
 
     for (const [file, rows] of shared) {
@@ -479,15 +620,42 @@ function detectActor(base) {
     }
   }
 
-  let trailer = null
+  /**
+   * EVERY `Module:` trailer IN THE RANGE, not the first one `exec` finds.
+   *
+   * THE MEASUREMENT. `node scripts/check-ownership.mjs --base main` on the
+   * UNMODIFIED delivered tree exited 1 with 163 violations, and 163 of 163 were
+   * false positives: every one a file owned by exactly one legitimate row,
+   * blamed on M36. `main...HEAD` spans 22 commits with 22 trailers; `exec`
+   * returns the first match, `git log` prints newest first, so the actor for a
+   * thirteen-module integration range was whichever module committed last.
+   *
+   * A range's actor is the UNION of what its commits declare. Rule B already
+   * takes a list (that is the M35+M36 fix), so this is one regex flag and a Set
+   * - and it turns the flagship gate from "163 red lines on a clean tree",
+   * which is a gate people switch off, into "clean".
+   *
+   * A trailer that names no row is still reported, and still does not disarm
+   * anything: see the note in `evaluate()`.
+   */
+  let trailers = []
   try {
     const range = base ? `${base}...HEAD` : '-1'
     const log = base ? git(['log', '--format=%B', range]) : git(['log', '-1', '--format=%B'])
-    trailer = /^Module:\s*(\S+)\s*$/m.exec(log)?.[1] ?? null
+    trailers = [...new Set([...log.matchAll(/^Module:[ \t]*(\S+)[ \t]*$/gm)].map((m) => m[1]))]
+    // One trailer may itself be a list: `Module: M35,M36`.
+    trailers = [...new Set(trailers.flatMap((t) => t.split(',').map((x) => x.trim())))].filter(
+      Boolean
+    )
   } catch {
-    trailer = null
+    trailers = []
   }
-  if (trailer) return { name: trailer, from: 'a Module: commit trailer' }
+  if (trailers.length > 0) {
+    return {
+      name: trailers.join(','),
+      from: `${trailers.length} Module: commit trailer(s) in ${base ? `${base}...HEAD` : 'HEAD'}`
+    }
+  }
 
   let branch = ''
   try {
@@ -554,13 +722,47 @@ function selfTest() {
       because: 'features/** is in every feature row s mustNotTouch'
     },
     {
-      name: 'a legitimate core-renderer change with no actor',
+      /**
+       * THIS FIXTURE USED TO EXPECT `pass`, AND THAT EXPECTATION WAS THE BUG.
+       *
+       * Its stated reason was "a check that failed here would fail every core
+       * commit and be switched off inside a week". True of a check with no
+       * remedy; this one has a one-word remedy and states it, and the same
+       * shape is the evasion the header (lines 7-14) says this script exists to
+       * catch: a lone `src/renderer/src/main.ts` edit, in its own commit,
+       * reported `clean` at exit 0 -- which is the split-it-out remedy the
+       * script itself recommends, turned into a way past the gate.
+       *
+       * An undeclared core commit now fails, and `--as core-renderer`, a
+       * `Module: core-renderer` trailer or a `core/renderer` branch name makes
+       * it pass (the next fixture). That is the whole cost.
+       */
+      name: 'an UNATTRIBUTED core-renderer change: the false negative',
       files: ['src/renderer/src/main.ts', 'src/renderer/src/core/seekbar-host.ts'],
+      actor: null,
+      expect: 'fail',
+      needle: 'RULE C',
+      because:
+        'MEASURED on the delivered tree: three lines appended to src/renderer/src/main.ts ' +
+        'gave `1 under src/` and `check:ownership: clean`, exit 0 -- the exact edit this ' +
+        'script was written for'
+    },
+    {
+      name: 'the three-line main.ts edit ALONE, no actor: still the false negative',
+      files: ['src/renderer/src/main.ts'],
+      actor: null,
+      expect: 'fail',
+      needle: 'RULE C',
+      because: 'rule A needs a feature file co-present, so on its own it saw nothing at all'
+    },
+    {
+      name: 'a file NO feature row is forbidden to touch, unattributed',
+      files: ['src/main/features/index.ts'],
       actor: null,
       expect: 'pass',
       because:
-        'no feature row is in the set, so rule A has no actor to attribute it to. A check ' +
-        'that failed here would fail every core commit and be switched off inside a week.'
+        'rule C is deliberately narrow: only files a feature row\'s own mustNotTouch names. ' +
+        'It is not a general "declare an actor for everything" rule.'
     },
     {
       name: 'the same core change, declared as core-renderer',
@@ -614,6 +816,58 @@ function selfTest() {
       because: 'a list of actors widens the actor, never the permission'
     },
     {
+      /**
+       * THE FALSE POSITIVE, as a fixture. `--base main` on the unmodified
+       * delivered tree exited 1 with 163 violations, 163 of 163 misblamed,
+       * because `detectActor` took the FIRST `Module:` trailer `exec` found and
+       * `git log` prints newest first -- so a thirteen-module integration range
+       * was attributed to whichever module committed last.
+       */
+      name: 'an integration range: the trailer union covers every row that changed',
+      files: [
+        'src/main/features/stream-open/index.ts',
+        'src/main/features/mediainfo/index.ts',
+        'src/renderer/src/core/feature-host.test.ts'
+      ],
+      actor: 'M35,M29,core-renderer',
+      explicit: false,
+      expect: 'pass',
+      because:
+        'the union of what the range declares is the range actor; taking one trailer out of ' +
+        '20 produced 163 red lines on a clean tree'
+    },
+    {
+      name: 'an AUTO-DETECTED integration range still reports a file NOBODY owns',
+      files: ['src/main/features/stream-open/index.ts', 'src/main/brand-new-thing.ts'],
+      actor: 'M35,M29',
+      explicit: false,
+      expect: 'fail',
+      because:
+        'an attribution gap is a note; a hole in the partition is not. check:partition says ' +
+        'the same thing from the other side.'
+    },
+    {
+      name: 'an undeclared OWNER in an auto-detected range is a note, not a violation',
+      files: ['src/main/features/stream-open/index.ts', 'src/main/core/paths.ts'],
+      actor: 'M35,M29',
+      explicit: false,
+      expect: 'pass',
+      note: 'ATTRIBUTION GAP',
+      because:
+        'which of N declared actors edited core/paths.ts is not recoverable from a diff, and ' +
+        'reporting it as a mustNotTouch violation is what red-lit the delivered tree'
+    },
+    {
+      name: 'the same range declared EXPLICITLY keeps the strict rule',
+      files: ['src/main/features/stream-open/index.ts', 'src/main/core/paths.ts'],
+      actor: 'M35,M29',
+      explicit: true,
+      expect: 'fail',
+      because:
+        'a list somebody typed is a claim about the change set; this script does not soften ' +
+        'those, exactly as it does not soften an explicit --as typo'
+    },
+    {
       name: 'an EXPLICIT --as that names no row is the callers typo',
       files: ['src/main/features/stream-open/index.ts'],
       actor: 'M35,M36,M99zz',
@@ -639,7 +893,9 @@ function selfTest() {
 
   const failures = []
   for (const c of cases) {
-    const { problems } = evaluate(c.files, c.actor, { actorWasExplicit: c.explicit === true })
+    const { problems, notes } = evaluate(c.files, c.actor, {
+      actorWasExplicit: c.explicit === true
+    })
     // A fixture that expects a failure and gets one for the WRONG REASON is the
     // shape of check this repo keeps finding, so the reason is asserted too.
     if (c.needle && !problems.some((pr) => pr.includes(c.needle))) {
@@ -647,6 +903,12 @@ function selfTest() {
         `${c.name}
       expected a problem mentioning '${c.needle}', got: ` +
           (problems.join(' | ') || '(none)')
+      )
+    }
+    if (c.note && !notes.some((n) => n.includes(c.note))) {
+      failures.push(
+        `${c.name}
+      expected a NOTE mentioning '${c.note}', got: ` + (notes.join(' | ') || '(none)')
       )
     }
     const got = problems.length > 0 ? 'fail' : 'pass'
