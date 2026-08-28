@@ -21,7 +21,9 @@
  * `npm run verify` stays headless. Run it before you tag.
  */
 import { execFileSync, spawn } from 'node:child_process'
+import { listProcesses, machineWideMpvCount, orphansAfterQuit, snapshot } from './lib/mpv-procs.mjs'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -38,17 +40,25 @@ const sample = ['samples/bbb_long.mp4', 'samples/bbb.mp4']
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-/** How many mpv.exe processes are running right now. */
-function countMpv() {
-  try {
-    const out = execFileSync('tasklist', ['/FI', 'IMAGENAME eq mpv.exe', '/NH'], {
-      encoding: 'utf8'
-    })
-    return (out.match(/mpv\.exe/g) ?? []).length
-  } catch {
-    return -1
-  }
-}
+/**
+ * `countMpv()` IS GONE, and the reason is worth keeping.
+ *
+ * It was `tasklist /FI "IMAGENAME eq mpv.exe"` -- a machine-wide count with no
+ * attribution -- and line 331 below turned it into
+ *
+ *     orphans = countMpv() - (mpvBefore - 1)
+ *
+ * a DELTA. An unrelated mpv exiting inside the quit window subtracts one, so a
+ * genuine orphan reports 0. That is a false PASS, in the file whose own comment
+ * reads "THIS IS THE LINE THAT USED TO LIE". The same count in
+ * `check-network.mjs` produced the mirror-image failure: "FAILED: 4 orphaned
+ * mpv.exe" on an unchanged tree, on four processes belonging to a different
+ * checkout, 3 runs out of 4.
+ *
+ * `scripts/lib/mpv-procs.mjs` records the pids this app is an ancestor of while
+ * it is running, and asks afterwards which of THOSE are still alive. Its
+ * fixtures are the two measured failures.
+ */
 
 /**
  * `--packaged` drives `dist/win-unpacked/RLPlayer.exe` instead of the dev
@@ -139,17 +149,73 @@ async function pressKey(s, code, key, windowsVirtualKeyCode) {
   await s.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
 }
 
+/**
+ * A fresh profile whose mpv.conf gives the sample THREE CHAPTERS.
+ *
+ * Why this is here rather than a chaptered file in `samples/`: the seek-bar
+ * assertions below are about M25's contributed layer, and M25 draws nothing at
+ * all when a file has fewer than two chapters. With the plain sample, "the
+ * tooltip composed one fragment" and "Tab reached no handle" are both true of a
+ * perfectly wired build, so the assertions would have to be softened to the
+ * point of proving nothing -- which is the failure mode this whole round is
+ * about.
+ *
+ * It needs no external tool and no checked-in binary. `--chapters-file` takes an
+ * FFMETADATA file (the OGM `CHAPTER01=` form is silently ignored by the pinned
+ * build -- measured: 0 chapters), and P06 already makes `<dataDir>/mpv.conf` a
+ * supported way to pass mpv options, so this exercises a real product feature
+ * rather than a test hook. Forward slashes: mpv accepts them on Windows and they
+ * survive the config parser without escaping.
+ */
+function profileWithChapters() {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'rlplayer-e2e-'))
+  const meta = path.join(home, 'chapters.ffmeta')
+  fs.writeFileSync(
+    meta,
+    [
+      ';FFMETADATA1',
+      '[CHAPTER]',
+      'TIMEBASE=1/1000',
+      'START=0',
+      'END=60000',
+      'title=Intro',
+      '[CHAPTER]',
+      'TIMEBASE=1/1000',
+      'START=60000',
+      'END=180000',
+      'title=Middle',
+      '[CHAPTER]',
+      'TIMEBASE=1/1000',
+      'START=180000',
+      'END=560000',
+      'title=End',
+      ''
+    ].join('\n')
+  )
+  fs.writeFileSync(path.join(home, 'mpv.conf'), `chapters-file=${meta.replace(/\\/g, '/')}\n`)
+  return home
+}
+
 async function main() {
   if (!sample) throw new Error('no sample video under samples/; cannot drive playback')
 
+  const home = profileWithChapters()
   // The packaged exe IS the app; the dev binary needs the app directory as argv[1].
   const launchArgs = PACKAGED ? [] : [repo]
   const child = spawn(
     electronBinary(),
     [...launchArgs, `--remote-debugging-port=${PORT}`, '--remote-allow-origins=*', sample],
-    { cwd: repo, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: false }
+    {
+      cwd: repo,
+      env: { ...process.env, RLPLAYER_HOME: home },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: false
+    }
   )
-  console.log(`driving ${PACKAGED ? 'the PACKAGED build' : 'the dev build'}`)
+  console.log(
+    `driving ${PACKAGED ? 'the PACKAGED build' : 'the dev build'} on a fresh profile at ${home}` +
+      `\n  (its mpv.conf gives the sample 3 chapters, so M25's layer has something to draw)`
+  )
   const mainLog = []
   child.stdout.on('data', (d) => mainLog.push(String(d)))
   child.stderr.on('data', (d) => mainLog.push(String(d)))
@@ -240,14 +306,49 @@ async function main() {
 
   // Prove the overlay is still alive rather than merely quiet: a dead renderer
   // also produces zero errors.
+  /**
+   * The seek bar, driven for real.
+   *
+   * A pointermove over the middle of the bar has to produce a tooltip built from
+   * MORE THAN ONE fragment -- core's timecode plus at least the chapter layer's
+   * -- and Tab has to land on a contributed handle. Both were true of the unit
+   * tests and false of the shipped overlay: `SeekbarHost.tooltips()`, `.key()`
+   * and `.focusHandle()` had no production call sites at all, and `main.ts`
+   * returned early on every arrow key inside a range input, which the seek bar
+   * is. This is the assertion a unit test structurally cannot make.
+   */
   const probe = await s.send('Runtime.evaluate', {
-    expression: `JSON.stringify({
-      panels: document.querySelectorAll('#panelRoot .panel').length,
-      layers: document.querySelectorAll('#seekLayers > *').length,
-      title: document.getElementById('mediaTitle')?.textContent ?? '',
-      time: document.getElementById('timeNow')?.textContent ?? '',
-      duration: document.getElementById('timeTotal')?.textContent ?? ''
-    })`,
+    expression: `(() => {
+      const seek = document.getElementById('seek')
+      const r = seek.getBoundingClientRect()
+      const at = (frac) => new PointerEvent('pointermove', {
+        clientX: r.left + r.width * frac, clientY: r.top + r.height / 2, bubbles: true
+      })
+      // Sweep: a chapter tick is a few pixels wide, so one sample can miss it.
+      let tipFragments = 0
+      for (let i = 1; i < 40; i++) {
+        seek.dispatchEvent(at(i / 40))
+        const n = document.getElementById('seekHover')?.childElementCount ?? 0
+        if (n > tipFragments) tipFragments = n
+      }
+      seek.focus()
+      let focusables = 0
+      for (let i = 0; i < 8; i++) {
+        seek.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+        if (seek.dataset.seekHandle) focusables++
+      }
+      return JSON.stringify({
+        panels: document.querySelectorAll('#panelRoot .panel').length,
+        layers: document.querySelectorAll('#seekLayers > *').length,
+        transportButtons: document.querySelectorAll('#transportExtras [data-transport-button]').length,
+        ticks: document.querySelectorAll('#seekLayers .seek-chapter-tick').length,
+        tipFragments,
+        focusables,
+        title: document.getElementById('mediaTitle')?.textContent ?? '',
+        time: document.getElementById('timeNow')?.textContent ?? '',
+        duration: document.getElementById('timeTotal')?.textContent ?? ''
+      })
+    })()`,
     returnByValue: true
   })
   const dom = JSON.parse(probe.result.value)
@@ -301,11 +402,14 @@ async function main() {
   // and mpv is orphaned -- by the harness, not by the app. Quit the way a user
   // does and then check, because "no orphan mpv on quit" is a v0.1 guarantee
   // and this is the only place that exercises it.
-  let orphans = -1
+  let orphans = []
+  let ourMpv = []
   let quitMs = -1
   let hadToKill = false
   if (!KEEP) {
-    const mpvBefore = countMpv()
+    // The pids THIS app spawned, recorded while it is still running to be an
+    // ancestor of them. Anything else on the machine is somebody else's.
+    ourMpv = child.pid === undefined ? [] : snapshot(child.pid)
     const t0 = Date.now()
     await s.send('Runtime.evaluate', { expression: 'window.rlplayer.window.close()' }).catch(() => {})
     for (let i = 0; i < 40 && child.exitCode === null; i++) await sleep(250)
@@ -328,7 +432,10 @@ async function main() {
     }
     quitMs = Date.now() - t0
     await sleep(1200)
-    orphans = countMpv() - (mpvBefore - 1)
+    // …AND THE LINE BELOW IT, which lied differently: it was
+    // `countMpv() - (mpvBefore - 1)`, a delta over a machine-wide count, so an
+    // unrelated mpv exiting in this same window cancelled a real orphan out.
+    orphans = orphansAfterQuit(ourMpv, listProcesses())
     s.close()
   }
 
@@ -346,7 +453,16 @@ async function main() {
   console.log(
     `quit                        : ${hadToKill ? 'FORCE-KILLED by the harness' : `${quitMs} ms`}`
   )
-  console.log(`orphan mpv after quit       : ${orphans}`)
+  console.log(
+    `mpv spawned / orphaned      : ${ourMpv.length} / ${orphans.length}` +
+      (orphans.length > 0 ? ` (pid ${orphans.join(', ')})` : '') +
+      `  [${machineWideMpvCount(listProcesses())} mpv.exe on this machine, ` +
+      `attribution by ParentProcessId]`
+  )
+  console.log(`chapter ticks drawn         : ${dom.ticks}`)
+  console.log(`seek tooltip fragments      : ${dom.tipFragments}`)
+  console.log(`transport buttons mounted   : ${dom.transportButtons}`)
+  console.log(`seek-bar handles Tab reaches: ${dom.focusables}`)
   for (const e of [...before, ...after, ...settings.errors]) console.log('  ' + e)
 
   const failures = []
@@ -370,7 +486,38 @@ async function main() {
         'report "clean". The settings window being open is the known cause.'
     )
   }
-  if (orphans > 0) failures.push(`${orphans} orphaned mpv.exe after a graceful quit`)
+  if (orphans.length > 0) {
+    failures.push(
+      `${orphans.length} orphaned mpv.exe after a graceful quit: pid ${orphans.join(', ')}. ` +
+        `Attributed by ParentProcessId, so an mpv from another checkout is not one of them.`
+    )
+  }
+  // A1's wiring, in the packaged build. `tooltips()`, `key()` and
+  // `focusHandle()` were implemented, documented and unit-tested while having
+  // ZERO production call sites -- a unit test cannot tell you that, because the
+  // unit test WAS the only caller.
+  if (dom.transportButtons === 0) {
+    failures.push('no contributed transport button mounted (ctx.transportButton is dead)')
+  }
+  if (dom.ticks < 3) {
+    failures.push(
+      `${dom.ticks} chapter ticks on the bar; the profile's mpv.conf asks for 3. Without them ` +
+        `every seek-bar assertion below is vacuously true, so this is checked FIRST.`
+    )
+  }
+  if (dom.tipFragments < 2) {
+    failures.push(
+      `the seek tooltip composed ${dom.tipFragments} fragment(s); core's timecode plus at ` +
+        `least one layer's is 2. A single fragment means main.ts is assigning the readout ` +
+        `again and the layers' tooltip() is dead code, which is how it shipped.`
+    )
+  }
+  if (dom.focusables === 0) {
+    failures.push(
+      'Tab reaches no seek-bar handle, so host rule 4 (keyboard equivalence) is unsatisfiable ' +
+        'again -- which is what main.ts:464 returning early on arrows made it'
+    )
+  }
   if (failures.length > 0) {
     console.error('\ne2e-overlay FAILED:')
     for (const f of failures) console.error('  - ' + f)

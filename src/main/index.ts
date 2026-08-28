@@ -334,6 +334,42 @@ async function main(): Promise<void> {
   broadcastKeybinds()
   pushState()
 
+  /**
+   * PROOF OF LIFE, on stdout, once, at the point the app is genuinely up.
+   *
+   * `scripts/check-network.mjs` asserts on the ABSENCE of network events, and a
+   * netlog with zero events is the PASSING shape -- so a launch that died before
+   * it opened a window sailed through as a clean run. Its only liveness gate was
+   * `/\[no-network\]/`, which `console.log` prints at MODULE SCOPE, before
+   * `app.whenReady()`, before any window exists and before a single line of this
+   * function has run. It proved that the process started, which was never the
+   * question. Seven of 36 observed netlogs were header-only and two of those
+   * exited cleanly, including the decisive `--no-blackhole` step.
+   *
+   * This line runs after the windows are shown and the modules are loaded, so a
+   * harness that requires it is requiring a session that actually happened.
+   */
+  console.log(
+    `[ready] windows shown, ${registry.modules().filter((m) => m.ok).length}/` +
+      `${registry.modules().length} modules loaded, engine ${mpvBus.playerState.idle ? 'idle' : 'playing'}`
+  )
+
+  /**
+   * The settings window, opened on demand by a harness.
+   *
+   * It is the app's ONLY page with text inputs, which is the exact surface the
+   * gvt1.com spellchecker leak lived on -- and `check-network.mjs` only ever
+   * opened a sample video, so the one page that caused the 0.1.0 defect was
+   * never exercised by the check written to prevent it. An env var rather than a
+   * command-line flag, and named for what it is, so it cannot be reached by a
+   * user and shows up in a support log if it ever is. Same shape as the DNS
+   * blackhole override in core/no-network.ts, and for the same reason.
+   */
+  if (process.env['RLPLAYER_E2E_OPEN_SETTINGS'] === '1') {
+    openSettingsWindow()
+    console.log('[e2e] settings window opened')
+  }
+
   if (portableFallback()) toast(t('core.portableFallback'), 'error')
 
   const files = filesFromArgv(process.argv)
@@ -447,10 +483,16 @@ app.on('before-quit', (event) => {
   }, QUIT_WATCHDOG_MS)
   watchdog.unref?.()
 
+  const quitStart = Date.now()
   void shutdown()
     .catch((e: Error) => console.error('[quit] shutdown threw:', e.stack ?? e.message))
     .finally(() => {
       clearTimeout(watchdog)
+      // The other half of the proof. A harness that force-kills the app writes
+      // no netlog events at all and no quit line, so "0 events" and "clean quit"
+      // stop being the same sentence: this one is only printed by the path that
+      // actually ran the shutdown hooks and reaped mpv.
+      console.log(`[quit] clean exit in ${Date.now() - quitStart} ms`)
       app.exit(0)
     })
 })

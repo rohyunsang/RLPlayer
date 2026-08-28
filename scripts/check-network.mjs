@@ -27,6 +27,34 @@
  * the request ever reaches a socket. It runs the PACKAGED app, with a fresh
  * profile per launch, and fails loudly on the first non-local URL or hostname.
  *
+ * THREE THINGS THIS FILE GOT WRONG, all measured, all fixed below.
+ *
+ *   A. IT PASSED NETLOGS THAT RECORDED NOTHING. `parseNetlog` threw only when
+ *      the string `"events"` was absent, so a header-only ~46,688-byte file
+ *      yielded `eventCount = 0, violations = 0` -- which is exactly the shape of
+ *      a clean run. 7 of 36 observed netlogs were header-only and 2 of those
+ *      exited cleanly, including the decisive `--no-blackhole` step at
+ *      ci.yml:146. The only liveness gate was `/\[no-network\]/`, and
+ *      `src/main/index.ts` prints that line at MODULE SCOPE, before
+ *      `app.whenReady()` -- so it proved the process started and nothing else.
+ *      A clean run now has to prove it happened: a minimum event count, the
+ *      `[ready]` line the app prints AFTER its windows are shown, and the
+ *      `[quit]` line only the graceful shutdown path prints.
+ *
+ *   B. IT NEVER OPENED THE SETTINGS WINDOW. That is the app's only page with
+ *      text inputs, and it is the exact surface the gvt1.com spellchecker leak
+ *      lived on -- so the check written to prevent that defect never exercised
+ *      the page that caused it. Every launch opens it now.
+ *
+ *   C. ITS ORPHAN COUNT WAS MACHINE-WIDE. `mpvCount()` was
+ *      `tasklist /FI "IMAGENAME eq mpv.exe"` with no attribution, so
+ *      `npm run check:network -- --launches=6 --seconds=10` -- the exact CI
+ *      invocation -- reported "FAILED: 4 orphaned mpv.exe" on an unchanged tree.
+ *      All four belonged to a different checkout. It failed 3 of 4 runs on
+ *      identical bits, and line 305 made that a hard red. A gate that
+ *      red-lights clean trees is disabled by the first person it blocks.
+ *      `scripts/lib/mpv-procs.mjs` tracks the pids the app actually spawned.
+ *
  * Run:  node scripts/check-network.mjs [--launches=3] [--seconds=12] [--build]
  *       node scripts/check-network.mjs --no-blackhole   (see below)
  *
@@ -38,6 +66,7 @@
  * file exists to make impossible to miss again.
  */
 import { execFileSync, spawn } from 'node:child_process'
+import { listProcesses, machineWideMpvCount, orphansAfterQuit, snapshot } from './lib/mpv-procs.mjs'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -87,6 +116,37 @@ function packagedExe() {
 // Chromium finalises the JSON on clean shutdown. A killed process leaves the
 // events array open, and "the app had to be killed" is exactly the run whose
 // evidence matters most — so the parser never depends on the closing bracket.
+
+/**
+ * WHAT A REAL SESSION LEAVES IN THE NETLOG, measured rather than assumed.
+ *
+ * A clean launch of the packaged build -- overlay up, sample playing, settings
+ * window opened, graceful quit -- writes exactly 11 events, and the same seven
+ * types every time. It is a small number because everything this app loads is
+ * `file:` and never touches the network stack; that is the product working. The
+ * header-only files this check used to PASS had zero.
+ *
+ * So the floor is 8: below every observed real run, far above every observed
+ * dead one, and deliberately not tuned close to 11. Its job is to separate "a
+ * session happened" from "the file has a header", not to police how many events
+ * a session ought to have.
+ */
+const MIN_NETLOG_EVENTS = 8
+
+/**
+ * Two event types that BRACKET a real session, which is stronger than a count.
+ *
+ *   PROXY_CONFIG_CHANGED  -- `applySessionPolicy()` sets `{ mode: 'direct' }`,
+ *     and that runs as the first statement after `app.whenReady()`. Its presence
+ *     means the app got past startup, not merely that a process existed.
+ *   QUIC_SESSION_POOL_CLOSE_ALL_SESSIONS -- Chromium tears the network stack
+ *     down on a clean shutdown. A force-killed process never writes it.
+ *
+ * Both were present on every observed clean launch and on neither header-only
+ * file. Requiring the pair means the netlog itself testifies that the session
+ * started and ended, rather than the harness inferring it from a count.
+ */
+const REQUIRED_NETLOG_EVENTS = ['PROXY_CONFIG_CHANGED', 'QUIC_SESSION_POOL_CLOSE_ALL_SESSIONS']
 
 function parseNetlog(file) {
   const text = fs.readFileSync(file, 'utf8')
@@ -164,7 +224,8 @@ function violations(file) {
       if (!LOCAL_HOST.has(bare)) add('connect', `${type}  ${p.address}`)
     }
   }
-  return { out, eventCount: events.length }
+  const seenTypes = new Set(events.map((e) => types[e.type]).filter(Boolean))
+  return { out, eventCount: events.length, seenTypes }
 }
 
 // --- 3. one cold launch -----------------------------------------------------
@@ -194,6 +255,10 @@ async function oneLaunch(exe, n, dir) {
 
   const env = { ...process.env, RLPLAYER_HOME: home }
   if (NO_BLACKHOLE) env['RLPLAYER_UNSAFE_NO_DNS_BLACKHOLE'] = '1'
+  // B: the settings window is the app's ONLY page with text inputs, and the
+  // gvt1.com dictionary download happened because of them. A network check that
+  // never opens it is not checking the surface the defect was on.
+  env['RLPLAYER_E2E_OPEN_SETTINGS'] = '1'
 
   const args = [`--log-net-log=${netlog}`]
   if (sample) args.push(sample)
@@ -205,6 +270,10 @@ async function oneLaunch(exe, n, dir) {
   const t0 = Date.now()
   const deadline = t0 + SECONDS * 1000
   while (Date.now() < deadline && child.exitCode === null) await sleep(250)
+
+  // C: the mpv processes THIS app spawned, by ancestor walk, recorded while it
+  // is still running. Anything else on the machine is somebody else's.
+  const ourMpv = child.pid !== undefined ? snapshot(child.pid) : []
 
   // WM_CLOSE first, which is what a user's title-bar X does and what
   // `before-quit` needs in order to run and finalise the netlog.
@@ -236,34 +305,74 @@ async function oneLaunch(exe, n, dir) {
   const stdout = log.join('')
   if (!/\[no-network\]/.test(stdout)) {
     throw new Error(
-      `launch ${n}: the app never printed its [no-network] policy line, so it did not ` +
-        `finish starting. A zero-event netlog from a dead app is not a clean run.
+      `launch ${n}: the app never printed its [no-network] policy line, so it did not even ` +
+        `reach module scope. A zero-event netlog from a dead app is not a clean run.
 ` +
         stdout.slice(-2000)
     )
   }
 
-  const { out, eventCount } = violations(netlog)
-  const mpv = mpvCount()
+  const { out, eventCount, seenTypes } = violations(netlog)
+
+  // A: a clean run has to look like a run. Each of these was false on at least
+  // one observed launch that this check reported as a pass.
+  const proof = []
+  if (eventCount < MIN_NETLOG_EVENTS) {
+    proof.push(
+      `the netlog holds ${eventCount} events (floor ${MIN_NETLOG_EVENTS}). A header-only file ` +
+        `is indistinguishable from a perfectly clean session unless the floor is checked, and ` +
+        `7 of 36 observed netlogs were header-only.`
+    )
+  }
+  for (const required of REQUIRED_NETLOG_EVENTS) {
+    if (!seenTypes.has(required)) {
+      proof.push(
+        `the netlog has no ${required}. That event is written by every clean session of this ` +
+          `app and by no dead one, so its absence means the run did not happen the way a ` +
+          `user's does -- and a run that did not happen records no violations either.`
+      )
+    }
+  }
+  if (!/\[ready\]/.test(stdout)) {
+    proof.push(
+      `the app never printed [ready], so its windows were never shown. The [no-network] line ` +
+        `above is printed at module scope, BEFORE app.whenReady(), and proves only that the ` +
+        `process started.`
+    )
+  }
+  if (!/\[e2e\] settings window opened/.test(stdout)) {
+    proof.push(
+      `the settings window never opened, so the one page in this app with text inputs -- the ` +
+        `surface the gvt1.com spellchecker leak was on -- was not exercised.`
+    )
+  }
+  if (!/\[quit\] clean exit/.test(stdout)) {
+    proof.push(
+      `the app never printed [quit], so the shutdown hooks did not run to completion. A ` +
+        `force-killed app writes no events either, which is why "0 events" alone is not a pass.`
+    )
+  }
+
+  const later = listProcesses()
+  const orphans = orphansAfterQuit(ourMpv, later)
   console.log(
     `launch ${n}: ${((Date.now() - t0) / 1000).toFixed(1)}s, ${eventCount} netlog events, ` +
-      `${out.length} violation(s)${hadToForce ? ', HAD TO FORCE-KILL' : ''}, ${mpv} mpv.exe left`
+      `${out.length} violation(s)${hadToForce ? ', HAD TO FORCE-KILL' : ''}, ` +
+      `${ourMpv.length} mpv spawned, ${orphans.length} orphaned ` +
+      `(${machineWideMpvCount(later)} mpv.exe on this machine, most of them nobody's business ` +
+      `of ours)`
   )
   for (const v of out) console.log(`    ${v.kind}: ${v.detail}`)
-  const policy = log.join('').match(/\[no-network\][^\n]*/)?.[0]
+  for (const p of proof) console.log(`    NOT A REAL SESSION: ${p}`)
+  const policy = stdout.match(/\[no-network\][^\n]*/)?.[0]
   if (policy) console.log('    ' + policy)
-  return { violations: out, hadToForce, orphanMpv: mpv }
-}
-
-function mpvCount() {
-  try {
-    const out = execFileSync('tasklist', ['/FI', 'IMAGENAME eq mpv.exe', '/NH'], {
-      encoding: 'utf8'
-    })
-    return (out.match(/mpv\.exe/g) ?? []).length
-  } catch {
-    return -1
-  }
+  const ready = stdout.match(/\[ready\][^\n]*/)?.[0]
+  if (ready) console.log('    ' + ready)
+  const settings = stdout.match(/\[e2e\][^\n]*/)?.[0]
+  if (settings) console.log('    ' + settings)
+  const quit = stdout.match(/\[quit\][^\n]*/)?.[0]
+  if (quit) console.log('    ' + quit)
+  return { violations: out, hadToForce, orphanMpv: orphans, proof, log: stdout }
 }
 
 async function main() {
@@ -278,12 +387,14 @@ async function main() {
 
   const all = []
   let forced = 0
-  let orphans = 0
+  const orphanPids = []
+  const notReal = []
   for (let i = 1; i <= LAUNCHES; i++) {
     const r = await oneLaunch(exe, i, dir)
     all.push(...r.violations)
     if (r.hadToForce) forced++
-    if (r.orphanMpv > 0) orphans += r.orphanMpv
+    orphanPids.push(...r.orphanMpv)
+    for (const p of r.proof) notReal.push(`launch ${i}: ${p}`)
     await sleep(1500)
   }
 
@@ -302,7 +413,16 @@ async function main() {
   // A launch that would not close is a quit-path bug, and this harness must
   // never report it as a clean run the way the old one did.
   if (forced > 0) failures.push(`${forced} launch(es) had to be force-killed; the quit path is broken`)
-  if (orphans > 0) failures.push(`${orphans} orphaned mpv.exe`)
+  if (orphanPids.length > 0) {
+    failures.push(
+      `${orphanPids.length} orphaned mpv.exe THIS APP SPAWNED: pid ${orphanPids.join(', ')}. ` +
+        `These are attributed by ParentProcessId, so an mpv belonging to another checkout is ` +
+        `not one of them -- which is what the machine-wide tasklist count used to report.`
+    )
+  }
+  // The evidence gate. Everything above measures the ABSENCE of something, and
+  // absence is also what a launch that never ran produces.
+  for (const n of notReal) failures.push(n)
 
   if (failures.length > 0) {
     console.error('\ncheck:network FAILED:')
@@ -311,7 +431,10 @@ async function main() {
     process.exit(1)
   }
   if (!KEEP) fs.rmSync(dir, { recursive: true, force: true })
-  console.log('check:network: clean')
+  console.log(
+    `check:network: clean -- ${LAUNCHES} launches, each with the overlay up, a sample playing, ` +
+      `the settings window opened, a graceful quit and no mpv left behind`
+  )
 }
 
 main().catch((e) => {

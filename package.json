@@ -14,7 +14,7 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "dist": "npm run build && electron-builder --win --publish never",
-    "test": "node --test \"src/**/*.test.ts\"",
+    "test": "node --test \"src/**/*.test.ts\" \"scripts/**/*.test.mjs\"",
     "test:property-ownership": "node --test \"src/main/core/mpv/ownership.test.ts\" \"src/main/core/mpv/guards.test.ts\"",
     "test:reserved-args": "node --test \"src/main/core/mpv/reserved.test.ts\" \"src/main/core/mpv/arg-owner.test.ts\"",
     "test:renderer-hosts": "node --test \"src/renderer/src/core/*.test.ts\"",

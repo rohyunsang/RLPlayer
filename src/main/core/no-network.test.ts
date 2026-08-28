@@ -163,3 +163,39 @@ test('the unsafe blackhole override is env-only and loudly named', () => {
     )
   }
 })
+
+test('the settings-window test hook is env-only, loudly named, and read once', () => {
+  /**
+   * `RLPLAYER_E2E_OPEN_SETTINGS` exists because `check-network.mjs` only ever
+   * opened a sample video, and the settings window is the app's ONLY page with
+   * text inputs -- the exact surface the gvt1.com spellchecker leak lived on. So
+   * the check written to prevent that defect never exercised the page that
+   * caused it.
+   *
+   * It gets the same three rules as the DNS blackhole override, for the same
+   * reason: a test hook that a user can reach is a feature nobody documented,
+   * and one that is read in two places is one somebody will read in a third.
+   */
+  const hook = 'RLPLAYER_E2E_OPEN_SETTINGS'
+  const readers = mainSources()
+    // This file names the hook in its own prose; a test that fails on its own
+    // documentation is a test people delete the documentation to satisfy.
+    .filter((f) => !f.endsWith('.test.ts'))
+    .filter((f) => fs.readFileSync(f, 'utf8').includes(hook))
+  assert.deepEqual(
+    readers.map((f) => path.relative(repo, f).split(path.sep).join('/')),
+    ['src/main/index.ts'],
+    'the settings-window test hook must be read in exactly one place'
+  )
+  const index = fs.readFileSync(path.join(repo, 'src/main/index.ts'), 'utf8')
+  const read = `process.env['${hook}']`
+  assert.equal(index.split(read).length - 1, 1, 'the hook is read more than once in index.ts')
+  assert.ok(
+    index.includes(`${read} === '1'`),
+    'the hook must require an exact value, so a stray empty string does not enable it'
+  )
+  assert.ok(
+    !fs.readFileSync(path.join(repo, 'src/main/core/settings/registry.ts'), 'utf8').includes(hook),
+    'the hook must never be reachable from a setting'
+  )
+})
