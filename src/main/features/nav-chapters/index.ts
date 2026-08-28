@@ -31,6 +31,7 @@ function announce(): void {
 
 const mod: FeatureModule = {
   id: 'nav-chapters',
+  dependsOn: ['core-mpv-bus', 'nav-seek', 'playlist'],
   ownsProperties: [
     'chapter',
     'edition',
