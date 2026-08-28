@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { shouldOffer, shouldRemember } from '../../services/resume-rules.ts'
-import type { PerFileService, PerFileSlice } from '@shared/feature-api'
+import type { PerFileService, PerFileSlice, SettingsMigration } from '@shared/feature-api'
 import type { ResumeEntry } from '@shared/types'
 
 /**
@@ -71,6 +71,43 @@ export interface OptsBucket {
 export interface OptsFile extends Record<string, unknown> {
   entries: Record<string, OptsBucket>
 }
+
+/**
+ * The 1 -> 2 migration. It lives HERE, next to the shape it is migrating, and
+ * not inline in `src/main/index.ts` where it was first written -- `index.ts`
+ * imports electron, so a migration declared there cannot be unit-tested, and a
+ * migration nobody can test is one that eats user data in silence. This is the
+ * same reason menu-model.ts is split out of menu.ts.
+ *
+ * The path is unrecoverable for an existing bucket, because the key is a one-way
+ * hash of path+size: it comes back as '' and that bucket simply does not appear
+ * in `storedFiles()` until its file is played again. The SLICE DATA -- the part a
+ * user would notice losing -- is carried across intact.
+ */
+export const OPTS_MIGRATIONS: readonly SettingsMigration[] = [
+  {
+    from: 1,
+    to: 2,
+    up: (data): Record<string, unknown> => {
+      const old = (data['entries'] ?? {}) as Record<string, unknown>
+      const entries: Record<string, unknown> = {}
+      for (const [key, value] of Object.entries(old)) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+        const bucket = value as Record<string, unknown>
+        // Already schema 2 -- a newer build wrote it and then downgraded. Do not
+        // wrap it a second time; that would bury the slices one level deeper and
+        // silently lose every one of them. Verified by a test that fails when
+        // this early-out is removed.
+        if ('slices' in bucket) {
+          entries[key] = bucket
+          continue
+        }
+        entries[key] = { path: '', updatedAt: 0, slices: bucket }
+      }
+      return { entries }
+    }
+  }
+]
 
 export interface StoreLike<T> {
   read(): T

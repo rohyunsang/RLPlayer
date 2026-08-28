@@ -59,6 +59,7 @@ import { OsdBus } from './core/osd/index.ts'
 import { Registry } from './core/registry.ts'
 import { SettingsRegistry } from './core/settings/registry.ts'
 import {
+  OPTS_MIGRATIONS,
   PerFileManager,
   type HistoryFile,
   type OptsFile,
@@ -258,36 +259,13 @@ async function main(): Promise<void> {
       file: filePath('per-file.json'),
       /**
        * SCHEMA 2 adds `path` and `updatedAt` to each bucket, which is what makes
-       * the store cappable and enumerable — see OptsBucket. The 1 -> 2 migration
-       * lifts the old `key -> sliceKey -> fields` shape into `key -> {path,
-       * updatedAt, slices}`. The path is unrecoverable for existing buckets (the
-       * key is a one-way hash), so it comes back as '' and those buckets simply
-       * do not appear in storedFiles() until the file is played again; the SLICE
-       * DATA, which is what the user would notice losing, is carried across
-       * intact.
+       * the store cappable and enumerable — see OptsBucket and OPTS_MIGRATIONS.
        */
       version: 2,
       defaults: { entries: {} },
-      migrations: [
-        {
-          from: 1,
-          to: 2,
-          up: (data) => {
-            const old = (data.entries ?? {}) as Record<string, Record<string, unknown>>
-            const entries: Record<string, unknown> = {}
-            for (const [key, slices] of Object.entries(old)) {
-              if (!slices || typeof slices !== 'object') continue
-              // Already migrated by a newer build that then downgraded: leave it.
-              if ('slices' in slices) {
-                entries[key] = slices
-                continue
-              }
-              entries[key] = { path: '', updatedAt: 0, slices }
-            }
-            return { entries }
-          }
-        }
-      ]
+      // Declared next to the shape it migrates, in core/state/per-file.ts, where
+      // it can be unit-tested: this file imports electron and cannot be.
+      migrations: OPTS_MIGRATIONS
     })
   })
 

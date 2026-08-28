@@ -2,7 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   NEVER_REMEMBERED,
+  OPTS_MIGRATIONS,
   PerFileManager,
+  resumeKey,
+  type OptsBucket,
   type HistoryFile,
   type OptsFile,
   type ResumeFile,
@@ -334,4 +337,69 @@ test('entries stamped within ONE millisecond still evict oldest-first', async ()
   assert.ok(!paths.has('C:/frozen/ep0.mkv'))
   assert.ok(!paths.has('C:/frozen/ep2.mkv'))
   assert.ok(paths.has('C:/frozen/ep1002.mkv'))
+})
+
+test('the 1 -> 2 migration carries the slice data across and does not double-wrap', () => {
+  const [step] = OPTS_MIGRATIONS
+  assert.ok(step && step.from === 1 && step.to === 2)
+
+  const out = step.up({
+    schema: 1,
+    entries: {
+      aaa: { 'subs-sync': { subDelay: -0.4 }, 'nav-bookmarks': { marks: [1, 2] } },
+      bbb: { 'audio-eq': { gains: [1, 2, 3] } },
+      // A bucket a newer build already wrote, seen by an older one that then
+      // upgraded again. Wrapping it a second time would bury the slices a level
+      // deeper and silently lose every one of them.
+      ccc: { path: 'C:/x.mkv', updatedAt: 7, slices: { 'subs-sync': { subDelay: 1 } } },
+      // Junk. Must be dropped, not turned into a bucket with junk inside.
+      ddd: 'not an object',
+      eee: null
+    }
+  }) as { entries: Record<string, OptsBucket> }
+
+  assert.deepEqual(Object.keys(out.entries).sort(), ['aaa', 'bbb', 'ccc'])
+  assert.deepEqual(out.entries.aaa, {
+    path: '',
+    updatedAt: 0,
+    slices: { 'subs-sync': { subDelay: -0.4 }, 'nav-bookmarks': { marks: [1, 2] } }
+  })
+  assert.deepEqual(out.entries.ccc, {
+    path: 'C:/x.mkv',
+    updatedAt: 7,
+    slices: { 'subs-sync': { subDelay: 1 } }
+  })
+})
+
+test('a migrated bucket is readable through the service, and evictable', async () => {
+  // The migration is only correct if the manager can then USE what it produced:
+  // a shape test alone would pass for a bucket the reader cannot open.
+  const migrated = OPTS_MIGRATIONS[0]?.up({
+    schema: 1,
+    entries: { [resumeKey(FILE)]: { 'subs-sync': { subDelay: -0.4 } } }
+  }) as OptsFile
+
+  const resume = memStore<ResumeFile>({ entries: {} })
+  const history = memStore<HistoryFile>({ entries: {} })
+  const opts = memStore<OptsFile>(migrated)
+  const mgr = new PerFileManager({ resume, history, opts })
+
+  assert.deepEqual(mgr.sliceFor(FILE, 'subs-sync'), { subDelay: -0.4 })
+
+  // …and it is APPLIED on load, which is the point of keeping it.
+  const live: Record<string, unknown> = { subDelay: 0 }
+  mgr.registerSlice('subs-sync', {
+    key: 'subs-sync',
+    capture: () => ({ subDelay: live.subDelay as number }),
+    apply: (v) => {
+      if (typeof v.subDelay === 'number') live.subDelay = v.subDelay
+    },
+    rememberDefaults: { subDelay: true }
+  })
+  await mgr.onFileLoaded(FILE)
+  assert.equal(live.subDelay, -0.4, 'the migrated value was restored')
+
+  // updatedAt 0 means a migrated bucket is the FIRST thing evicted, which is the
+  // right answer: it is the one we know least about.
+  assert.equal(mgr.storedFiles()[0]?.updatedAt, 0)
 })
