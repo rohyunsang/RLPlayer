@@ -43,9 +43,33 @@ export interface HistoryFile extends Record<string, unknown> {
   entries: Record<string, HistoryEntry>
 }
 
+/**
+ * One file's stored slices.
+ *
+ * SCHEMA 2. Schema 1 was `resumeKey -> sliceKey -> {field: value}` and carried
+ * neither a timestamp nor the path, which made two things impossible:
+ *
+ *   * EVICTION. `resume.json` is capped at 500 entries and `history.json` at
+ *     2000, both by recency. This store was UNCAPPED and never evicted: every
+ *     file ever opened kept a bucket forever, with the slice payloads of every
+ *     module that ever registered one. Nothing could be dropped because nothing
+ *     recorded when a bucket was last touched.
+ *   * ENUMERATION. `resumeKey()` is a one-way hash of path+size, so a bucket
+ *     could be read only by hashing a path you already had. N11's all-files
+ *     bookmark mode and N16's playlist badges both need "what do you have",
+ *     and neither could ask.
+ */
+export interface OptsBucket {
+  /** Path this key was computed from. The hash is one-way; this is not. */
+  path: string
+  /** Last capture, in ms. Drives eviction. */
+  updatedAt: number
+  /** sliceKey → { field: value } */
+  slices: Record<string, Record<string, unknown>>
+}
+
 export interface OptsFile extends Record<string, unknown> {
-  /** resumeKey → sliceKey → { field: value } */
-  entries: Record<string, Record<string, Record<string, unknown>>>
+  entries: Record<string, OptsBucket>
 }
 
 export interface StoreLike<T> {
@@ -56,6 +80,12 @@ export interface StoreLike<T> {
 
 const MAX_RESUME_ENTRIES = 500
 const MAX_HISTORY_ENTRIES = 2000
+/**
+ * Between the other two, and for the same reason they have one at all: a bucket
+ * holds every registered module's per-file payload, so this is the store that
+ * grows fastest per entry. Evicted oldest-first by `updatedAt`.
+ */
+const MAX_OPTS_ENTRIES = 1000
 
 /**
  * D-2: `path + size` stays the primary key. Hashing a 4 GB MKV on every open is
@@ -85,6 +115,24 @@ interface RegisteredSlice {
 export class PerFileManager {
   private readonly slices: RegisteredSlice[] = []
   private current: { path: string; key: string } | null = null
+
+  /**
+   * A STRICTLY INCREASING timestamp, and it is load-bearing for eviction.
+   *
+   * `Date.now()` has millisecond resolution, so opening several files inside one
+   * millisecond stamps them all identically — and `bound()` sorts newest-first
+   * with a STABLE sort, so a run of ties resolves to insertion order and the
+   * OLDEST entries are the ones kept. Measured on the 1005-file eviction test:
+   * the cap held at 1000 and the five entries dropped were ep1000..ep1004, the
+   * five newest, which is exactly backwards. The resume and history stores are
+   * bounded by the same helper and had the same tie.
+   */
+  private lastStamp = 0
+
+  private stamp(): number {
+    this.lastStamp = Math.max(Date.now(), this.lastStamp + 1)
+    return this.lastStamp
+  }
 
   private readonly stores: {
     resume: StoreLike<ResumeFile>
@@ -146,7 +194,7 @@ export class PerFileManager {
         this.stores.resume.write({ entries: resume })
       }
     } else {
-      resume[key] = { key, path: file, position, duration, updatedAt: Date.now() }
+      resume[key] = { key, path: file, position, duration, updatedAt: this.stamp() }
       this.stores.resume.write({ entries: bound(resume, MAX_RESUME_ENTRIES, (e) => e.updatedAt) })
     }
 
@@ -159,7 +207,7 @@ export class PerFileManager {
       position,
       duration,
       finished: finished && position > 0,
-      playedAt: Date.now()
+      playedAt: this.stamp()
     }
     this.stores.history.write({ entries: bound(history, MAX_HISTORY_ENTRIES, (e) => e.playedAt) })
   }
@@ -182,7 +230,7 @@ export class PerFileManager {
    */
   async onFileLoaded(file: string): Promise<void> {
     this.current = { path: file, key: resumeKey(file) }
-    const saved = this.stores.opts.read().entries[this.current.key] ?? {}
+    const saved = this.stores.opts.read().entries[this.current.key]?.slices ?? {}
 
     for (const reg of this.slices) {
       try {
@@ -237,9 +285,61 @@ export class PerFileManager {
       if (Object.keys(diff).length > 0) bucket[reg.slice.key] = diff
     }
 
-    if (Object.keys(bucket).length > 0) all[key] = bucket
-    else delete all[key]
-    this.stores.opts.write({ entries: all })
+    if (Object.keys(bucket).length > 0) {
+      all[key] = {
+        path: this.current?.path ?? all[key]?.path ?? '',
+        updatedAt: this.stamp(),
+        slices: bucket
+      }
+    } else delete all[key]
+    this.stores.opts.write({ entries: bound(all, MAX_OPTS_ENTRIES, (e) => e.updatedAt) })
+  }
+
+  // --- reading OTHER files (§9) ------------------------------------------
+
+  /**
+   * The stored slices for any file, not just the current one.
+   *
+   * The service could read nothing but the file being played, which is what
+   * made N11's all-files bookmark mode and N16's playlist badges inexpressible:
+   * both ask about files that are not open. Returns null rather than an empty
+   * object when there is no bucket, so "nothing stored" and "stored empty" stay
+   * distinguishable.
+   */
+  slicesFor(file: string): Record<string, Record<string, unknown>> | null {
+    const bucket = this.stores.opts.read().entries[resumeKey(file)]
+    return bucket ? bucket.slices : null
+  }
+
+  sliceFor(file: string, sliceKey: string): Record<string, unknown> | null {
+    return this.slicesFor(file)?.[sliceKey] ?? null
+  }
+
+  /**
+   * Every file with stored slices, newest first. The enumeration N11 needs:
+   * `resumeKey()` is one-way, so without the path on the bucket a caller could
+   * only ever ask about a path it already had.
+   */
+  storedFiles(): { key: string; path: string; updatedAt: number; sliceKeys: string[] }[] {
+    return Object.entries(this.stores.opts.read().entries)
+      .map(([key, b]) => ({
+        key,
+        path: b.path,
+        updatedAt: b.updatedAt,
+        sliceKeys: Object.keys(b.slices)
+      }))
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
+  /**
+   * Capture AND fsync, for data that must survive a crash rather than a clean
+   * quit. `captureNow()` only reaches the store, whose write is debounced 300 ms
+   * and whose flush otherwise happens on quit — so a module that had just
+   * captured a bookmark and then lost the process lost the bookmark.
+   */
+  persistNow(): void {
+    this.captureSlices()
+    this.stores.opts.flush()
   }
 
   onFileClosing(): void {
@@ -269,7 +369,11 @@ export class PerFileManager {
         const e = mgr.lookupPosition(file)
         return e ? { position: e.position, duration: e.duration } : null
       },
-      captureNow: () => mgr.captureSlices()
+      captureNow: () => mgr.captureSlices(),
+      persistNow: () => mgr.persistNow(),
+      slicesFor: (file) => mgr.slicesFor(file),
+      sliceFor: (file, sliceKey) => mgr.sliceFor(file, sliceKey),
+      storedFiles: () => mgr.storedFiles()
     }
   }
 }

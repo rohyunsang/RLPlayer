@@ -467,6 +467,8 @@
       "src/main/core/ipc.ts",
       "src/main/core/legacy-bridge.test.ts",
       "src/main/core/legacy-bridge.ts",
+      "src/main/core/menu-model.test.ts",
+      "src/main/core/menu-model.ts",
       "src/main/core/menu.ts",
       "src/main/ipc.ts",
       "src/preload/index.ts",

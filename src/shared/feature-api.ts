@@ -467,8 +467,33 @@ export interface PerFileService {
    * say "capture first".
    */
   captureNow(): void
+  /**
+   * Capture AND fsync. For state that must survive a CRASH, not just a clean
+   * quit: `captureNow()` reaches the store, whose write is debounced 300 ms and
+   * whose flush otherwise happens on quit, so a module that captured a bookmark
+   * and then lost the process lost the bookmark. Also a deviation from §3.3.5,
+   * reported by the pilots.
+   */
+  persistNow(): void
   /** Batch watched-state lookup for the playlist's badges (L39). */
   lookupMany(paths: readonly string[]): Record<string, { position: number; finished: boolean }>
+  /**
+   * The stored slices for ANY file, not only the one playing, or null when
+   * nothing is stored for it.
+   *
+   * Reported by the pilots: the service could read nothing but the current
+   * file, which makes N11's all-files bookmark mode and N16's playlist badges
+   * inexpressible — both ask about files that are not open — and left a module
+   * with no option but to re-implement per-file.json beside it.
+   */
+  slicesFor(file: string): Record<string, Record<string, unknown>> | null
+  sliceFor(file: string, sliceKey: string): Record<string, unknown> | null
+  /**
+   * Every file with stored slices, newest first. Enumeration is the other half
+   * of the same defect: `resumeKey()` is a one-way hash of path+size, so
+   * without this a caller could only ever ask about a path it already had.
+   */
+  storedFiles(): { key: string; path: string; updatedAt: number; sliceKeys: string[] }[]
 }
 
 export type MenuNode =

@@ -14,14 +14,20 @@ import {
  * files are deleted from resume but kept in history."
  */
 
-function memStore<T extends object>(initial: T): StoreLike<T> & { value: T } {
+function memStore<T extends object>(initial: T): StoreLike<T> & { value: T; flushes: number } {
   const s = {
     value: initial,
+    // Counted, because "persist now" is a claim about reaching the DISK. A test
+    // that only checked the in-memory value would pass for captureNow() too,
+    // which is precisely the API gap being closed.
+    flushes: 0,
     read: (): T => s.value,
     write: (patch: Partial<T>): void => {
       s.value = { ...s.value, ...patch }
     },
-    flush: (): void => undefined
+    flush: (): void => {
+      s.flushes++
+    }
   }
   return s
 }
@@ -100,7 +106,7 @@ test('P51: only keys that DIFFER from the file-load baseline are persisted', asy
   live.subDelay = -0.4 // the user changed this one
   mgr.captureSlices()
 
-  const bucket = Object.values(opts.value.entries)[0] ?? {}
+  const bucket = Object.values(opts.value.entries)[0]?.slices ?? {}
   assert.deepEqual(bucket['subs-sync'], { subDelay: -0.4 })
   assert.equal(bucket['audio-tracks'], undefined, 'aid never moved, so it is not written')
 })
@@ -127,7 +133,7 @@ test('the baseline is taken BEFORE the restore, so a restored value is written b
   await mgr.onFileLoaded(FILE)
   assert.equal(live.subDelay, -0.4, 'apply() ran')
   mgr.captureSlices()
-  assert.deepEqual(Object.values(opts.value.entries)[0]?.['subs-sync'], { subDelay: -0.4 })
+  assert.deepEqual(Object.values(opts.value.entries)[0]?.slices['subs-sync'], { subDelay: -0.4 })
 })
 
 test('a slice the user opted out of is neither restored nor stored', async () => {
@@ -170,7 +176,7 @@ test('one slice throwing does not abort the others', async () => {
   await mgr.onFileLoaded(FILE)
   applied = true
   mgr.captureSlices()
-  assert.deepEqual(Object.values(opts.value.entries)[0]?.['good'], { x: 2 })
+  assert.deepEqual(Object.values(opts.value.entries)[0]?.slices['good'], { x: 2 })
 })
 
 test('PH-2: vf and af are never remembered, whatever a slice reports', async () => {
@@ -186,7 +192,7 @@ test('PH-2: vf and af are never remembered, whatever a slice reports', async () 
   })
   await mgr.onFileLoaded(FILE)
   mgr.captureSlices()
-  const bucket = Object.values(opts.value.entries)[0]?.['rogue']
+  const bucket = Object.values(opts.value.entries)[0]?.slices['rogue']
   assert.equal(bucket, undefined, 'nothing differed from the baseline, so nothing was written')
 })
 
@@ -199,4 +205,133 @@ test('the same file gets the same identity; a different path does not', () => {
   assert.ok(found['C:/media/other.mkv'])
   // Windows paths are case-insensitive, and the key must agree.
   assert.ok(mgr.lookupMany(['c:/MEDIA/Show.mkv'])['c:/MEDIA/Show.mkv'])
+})
+
+/**
+ * ---------------------------------------------------------------------------
+ * The three §9 gaps the pilots reported. Each of these tests fails on the
+ * previous implementation, which is the point.
+ * ---------------------------------------------------------------------------
+ */
+
+function sliceWriting(mgr: PerFileManager, key: string, live: { v: number }): void {
+  mgr.registerSlice(key, {
+    key,
+    capture: () => ({ v: live.v }),
+    apply: (s) => {
+      if (typeof s.v === 'number') live.v = s.v
+    },
+    rememberDefaults: { v: true }
+  })
+}
+
+test('slicesFor / sliceFor read a file that is NOT the one playing', async () => {
+  const { mgr } = makeManager()
+  const live = { v: 0 }
+  sliceWriting(mgr, 'nav-bookmarks', live)
+
+  await mgr.onFileLoaded(FILE)
+  live.v = 7
+  mgr.captureSlices()
+
+  // Switch away. The old service could answer nothing about FILE from here:
+  // there was no read path for any file but the current one.
+  live.v = 0
+  await mgr.onFileLoaded('C:/media/other.mkv')
+
+  assert.deepEqual(mgr.sliceFor(FILE, 'nav-bookmarks'), { v: 7 })
+  assert.deepEqual(mgr.slicesFor(FILE), { 'nav-bookmarks': { v: 7 } })
+  // "nothing stored" and "stored empty" stay distinguishable.
+  assert.equal(mgr.slicesFor('C:/media/never-opened.mkv'), null)
+  assert.equal(mgr.sliceFor('C:/media/never-opened.mkv', 'nav-bookmarks'), null)
+})
+
+test('storedFiles enumerates every file with slices, newest first', async () => {
+  const { mgr } = makeManager()
+  const live = { v: 0 }
+  sliceWriting(mgr, 'nav-bookmarks', live)
+
+  for (const [i, f] of ['C:/a.mkv', 'C:/b.mkv', 'C:/c.mkv'].entries()) {
+    await mgr.onFileLoaded(f)
+    live.v = i + 1
+    mgr.captureSlices()
+  }
+
+  const listed = mgr.storedFiles()
+  assert.equal(listed.length, 3)
+  // The PATH is on the bucket, which is the whole point: resumeKey() is a
+  // one-way hash, so before this a caller could only ask about a path it had.
+  assert.deepEqual(new Set(listed.map((e) => e.path)), new Set(['C:/a.mkv', 'C:/b.mkv', 'C:/c.mkv']))
+  assert.deepEqual(listed[0]?.sliceKeys, ['nav-bookmarks'])
+  const times = listed.map((e) => e.updatedAt)
+  assert.deepEqual(times, [...times].sort((a, b) => b - a), 'newest first')
+})
+
+test('the slice store is CAPPED and evicts oldest-first, like resume and history', async () => {
+  const { mgr, opts } = makeManager()
+  const live = { v: 0 }
+  sliceWriting(mgr, 'nav-bookmarks', live)
+
+  // 1005 distinct files. Uncapped, this store kept every one of them for ever
+  // while resume was capped at 500 and history at 2000.
+  for (let i = 0; i < 1005; i++) {
+    await mgr.onFileLoaded(`C:/media/ep${i}.mkv`)
+    live.v = i + 1
+    mgr.captureSlices()
+  }
+
+  const kept = Object.keys(opts.value.entries).length
+  assert.equal(kept, 1000, `expected the 1000-entry cap, kept ${kept}`)
+  // Oldest-first: the five earliest files are the ones gone.
+  const paths = new Set(mgr.storedFiles().map((e) => e.path))
+  for (let i = 0; i < 5; i++) {
+    assert.ok(!paths.has(`C:/media/ep${i}.mkv`), `ep${i} should have been evicted`)
+  }
+  assert.ok(paths.has('C:/media/ep1004.mkv'), 'the newest must survive')
+})
+
+test('persistNow captures AND fsyncs; captureNow only captures', async () => {
+  const { mgr, opts } = makeManager()
+  const live = { v: 0 }
+  sliceWriting(mgr, 'nav-bookmarks', live)
+  await mgr.onFileLoaded(FILE)
+  live.v = 3
+
+  mgr.captureSlices()
+  assert.equal(opts.flushes, 0, 'captureNow must not be claimed to reach the disk')
+
+  mgr.persistNow()
+  assert.equal(opts.flushes, 1, 'persistNow must flush the store')
+  assert.deepEqual(mgr.sliceFor(FILE, 'nav-bookmarks'), { v: 3 })
+})
+
+test('entries stamped within ONE millisecond still evict oldest-first', async () => {
+  /**
+   * The regression test for the tie that made eviction back-to-front. With
+   * `updatedAt: Date.now()` and no monotonic guard, 1005 captures inside a few
+   * milliseconds produced runs of identical stamps; `bound()`'s stable sort then
+   * resolved each run to insertion order and kept the OLDEST. Frozen clock here,
+   * so every stamp would tie without the guard.
+   */
+  const { mgr, opts } = makeManager()
+  const live = { v: 0 }
+  sliceWriting(mgr, 'nav-bookmarks', live)
+
+  const realNow = Date.now
+  Date.now = () => 1_700_000_000_000
+  try {
+    for (let i = 0; i < 1003; i++) {
+      await mgr.onFileLoaded(`C:/frozen/ep${i}.mkv`)
+      live.v = i + 1
+      mgr.captureSlices()
+    }
+  } finally {
+    Date.now = realNow
+  }
+
+  assert.equal(Object.keys(opts.value.entries).length, 1000)
+  const paths = new Set(mgr.storedFiles().map((e) => e.path))
+  assert.ok(!paths.has('C:/frozen/ep0.mkv'))
+  assert.ok(!paths.has('C:/frozen/ep2.mkv'))
+  assert.ok(paths.has('C:/frozen/ep1002.mkv'))
 })

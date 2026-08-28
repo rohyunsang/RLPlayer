@@ -256,8 +256,38 @@ async function main(): Promise<void> {
     opts: createStore<OptsFile>({
       id: 'per-file',
       file: filePath('per-file.json'),
-      version: 1,
-      defaults: { entries: {} }
+      /**
+       * SCHEMA 2 adds `path` and `updatedAt` to each bucket, which is what makes
+       * the store cappable and enumerable — see OptsBucket. The 1 -> 2 migration
+       * lifts the old `key -> sliceKey -> fields` shape into `key -> {path,
+       * updatedAt, slices}`. The path is unrecoverable for existing buckets (the
+       * key is a one-way hash), so it comes back as '' and those buckets simply
+       * do not appear in storedFiles() until the file is played again; the SLICE
+       * DATA, which is what the user would notice losing, is carried across
+       * intact.
+       */
+      version: 2,
+      defaults: { entries: {} },
+      migrations: [
+        {
+          from: 1,
+          to: 2,
+          up: (data) => {
+            const old = (data.entries ?? {}) as Record<string, Record<string, unknown>>
+            const entries: Record<string, unknown> = {}
+            for (const [key, slices] of Object.entries(old)) {
+              if (!slices || typeof slices !== 'object') continue
+              // Already migrated by a newer build that then downgraded: leave it.
+              if ('slices' in slices) {
+                entries[key] = slices
+                continue
+              }
+              entries[key] = { path: '', updatedAt: 0, slices }
+            }
+            return { entries }
+          }
+        }
+      ]
     })
   })
 
