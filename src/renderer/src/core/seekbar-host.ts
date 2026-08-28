@@ -34,6 +34,22 @@ import type {
 
 export interface SeekbarHostDeps {
   el: HTMLElement
+  /**
+   * Creates the element core owns for ONE layer, and returns it already
+   * attached to `el`.
+   *
+   * This is the seek-bar half of what `ctx.panel()` already did for panels, and
+   * its absence is why M25's `.seek-chapter-tick` and `.seek-tip-chapter` ended
+   * up in `src/renderer/src/styles.css` — a core-owned file in the
+   * `mustNotTouch` list of 40 of the 55 module rows. The layer had to build its
+   * own container, so it had to know core's `seek-layer` class, so its styles
+   * went where core's styles were. §6.3 needs chapter ticks, bookmark pins and
+   * the A-B region on this bar at once, so M20, M26 and M27 were each one
+   * commit from following it in.
+   *
+   * Optional so the interaction model stays unit-testable with no DOM at all.
+   */
+  layerEl?(id: string, order: number): HTMLElement
   duration(): number
   width(): number
   /** The host's own scrub, used when no layer claims the press. */
@@ -52,6 +68,8 @@ const DEFAULT_TOLERANCE = 6
 
 export class SeekbarHost {
   private readonly layers: SeekbarLayer[] = []
+  /** One core-owned container per layer; a module never creates its own. */
+  private readonly layerEls = new Map<string, HTMLElement>()
   private active: { layer: SeekbarLayer; handle: string } | null = null
   private hostScrubbing = false
   private focused: { layerId: string; handle: string } | null = null
@@ -68,11 +86,15 @@ export class SeekbarHost {
     }
     this.layers.push(layer)
     this.layers.sort((a, b) => a.order - b.order)
+    const el = this.deps.layerEl?.(layer.id, layer.order)
+    if (el) this.layerEls.set(layer.id, el)
     this.deps.invalidate?.()
     return () => {
       const i = this.layers.indexOf(layer)
       if (i >= 0) this.layers.splice(i, 1)
       if (this.active?.layer === layer) this.cancel()
+      this.layerEls.get(layer.id)?.remove()
+      this.layerEls.delete(layer.id)
       this.deps.invalidate?.()
     }
   }
@@ -82,11 +104,12 @@ export class SeekbarHost {
     return this.layers
   }
 
-  ctx(): SeekbarLayerCtx {
+  ctx(layerId?: string): SeekbarLayerCtx {
     const duration = this.deps.duration()
     const width = this.deps.width()
     return {
-      el: this.deps.el,
+      // A layer paints into ITS OWN element, never into the shared container.
+      el: (layerId !== undefined ? this.layerEls.get(layerId) : undefined) ?? this.deps.el,
       duration,
       width,
       // Guarded for live streams, where duration is 0 or unknown (R24). Every
@@ -97,10 +120,9 @@ export class SeekbarHost {
   }
 
   render(): void {
-    const base = this.ctx()
     for (const layer of this.layers) {
       try {
-        layer.render(base)
+        layer.render(this.ctx(layer.id))
       } catch (e) {
         console.error(`[seekbar] layer '${layer.id}' render threw:`, (e as Error).message)
       }

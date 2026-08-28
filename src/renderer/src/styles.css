@@ -853,18 +853,9 @@ kbd {
   position: absolute;
   inset: 0;
 }
-.seek-chapter-tick {
-  position: absolute;
-  top: 50%;
-  width: 2px;
-  height: 10px;
-  margin-left: -1px;
-  transform: translateY(-50%);
-  background: rgba(255, 255, 255, 0.75);
-  border-radius: 1px;
-}
-.seek-tip-chapter {
-  display: block;
-  font-size: 11px;
-  opacity: 0.85;
-}
+/* A LAYER'S OWN LOOK IS NOT CORE'S BUSINESS. M25's chapter ticks used to be
+   here, in a file 40 of the 55 module rows are told not to touch, because the
+   layer had to build its own container and therefore had to know these class
+   names. They live in src/renderer/src/features/nav-chapters/ now, and
+   `check:partition` fails if a selector only one feature uses reappears in a
+   core stylesheet. */

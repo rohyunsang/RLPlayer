@@ -1,3 +1,4 @@
+import './nav-chapters.css'
 import type { RendererFeatureModule } from '../../../../shared/renderer-api.ts'
 import type { Chapter } from '../../../../shared/types.ts'
 
@@ -22,8 +23,13 @@ const mod: RendererFeatureModule = {
   id: 'nav-chapters',
 
   setup(ctx): void {
-    const host = document.createElement('div')
-    host.className = 'seek-layer seek-chapters'
+    /**
+     * The layer's container is CORE'S, handed to `render` as `c.el`. This module
+     * used to create its own `<div class="seek-layer seek-chapters">`, which
+     * meant knowing core's class name, which is how its two private selectors
+     * ended up in core's stylesheet. It paints into what it is given now.
+     */
+    let host: HTMLElement | null = null
 
     // `ctx.state.subscribe` REPLAYS the last state synchronously (renderer-core
     // fires immediately when it already has one), so everything paint() closes
@@ -35,6 +41,7 @@ const mod: RendererFeatureModule = {
     let ticks: HTMLElement[] = []
 
     function paint(): void {
+      if (!host) return
       host.textContent = ''
       ticks = []
       if (duration <= 0 || chapters.length < 2) return
@@ -58,7 +65,7 @@ const mod: RendererFeatureModule = {
       id: 'nav-chapters.ticks',
       order: 10,
       render(c): void {
-        if (host.parentElement !== c.el) c.el.appendChild(host)
+        host = c.el
         paint()
       },
       /** A 2px tick is only grabbable because of `tolerancePx`. */

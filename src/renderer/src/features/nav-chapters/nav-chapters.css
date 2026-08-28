@@ -1,0 +1,32 @@
+/*
+ * M25 nav-chapters, renderer half. Owned by this module, imported by its
+ * index.ts, bundled into the overlay by Vite — the same shape M28's playlist
+ * already used for its panel.
+ *
+ * These rules used to live in `src/renderer/src/styles.css`. That file is
+ * `core-renderer`'s and appears in the `mustNotTouch` list of 40 of the 55 rows
+ * in docs/parity/modules.json, so M25's private look sat in the one file nobody
+ * else was allowed to edit — and §6.3 requires this same seek bar to carry
+ * bookmark pins (M26), the A-B region (M26) and thumbnails (M27) at the same
+ * time. Three more modules were about to follow the precedent into it.
+ *
+ * The layer's CONTAINER is still core's (`.seek-layer`, created by the host).
+ * What is inside it is ours.
+ */
+
+.seek-chapter-tick {
+  position: absolute;
+  top: 50%;
+  width: 2px;
+  height: 10px;
+  margin-left: -1px;
+  transform: translateY(-50%);
+  background: rgba(255, 255, 255, 0.75);
+  border-radius: 1px;
+}
+
+.seek-tip-chapter {
+  display: block;
+  font-size: 11px;
+  opacity: 0.85;
+}

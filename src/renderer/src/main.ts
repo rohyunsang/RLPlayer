@@ -81,6 +81,16 @@ const SEEK_STEP = 0.1
 const seekbar = attachSeekbar(
   new SeekbarHost({
     el: seekLayers,
+    // Core creates the layer's container and owns its class, so a module never
+    // has to name `seek-layer` and therefore never has a reason to style it.
+    layerEl: (id, order) => {
+      const el = document.createElement('div')
+      el.className = 'seek-layer'
+      el.dataset['seekLayer'] = id
+      el.style.zIndex = String(order)
+      seekLayers.appendChild(el)
+      return el
+    },
     duration: () => state?.duration ?? 0,
     width: () => seek.getBoundingClientRect().width,
     scrub(time, phase, cancelled) {

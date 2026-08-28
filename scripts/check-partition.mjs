@@ -122,6 +122,120 @@ for (const { owner, entry } of claims) {
   }
 }
 
+// --- 4. CSS is checked by SELECTOR, not by file ----------------------------
+//
+// File-granular checking is what let the next collision through. Every file was
+// owned by exactly one row and the check passed — while
+// `src/renderer/src/styles.css`, owned by `core-renderer` and listed in the
+// `mustNotTouch` of 40 of the 55 rows, carried `.seek-chapter-tick` and
+// `.seek-tip-chapter`: M25 nav-chapters' private styles, referenced by nothing
+// except `src/renderer/src/features/nav-chapters/index.ts`.
+//
+// That is the `#playlist` failure again, moved from the panel path to the
+// seek-bar path. §6.3 requires the seek bar to carry chapter ticks, bookmark
+// pins and the A-B region at the same time, so M20, M26 and M27 were each about
+// to follow M25's committed precedent into the same file. M28's playlist
+// already shows the right shape: a module imports its own stylesheet and Vite
+// bundles it.
+//
+// The rule below is mechanical: a selector defined in a CORE stylesheet must be
+// used by at least one core file. If the only code that mentions it lives in one
+// feature's directory, it is that feature's private style in a shared file.
+
+const cssFiles = tracked.filter((f) => f.endsWith('.css'))
+const codeFiles = tracked.filter((f) => /\.(ts|js|html)$/.test(f))
+const read = (f) => fs.readFileSync(path.join(repo, f), 'utf8')
+
+/**
+ * The selectors a stylesheet DEFINES — the LEFTMOST class or id of each comma-
+ * separated part, which is the one the rule is scoped by.
+ *
+ * Leftmost, not every token, and the distinction is the whole usefulness of the
+ * rule. `.pl-tools .icon-btn { position: relative }` in the playlist's own
+ * stylesheet is a module styling a core component INSIDE its own subtree, which
+ * is exactly what a shared component is for. A flat token scan calls that a
+ * redefinition of core's `.icon-btn` and the check becomes noise people
+ * suppress. `.icon-btn { ... }` on its own in a module's stylesheet is a global
+ * override and is still caught.
+ */
+function selectorsIn(file) {
+  const css = read(file).replace(/\/\*[\s\S]*?\*\//g, '')
+  const names = new Set()
+  for (const m of css.matchAll(/(^|\}|;)([^{}]+)\{/g)) {
+    const prelude = (m[2] ?? '').trim()
+    if (prelude.startsWith('@') || prelude.includes(':root')) continue
+    for (const part of prelude.split(',')) {
+      const first = /[.#]([A-Za-z][A-Za-z0-9_-]*)/.exec(part)
+      if (first) names.add(first[1])
+    }
+  }
+  return names
+}
+
+/** Which owner each file belongs to, and whether that owner is a feature. */
+const featureOf = (file) => /\/features\/([a-z0-9-]+)\//.exec(file)?.[1] ?? null
+
+const definedBy = new Map() // selector -> Set(file)
+for (const file of cssFiles) {
+  for (const name of selectorsIn(file)) {
+    if (!definedBy.has(name)) definedBy.set(name, new Set())
+    definedBy.get(name).add(file)
+  }
+}
+
+// Where each selector is USED, by owner.
+const usedBy = new Map() // selector -> Set(feature id | 'core')
+const codeText = codeFiles.map((f) => ({ file: f, text: read(f), feature: featureOf(f) }))
+for (const [name] of definedBy) {
+  const owners = new Set()
+  const needle = new RegExp(`(^|[^A-Za-z0-9_-])${name}([^A-Za-z0-9_-]|$)`)
+  for (const c of codeText) {
+    if (!needle.test(c.text)) continue
+    owners.add(c.feature ?? 'core')
+  }
+  usedBy.set(name, owners)
+}
+
+for (const [name, files] of definedBy) {
+  const inCore = [...files].filter((f) => featureOf(f) === null)
+  const inFeatures = [...files].filter((f) => featureOf(f) !== null)
+
+  // 4a. A core stylesheet must not carry a selector only one feature uses.
+  if (inCore.length > 0) {
+    const users = [...(usedBy.get(name) ?? [])]
+    const featureUsers = users.filter((u) => u !== 'core')
+    if (users.length > 0 && featureUsers.length === 1 && !users.includes('core')) {
+      failures.push(
+        `.${name}\n    is defined in ${inCore.join(', ')} (core-owned) but is used ONLY by\n` +
+          `    '${featureUsers[0]}'. That is a feature's private style living in a file 40 of the\n` +
+          `    55 rows are told not to touch, so the next module that wants the same host edits\n` +
+          `    it too. Move it to src/renderer/src/features/${featureUsers[0]}/, import the\n` +
+          `    stylesheet from that module's index.ts the way M28's playlist does, and leave\n` +
+          `    only the HOST rules in core.`
+      )
+    }
+  }
+
+  // 4b. Two features must never define the same selector: that is the same
+  //     collision one level down, and it is silent because CSS just cascades.
+  const owners = [...new Set(inFeatures.map(featureOf))]
+  if (owners.length > 1) {
+    failures.push(
+      `.${name}\n    is defined by ${owners.length} different modules: ${owners.join(', ')}.\n` +
+        `    CSS has no ownership check of its own -- it simply cascades, so the last one\n` +
+        `    bundled wins and nothing reports it. Namespace it per module.`
+    )
+  }
+
+  // 4c. A feature must not redefine a selector core also defines.
+  if (inCore.length > 0 && inFeatures.length > 0) {
+    failures.push(
+      `.${name}\n    is defined in core (${inCore.join(', ')}) AND in ${inFeatures.join(', ')}.\n` +
+        `    A module overriding a core selector is a merge conflict with a delay on it.`
+    )
+  }
+}
+
 if (failures.length > 0) {
   console.error('check:partition found %d problem(s):\n', failures.length)
   for (const f of failures) console.error('  ' + f + '\n')
