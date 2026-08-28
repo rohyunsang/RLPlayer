@@ -169,6 +169,7 @@ for (const { owner, entry } of claims) {
 // come back as a feature-only symbol in a core file.
 
 import { lex } from './lib/lex.mjs'
+import { symbolsIn } from './lib/css.mjs'
 
 const read = (f) => fs.readFileSync(path.join(repo, f), 'utf8')
 const cssFiles = tracked.filter((f) => f.endsWith('.css'))
@@ -176,29 +177,53 @@ const htmlFiles = tracked.filter((f) => f.endsWith('.html'))
 const codeFiles = tracked.filter((f) => /\.(ts|js|html)$/.test(f))
 
 /**
- * The selectors a stylesheet DEFINES — the LEFTMOST class or id of each comma-
- * separated part, which is the one the rule is scoped by.
+ * THE SELECTOR EXTRACTION IS A PARSER NOW, and the change is not cosmetic.
  *
- * Leftmost, not every token, and the distinction is the whole usefulness of the
- * rule. `.pl-tools .icon-btn { position: relative }` in the playlist's own
- * stylesheet is a module styling a core component INSIDE its own subtree, which
- * is exactly what a shared component is for. A flat token scan calls that a
- * redefinition of core's `.icon-btn` and the check becomes noise people
- * suppress. `.icon-btn { ... }` on its own in a module's stylesheet is a global
- * override and is still caught.
+ * It used to be `/(^|\}|;)([^{}]+)\{/` for the prelude and
+ * `/[.#]([A-Za-z][A-Za-z0-9_-]*)/.exec(part)` for the name, and each half had a
+ * hole that let a real violation through with exit 0:
+ *
+ *   - the prelude had to follow `}`, `;` or start-of-file, so THE FIRST RULE
+ *     INSIDE ANY AT-RULE was never extracted. `.bm-pin` planted inside
+ *     `@media (min-width: 1px) { … }` in core styles.css, referenced only from
+ *     two feature modules: reported clean.
+ *   - `.exec()` returns the FIRST match, so anything after a descendant
+ *     combinator was invisible. `.seek-layer .thumb-preview`, same file, same
+ *     two modules: reported clean.
+ *
+ * Instrumented against this repo's own four stylesheets, 15 selector tokens
+ * were already unextractable, 7 of them in core `styles.css` (boosted, close,
+ * error, play, primary, show, small). The rule-5 self-check below did not close
+ * it either: it named three canaries by hand, and any new Wave-1 name --
+ * bookmark pins, thumbnail previews -- has no canary and reports clean.
+ *
+ * `scripts/lib/css.mjs` uses postcss to walk the rules (it descends into every
+ * at-rule) and a state machine to tokenize each selector, and it has its own
+ * test file whose fixtures are the two planted violations.
+ *
+ * TWO VIEWS, because the rules below need different ones:
+ *
+ *   `all`      every class and id anywhere in the selector. Rule 4a asks
+ *              whether a CORE file MENTIONS a name, and `.seek-layer
+ *              .thumb-preview` mentions `thumb-preview`.
+ *   `leftmost` the first compound of each comma part only. Rules 4b and 4c ask
+ *              who DEFINES a symbol, and `.pl-tools .icon-btn` in the playlist's
+ *              own stylesheet is a module styling a core component inside its
+ *              own subtree -- which is what a shared component is for. Reading
+ *              that as a redefinition of `.icon-btn` would make the check noise
+ *              people suppress.
  */
 function selectorsIn(file) {
-  const css = read(file).replace(/\/\*[\s\S]*?\*\//g, '')
-  const names = new Set()
-  for (const m of css.matchAll(/(^|\}|;)([^{}]+)\{/g)) {
-    const prelude = (m[2] ?? '').trim()
-    if (prelude.startsWith('@') || prelude.includes(':root')) continue
-    for (const part of prelude.split(',')) {
-      const first = /[.#]([A-Za-z][A-Za-z0-9_-]*)/.exec(part)
-      if (first) names.add(first[1])
-    }
+  try {
+    return symbolsIn(read(file), file)
+  } catch (e) {
+    failures.push(
+      `${file}\n    could not be parsed as CSS: ${e.message}\n` +
+        `    A stylesheet this check cannot read is one it cannot check, and every rule\n` +
+        `    below would report 'clean' for it. Fix the CSS or fix scripts/lib/css.mjs.`
+    )
+    return { all: new Set(), leftmost: new Set() }
   }
-  return names
 }
 
 /** The element ids an HTML file DECLARES. Comments blanked first. */
@@ -220,15 +245,26 @@ const featureOf = (file) => /\/features\/([a-z0-9-]+)\//.exec(file)?.[1] ?? null
 // `#seek` (the element it is on) are two different symbols that happen to share
 // a word, and collapsing them made whichever one was scanned first shadow the
 // other -- silently, and in the direction that reports fewer problems.
-const definedBy = new Map() // 'kind:name' -> { kind, name, files: Set(file) }
-const define = (name, kind, file) => {
-  const key = `${kind}:${name}`
-  let e = definedBy.get(key)
-  if (!e) definedBy.set(key, (e = { kind, name, files: new Set() }))
-  e.files.add(file)
+const definedAll = new Map() // 'kind:name' -> Set(file)   every mention
+const definedLeftmost = new Map() // 'kind:name' -> Set(file)   subject position
+const add = (map, key, file) => {
+  let e = map.get(key)
+  if (!e) map.set(key, (e = new Set()))
+  e.add(file)
 }
-for (const file of cssFiles) for (const name of selectorsIn(file)) define(name, 'selector', file)
-for (const file of htmlFiles) for (const name of idsIn(file)) define(name, 'id', file)
+for (const file of cssFiles) {
+  const { all, leftmost } = selectorsIn(file)
+  for (const key of all) add(definedAll, key, file)
+  for (const key of leftmost) add(definedLeftmost, key, file)
+}
+// An `id="x"` declaration is unambiguous: it is both a mention and a subject.
+for (const file of htmlFiles) {
+  for (const name of idsIn(file)) {
+    add(definedAll, `id:${name}`, file)
+    add(definedLeftmost, `id:${name}`, file)
+  }
+}
+const parse = (key) => ({ kind: key.slice(0, key.indexOf(':')), name: key.slice(key.indexOf(':') + 1) })
 
 /**
  * STRING LITERALS ONLY, comments blanked.
@@ -262,9 +298,10 @@ const codeText = codeFiles.map((f) => ({
 }))
 
 const usedBy = new Map() // 'kind:name' -> Set(feature id | 'core')
-for (const [key, { name }] of definedBy) {
+for (const key of definedAll.keys()) {
+  const { name } = parse(key)
   const owners = new Set()
-  const needle = new RegExp(`(^|[^A-Za-z0-9_-])${name}([^A-Za-z0-9_-]|$)`)
+  const needle = new RegExp(`(^|[^A-Za-z0-9_-])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Za-z0-9_-]|$)`)
   for (const c of codeText) {
     if (!needle.test(c.strings)) continue
     owners.add(c.feature ?? 'core')
@@ -273,20 +310,28 @@ for (const [key, { name }] of definedBy) {
 }
 
 const sigil = (kind) => (kind === 'id' ? '#' : '.')
+const kindWord = (kind) => (kind === 'id' ? 'id' : 'selector')
 
-for (const [key, { kind, name, files }] of definedBy) {
-  const inCore = [...files].filter((f) => featureOf(f) === null)
-  const inFeatures = [...files].filter((f) => featureOf(f) !== null)
+for (const key of definedAll.keys()) {
+  const { kind, name } = parse(key)
+  const mentions = [...(definedAll.get(key) ?? [])]
+  const subjects = [...(definedLeftmost.get(key) ?? [])]
   const where = kind === 'id' ? 'a core-owned HTML file' : 'a core stylesheet'
 
   // 4a. A core file must not carry a symbol only FEATURES use.
   //
-  //     `=== 1` was the bug. §6.3 puts M25's ticks, M26's pins and M27's
-  //     thumbnails on the same seek bar, so the collision this rule exists to
-  //     catch is a two- and three-module one — and those were precisely the
+  //     `=== 1` was the first bug here. §6.3 puts M25's ticks, M26's pins and
+  //     M27's thumbnails on the same seek bar, so the collision this rule exists
+  //     to catch is a two- and three-module one — and those were precisely the
   //     cases that passed. Any number of feature users with no core user is a
   //     private symbol in a shared file.
-  if (inCore.length > 0) {
+  //
+  //     MENTIONS, not subjects. `.seek-layer .thumb-preview` in core styles.css
+  //     is core carrying a feature's private class just as surely as
+  //     `.thumb-preview` on its own would be, and reading only the leftmost
+  //     token is what made it invisible.
+  const inCoreMentions = mentions.filter((f) => featureOf(f) === null)
+  if (inCoreMentions.length > 0) {
     const users = [...(usedBy.get(key) ?? [])]
     const featureUsers = users.filter((u) => u !== 'core')
     if (featureUsers.length > 0 && !users.includes('core')) {
@@ -295,8 +340,8 @@ for (const [key, { kind, name, files }] of definedBy) {
           ? `'${featureUsers[0]}'`
           : `${featureUsers.length} modules: ${featureUsers.sort().join(', ')}`
       failures.push(
-        `${sigil(kind)}${name}\n    is defined in ${inCore.join(', ')} (core-owned, ${where}) but is\n` +
-          `    used ONLY by ${list}. That is a feature's private ${kind} living in a file 40 of\n` +
+        `${sigil(kind)}${name}\n    is defined in ${inCoreMentions.join(', ')} (core-owned, ${where}) but is\n` +
+          `    used ONLY by ${list}. That is a feature's private ${kindWord(kind)} living in a file 40 of\n` +
           `    the 55 rows are told not to touch, so the next module that wants the same host\n` +
           `    edits it too — and when there is more than one user already, the merge conflict\n` +
           `    is not hypothetical, it is scheduled. Move it into\n` +
@@ -306,6 +351,10 @@ for (const [key, { kind, name, files }] of definedBy) {
       )
     }
   }
+
+  // 4b and 4c are about who OWNS the symbol, which is the subject position.
+  const inCore = subjects.filter((f) => featureOf(f) === null)
+  const inFeatures = subjects.filter((f) => featureOf(f) !== null)
 
   // 4b. Two features must never define the same symbol: that is the same
   //     collision one level down, and it is silent because CSS just cascades.
@@ -322,7 +371,7 @@ for (const [key, { kind, name, files }] of definedBy) {
   if (inCore.length > 0 && inFeatures.length > 0) {
     failures.push(
       `${sigil(kind)}${name}\n    is defined in core (${inCore.join(', ')}) AND in ${inFeatures.join(', ')}.\n` +
-        `    A module overriding a core ${kind} is a merge conflict with a delay on it.`
+        `    A module overriding a core ${kindWord(kind)} is a merge conflict with a delay on it.`
     )
   }
 }
@@ -331,26 +380,89 @@ for (const [key, { kind, name, files }] of definedBy) {
 //
 // A content check that silently stops matching passes everything, which is how
 // hole 2 above survived: the whitelist path was exercised by prose and nobody
-// noticed the real path had stopped running. So assert the extraction still
-// finds symbols it is known to define and use, before believing a clean result.
+// noticed the real path had stopped running.
+//
+// THE PREVIOUS VERSION OF THIS SELF-CHECK DID NOT CLOSE THE HOLE IT WAS FOR. It
+// named three canaries by hand -- `seek-layer`, `icon-btn`, `seek-chapter-tick`
+// -- all three of which happened to be leftmost and at the top level, so the
+// extraction could fail on every at-rule and every descendant combinator in the
+// repo and still find all three. Re-planted inside `@media` it reported the
+// wrong diagnosis. Any new Wave-1 name has no canary at all.
+//
+// So the self-check runs the extractor over a fixture that contains the SHAPES
+// it must handle rather than the NAMES this repo happens to use today. It is the
+// same fixture as the first two cases in scripts/lib/css.test.mjs, restated here
+// because a check that trusts a test file it does not run is trusting prose.
 {
-  const knownSelectors = ['seek-layer', 'icon-btn', 'seek-chapter-tick']
-  const missing = knownSelectors.filter((n) => !definedBy.has(`selector:${n}`))
-  if (missing.length > 0) {
+  const fixture = `@media (min-width: 1px) {
+    .canary-in-at-rule { color: red }
+  }
+  .canary-subject .canary-descendant { color: red }
+  #canary-id.canary-compound { color: red }
+  @keyframes ignored { from { opacity: 0 } }
+  .canary-hex { color: #fff }`
+  let got = { all: new Set(), leftmost: new Set() }
+  let parseError = null
+  try {
+    got = symbolsIn(fixture, '<self-check>')
+  } catch (e) {
+    parseError = e.message
+  }
+  const must = [
+    ['class:canary-in-at-rule', 'the first rule inside an @media block'],
+    ['class:canary-descendant', 'a class after a descendant combinator'],
+    ['class:canary-compound', 'a class in a compound with an id'],
+    ['id:canary-id', 'an id in a selector'],
+    ['class:canary-subject', 'a leftmost class'],
+    ['class:canary-hex', 'a rule whose declaration holds a hex colour']
+  ]
+  const missed = must.filter(([k]) => !got.all.has(k))
+  const mustNot = [
+    ['id:fff', 'a hex colour in a DECLARATION read as an id'],
+    ['class:from', 'a @keyframes step read as a class']
+  ]
+  const overreach = mustNot.filter(([k]) => got.all.has(k))
+  if (parseError !== null || missed.length > 0 || overreach.length > 0) {
     failures.push(
-      `the selector extraction stopped finding ${missing.join(', ')}.\n` +
+      `the selector extraction fails its own fixture.\n` +
+        (parseError !== null ? `    postcss threw: ${parseError}\n` : '') +
+        missed.map(([k, why]) => `    MISSED ${k} — ${why}\n`).join('') +
+        overreach.map(([k, why]) => `    INVENTED ${k} — ${why}\n`).join('') +
         `    Every assertion above is built on it, so a rule that matches nothing reports\n` +
-        `    'clean' for every violation at once. Fix selectorsIn()/idsIn() first.`
+        `    'clean' for every violation at once. Fix scripts/lib/css.mjs first, and run\n` +
+        `    node --test scripts/lib/css.test.mjs.`
     )
   }
-  if (!definedBy.has('id:seek')) {
+
+  // …and, separately, that it still finds this repo's real symbols. The fixture
+  // proves the shapes are handled; these prove the extractor is pointed at the
+  // right files.
+  const knownSelectors = ['seek-layer', 'icon-btn', 'seek-chapter-tick']
+  const missingReal = knownSelectors.filter((n) => !definedAll.has(`class:${n}`))
+  if (missingReal.length > 0) {
+    failures.push(
+      `the selector extraction stopped finding ${missingReal.join(', ')} in the repo's own\n` +
+        `    stylesheets, even though it passes its fixture. The file list, not the parser.`
+    )
+  }
+  // One name that is ONLY reachable through the two holes: it lives after a
+  // descendant combinator, and if the `all` view regressed to leftmost it goes.
+  if (definedAll.size <= definedLeftmost.size) {
+    failures.push(
+      `the 'all' and 'leftmost' views of the stylesheets are the same size\n` +
+        `    (${definedAll.size} vs ${definedLeftmost.size}). The whole point of the parser is that\n` +
+        `    core styles.css alone holds 7 tokens the leftmost view cannot see; if the two\n` +
+        `    agree, the 'all' view has collapsed back into the regex's behaviour.`
+    )
+  }
+  if (!definedAll.has('id:seek')) {
     failures.push(
       `the HTML id extraction stopped finding #seek.\n` +
         `    There was no content check for HTML at all until this rule existed; a broken\n` +
         `    one is the same thing wearing a passing test.`
     )
   }
-  const seekLayerUsers = usedBy.get('selector:seek-layer') ?? new Set()
+  const seekLayerUsers = usedBy.get('class:seek-layer') ?? new Set()
   if (!seekLayerUsers.has('core')) {
     failures.push(
       `the string-literal USE extraction stopped finding core's own 'seek-layer'.\n` +
