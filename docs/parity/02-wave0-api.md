@@ -6,12 +6,28 @@
 > reading `src/main/core/**`, that is a bug in this document — say so.
 >
 > **The one rule everything else follows from:** adding a feature means adding
-> a **directory**. If you are about to edit `src/shared/types.ts`,
-> `src/main/ipc.ts`, `src/preload/index.ts`, `src/main/core/**`,
-> `src/main/mpv/manager.ts` or `src/main/core/window/windows.ts` — stop. The API
-> below exists so you do not have to, and CI greps for several of them.
+> a **directory**. If you are about to edit any of these — stop:
 >
-> Last updated: 2026-08-28 (end of Wave 0)
+> ```
+> src/shared/types.ts          src/shared/keybinds.ts      src/shared/media-types.ts
+> src/main/ipc.ts              src/main/index.ts           src/main/core/**
+> src/main/mpv/**              src/preload/index.ts
+> src/renderer/index.html      src/renderer/settings.html  src/renderer/src/main.ts
+> src/renderer/src/settings.ts src/renderer/src/styles.css src/renderer/src/core/**
+> ```
+>
+> The API below exists so you do not have to. `npm run check:forbidden` greps
+> for the imports, and `npm run check:partition` **fails the build if any
+> tracked file under `src/` is not owned by exactly one row of `modules.json`** —
+> so an unowned shared file cannot quietly appear again.
+>
+> The renderer files are on that list for the first time, and that is the
+> headline change: `ctx.panel()`, `ctx.statsSection()`, `ctx.settingsSection()`
+> and `ctx.settingsComponent()` had **no consumers at all** until now, so a
+> module with any UI had no choice but to edit `index.html`, `main.ts` and
+> `styles.css`. They render now (§10, §7).
+>
+> Last updated: 2026-08-28 (post-audit)
 
 ---
 
@@ -51,8 +67,11 @@ That is the whole contract. The registry finds the directory with
 the owner map, sets you up in dependency order, and hands you a
 `FeatureContext`. Nothing about your module is written down anywhere else.
 
-**Run `npm run verify` before you push.** It is typecheck + 109 tests +
-the natural-sort differential + the forbidden-pattern grep.
+**Run `npm run verify` before you push.** It is typecheck + 150 tests + the
+natural-sort differential (27,225 pairs against the real `StrCmpLogicalW`) + the
+forbidden-pattern grep + the file-partition check. CI runs all of it on every
+push. `npm run e2e:overlay` drives the real app with real keypresses and needs a
+desktop session, so it is not in CI — run it before you tag.
 
 ---
 
@@ -63,7 +82,8 @@ the natural-sort differential + the forbidden-pattern grep.
 | `id` | kebab-case, equals the directory name. Boot error naming both if not. |
 | `dependsOn?` | Other module ids that must be set up first. A cycle is a boot error **naming the cycle**. |
 | `ownsProperties?` | Every mpv property you may **write**. §2 below. |
-| `requestsProperties?` | Properties you reach through `ctx.mpv.requestSet()`. Declared so the dependency is visible in review. |
+| `ownsCommands?` | Every mpv **command** only you may issue. Same syntax, same duplicate check, same runtime guard. §2.1. |
+| `requestsProperties?` | Properties you reach through `ctx.mpv.requestSet()`. Declared so the dependency is visible in review, and it now also decides which fix-hint an OwnershipError gives you. |
 | `ownsFilterLabels?` | Reserved vf/af labels (§5). Same duplicate detection. |
 | `usesVideoFilters?` / `usesAudioFilters?` | Grants `ctx.vf` / `ctx.af`. Without the flag the field is `undefined`. |
 | `setup(ctx)` | Called once, in dependency order, before the first window is shown. May be async. |
@@ -95,18 +115,44 @@ Exactly one module may write a property (§3.7). Pick an owner and give the othe
 a mediator command, then update docs/parity/modules.json.
 ```
 
-**At every call.** `ctx.mpv.set()` and the property-writing commands
-(`set_property`, `set`, `cycle`, `add`, `multiply`, `cycle-values`,
-`change-list`) consult that map:
+**At every call.** `ctx.mpv.set()` and every property-writing command consult
+that map:
 
 ```
 OwnershipError: audio-loudness may not write 'aid' (owned by audio-tracks).
-Use ctx.mpv.requestSet('aid', value, reason) or the owner's mediator command.
+Add 'aid' to your requestsProperties and use ctx.mpv.requestSet('aid', value,
+reason), or call audio-tracks' mediator command. If audio-tracks has no arbiter
+for it yet, adding one is a one-line PR against audio-tracks.
 ```
 
-In dev this throws. In a packaged build it is logged, dropped and counted, so a
-misbehaving module cannot corrupt another's state *and* cannot black-screen the
-player.
+The hint depends on what you actually declared, because the previous one pointed
+at a dead path: `requestSet` refuses with `'no-arbiter'` unless the owner
+registered an arbiter, and for a while no module registered any.
+
+**What counts as a property-writing command is wider than it looks**, and every
+line below was measured against the pinned mpv over JSON IPC rather than
+reasoned about:
+
+- `set`, `set_property`, `set_property_string`, `del`, `cycle`, `add`,
+  `multiply`, `cycle-values`, `change-list` — **and their underscore
+  spellings**, which mpv accepts (`cycle_values`, `change_list`, …).
+- **Any of the above behind a prefix.** mpv takes a prefix as its own array
+  element, so `['osd-msg','set','speed','1.75']` is a write. The eleven it
+  accepts are `osd-auto no-osd osd-bar osd-msg osd-msg-bar raw
+  expand-properties repeatable nonrepeatable async sync`; every one of them
+  used to walk straight past the guard.
+- **`loadfile`'s options argument.** `['loadfile', f, 'replace', 0, 'speed=2.5']`
+  and the map form both set the property for real. Whatever you put in that map
+  you must own — that is how `start` came to be M28's.
+
+**Two commands are banned outright**, whoever you are: `screenshot-raw` (it
+kills mpv over JSON IPC, §7.7 trap 5) and any raw `vf`/`af` command (§5).
+
+In dev an ownership violation throws. In a packaged build it is logged, dropped
+and **counted**, so a misbehaving module cannot corrupt another's state *and*
+cannot black-screen the player. The count is not invisible any more: the first
+refusal shows a toast, and every refusal appears in the stats overlay (`I`), so
+it can reach a bug report.
 
 **Reads are unrestricted.** `observe`, `peek` and `get` never check ownership.
 
@@ -123,6 +169,33 @@ why "start playing" is `ctx.commands.invoke('core.play')` and not
 `npm test` compares them **in both directions** for every implemented module. If
 you add a property, add it there too; if you do not, the test tells you which
 one and where.
+
+### 2.1 Command ownership
+
+A command can be owned too, and it needs to be for the same reason a property
+does. `sub-reload` was declared in M17's `ownsProperties`, where it enforced
+exactly nothing — it is not a property (mpv answers `property not found`), it is
+a command — and any module could call it and blow away M17's track selection.
+
+```ts
+const mod: FeatureModule = {
+  id: 'subs-tracks',
+  ownsCommands: ['sub-reload', 'sub-add', 'sub-remove']
+}
+```
+
+Same trailing-`*` glob, same boot-time duplicate check naming both modules, same
+runtime guard. Currently owned:
+
+| Commands | Owner |
+|---|---|
+| `loadfile` `loadlist` `stop` `playlist-*` | M28 — mpv's own playlist must always hold exactly one entry (§7.6) |
+| `sub-reload` `sub-add` `sub-remove` | M17 — it owns `sid` and the external-track set |
+| `screenshot` `screenshot-to-file` | M22 — traps 3 and 4 are its problem to get right once |
+| `quit` `quit-watch-later` `run` `subprocess` `keybind` `keypress` `keydown` `keyup` `enable-section` `disable-section` `define-section` `load-config-file` `load-input-conf` `load-script` | core — the process and the input layer |
+
+If you need one of those, call the owner's mediator. A test fails the build if
+any module lists a known command name in `ownsProperties`.
 
 ### Getting at a property you do not own
 
@@ -154,8 +227,11 @@ if (!r.ok) ctx.log.warn('refused:', r.reason)   // refusal is a NORMAL outcome
 ```
 
 `requestSet` refuses with `'no-arbiter'` rather than falling through to a raw
-write, so a missing arbiter is visible instead of silently racing. If **you** own
-a property others need, register the arbiter once in `setup()`:
+write, so a missing arbiter is visible instead of silently racing. **Refusal is
+a normal outcome and your caller must handle it** — M11's arbiter refuses `aid`
+outright while its own per-file restore is in flight, because that race picks
+the wrong dub on a dual-audio release. If **you** own a property others need,
+register the arbiter once in `setup()`:
 
 ```ts
 ctx.mpv.arbitrate('aid', async (value, req) => {
@@ -164,6 +240,10 @@ ctx.mpv.arbitrate('aid', async (value, req) => {
   return { ok: true }
 })
 ```
+
+Arbiters registered today: M11 on `aid`, M07 on `d3d11-output-format` and
+`d3d11-output-csp`. If the property you need has none, the OwnershipError says
+so and adding one is a one-line PR against the owner.
 
 **Adding a mediator is a one-line PR against the owner's module plus a row in
 the table above.** Cheap, visible, reviewable — that is the whole point.
@@ -258,8 +338,35 @@ genuinely additive `*-append` family (`--script-opts-append`,
 `--sub-auto-exts-append`, `--sub-file-paths-append`, `--ytdl-raw-options-append`,
 and a few more; the list is explicit, and nothing else is exempt).
 
-**An option follows its property's owner.** If you do not own
-`d3d11-output-format`, you may not contribute `--d3d11-output-format`.
+**An option follows its property's owner — and this is now a boot error, not
+advice.** A spawn arg is a property write that happens before the first frame,
+so it goes through the same owner map:
+
+```
+module 'video-hdr' contributes '--d3d11-output-format=rgba16f', but the
+'d3d11-output-format' property is owned by 'video-decode' (§3.7). An option
+follows its property's owner ... Ask video-decode through
+ctx.mpv.requestSet('d3d11-output-format', …) or its mediator command, and let
+video-decode contribute the arg.
+```
+
+**Why this matters more than it looks: the V33/V36 case.** M05 (video-hdr) needs
+`d3d11-output-format=rgba16f` for HDR passthrough; M06 (video-scaler) wants
+`rgb10_a2` for 10-bit dithering. Both declare it in `requestsProperties`;
+neither owns it; it is spawn-scoped. Under the old rules each module was
+perfectly correct on its own and the PAIR was a hard boot failure — so the bill
+fell on whoever merged second, weeks later, with no clue why. Now either one
+fails on its own boot with M07 named.
+
+The resolution, so nobody re-litigates it: **M07 owns it, M07 contributes it,
+and M07 arbitrates.** The two values are mutually exclusive and one is strictly
+better — `rgba16f` is a 16-bit float surface, so it carries everything
+`rgb10_a2` does plus the HDR range — so M07 holds HDR above dither and says so
+in the refusal rather than letting last-writer-win decide it silently. It is
+restart-scoped: the swapchain format is fixed when the VO comes up.
+
+The check runs BEFORE the additive-`*-append` exemption, because `--vf-append`
+is additive as an option and still writes `vf`, which the chain owns.
 
 ---
 
@@ -396,8 +503,52 @@ unknown-key preservation across versions (P10), a read-only downgrade guard
 (P09), corrupt-file quarantine to `<file>.corrupt.<ts>` (P12), and a
 `<file>.bak.v<old>` copy before any migration (P08).
 
-The settings UI (M38) is generated from your descriptors. It does not know your
-module exists.
+### The settings window is GENERATED from these, and that is the whole story
+
+There is no form to edit. `src/renderer/settings.html` is an empty `<main>` and
+`src/renderer/src/settings.ts` is one line; the page is built from the
+descriptor snapshot at open time, one control per `type.kind`, written back by
+id. **Adding a setting means adding a descriptor in your own module directory
+and nothing else.**
+
+It was not like this. `settings.html` hardcoded `<select id="hwdec">`,
+`<select id="vo">`, `<select id="audioDevice">`, `<input id="subScale">` and six
+more, all backed by fields on `AppConfig` in `src/shared/types.ts` — three files
+in every module's `mustNotTouch`, which put M38 in a head-on collision with
+M07, M10, M15, M17, M19, M22, M28 and M31 simultaneously.
+
+Two escape hatches for what a descriptor genuinely cannot express, and please
+use them only for that:
+
+**`{ kind: 'custom', rendererComponent }`** when the choices are not knowable
+statically. The one real case today is M15's output-device list, which is read
+from mpv when the window opens and changes when a headset is plugged in:
+
+```ts
+// main half
+type: { kind: 'custom', rendererComponent: 'audio-devices.picker' }
+
+// renderer half — src/renderer/src/features/audio-devices/index.ts
+ctx.settingsComponent('audio-devices.picker', (host, binding) => {
+  const select = document.createElement('select')
+  host.appendChild(select)
+  select.addEventListener('change', () => binding.set(select.value))
+  const off = binding.onChange(() => { select.value = binding.get<string>() })
+  return () => { off(); select.remove() }
+})
+```
+
+**`ctx.settingsSection()`** for prose and actions — a paragraph explaining a
+driver bug, a "restart now" button. M31 contributes the Electron #40515
+explanation that sits under its layout select.
+
+Everything else is a descriptor. If you are reaching for a hatch to render an
+ordinary value, the descriptor kinds you want are there: `bool` is a checkbox,
+a bounded `int`/`float` is a slider with a readout, an unbounded one is a number
+box, `enum` is a select, `path` is a read-only field plus a native browse
+dialog, `list` is one line per entry, `string` with `multiline` is a textarea.
+`requiresRestart` adds a badge; `mpvOption` is shown and indexed for search;
+`keywords` are what the search box matches besides the label.
 
 ---
 
@@ -501,11 +652,13 @@ ctx.ipc.send('playlist:state', payload)          // to the overlay
 renderer's own glob:
 
 ```ts
+import './my-panel.css'                       // your CSS, in your directory
 import type { RendererFeatureModule } from '@shared/renderer-api'
 
 const mod: RendererFeatureModule = {
   id: 'nav-chapters',
   setup(ctx) {
+    if (ctx.surface !== 'player') return       // see below
     ctx.ipc.send('nav-chapters:goto', { index: 3 })
     ctx.state.subscribe((s) => redraw(s))
     ctx.seekbarLayer({ ... })
@@ -513,6 +666,56 @@ const mod: RendererFeatureModule = {
 }
 export default mod
 ```
+
+**`ctx.surface` is `'player'` or `'settings'`.** The overlay and the settings
+window run the SAME glob, so your `setup()` is called once per window. The hosts
+ignore contributions that do not belong to their surface, so a module that just
+registers everything is still correct — branch on it to skip expensive work.
+
+**Import your own CSS.** Vite bundles it. `styles.css` is core's and is on the
+forbidden list; a panel's look is the panel's business.
+
+> **A trap that cost us a live bug, and it is about YOUR code, not core's.**
+> `ctx.state.subscribe(cb)` **replays the last state synchronously**, so `cb`
+> runs during your `setup()`. Everything it closes over must already exist at
+> the point you subscribe. nav-chapters declared `let ticks = []` *below* its
+> subscribe, so the first replayed `paint()` was a TDZ ReferenceError; the throw
+> killed the rest of `setup()`, so its `seekbarLayer()` never registered, and it
+> left a permanently throwing subscriber behind. Declare first, subscribe last.
+
+### The four contribution points, and what each renders
+
+They had no consumers at all until now — the arrays existed and nothing read
+them — which is why every module with UI had to edit a shared file.
+
+```ts
+// A docked side panel. The DOCK is core's; everything inside is yours.
+ctx.panel({
+  id: 'playlist', side: 'right', titleKey: 'playlist.title', order: 10,
+  mount(host) {            // host starts hidden; open it when your state says so
+    host.hidden = false
+    return () => { /* unmount */ }
+  }
+})
+
+// A block in the stats overlay (core.toggleStats, `I` by default).
+ctx.statsSection({
+  id: 'video-decode.stats', order: 20, titleKey: 'video-decode.stats',
+  refresh: { mode: 'onChange', watch: ['hwdec-current'] },   // or 'static' | 'poll'
+  fields: () => [{ labelKey: 'video-decode.statsHwdec', value: 'd3d11va' }]
+})
+
+// Prose or an action inside one of the eight fixed settings sections (§7).
+ctx.settingsSection({ id, section: 'video', order: 6, titleKey, mount(host) {...} })
+
+// The renderer half of a { kind: 'custom' } descriptor (§7).
+ctx.settingsComponent('audio-devices.picker', (host, binding) => {...})
+```
+
+`refresh` exists so a stats block does not burn a wake-up a second for a value
+that changes once per file: `static` reads once when the panel opens, `onChange`
+re-reads on a state push, `poll` is for values with no property to watch.
+Everything stops while the panel is hidden.
 
 **Nobody edits `src/preload/index.ts` again.** It exposes one generic
 `window.rl` bridge with a channel shape check, plus the typed `window.rlplayer`
@@ -522,7 +725,8 @@ the preload is a shape check, not the security boundary: main only has a handler
 for channels a module actually registered under its own id.
 
 The renderer context also gives you `panel()`, `statsSection()`,
-`settingsSection()`, `settingsComponent()` and `osd.show()`.
+`settingsSection()`, `settingsComponent()`, `t()` and `osd.show()`. Each of the
+first four now has a host that renders it; see below.
 
 ### The interactive seek-bar layer
 
@@ -641,7 +845,13 @@ worse than a noisy log line.
 ## 13. Testing your module
 
 - Put `node:test` files next to the code as `*.test.ts`; `npm test` globs
-  `src/**/*.test.ts`.
+  `src/**/*.test.ts`, and CI runs it on every push. The named suites are
+  `npm run test:property-ownership`, `test:reserved-args` and
+  `test:renderer-hosts`; `npm run e2e:overlay` drives the real app.
+- **Your new file needs an owner.** `npm run check:partition` fails if any file
+  under `src/` — including one you have not committed yet — is not in exactly
+  one row's `ownedFiles` in `docs/parity/modules.json`. Your module's row claims
+  its two directories, so anything inside them is already covered.
 - Node runs TypeScript by **stripping** it. That means: no `enum`, no
   `namespace`, no **parameter properties** (`constructor(private x: T)`) — declare
   the field and assign it. Type-only imports must be written `import type`, and
@@ -650,7 +860,9 @@ worse than a noisy log line.
 - Keep the logic you want to test free of Electron imports. Every core piece
   that has a test does this, which is why the suites exercise the real
   implementation rather than a copy of it.
-- Your §6.3 acceptance row is the bar. "It compiles" is not acceptance.
+- Your §6.3 acceptance row is the bar. "It compiles" is not acceptance. Neither
+  is "no console errors": a hung app is silent too, which is why
+  `e2e:overlay` proves liveness before it believes a quiet console.
 
 ---
 
@@ -667,6 +879,25 @@ implemented as described here, and this list is the authority.
 | 4 | §3.4 interfaces live in `shared/feature-api.ts` | renderer-side interfaces live in `shared/renderer-api.ts` | They mention `HTMLElement`, and `feature-api.ts` is compiled under the main tsconfig, which carries no DOM lib. `tsconfig.node.json` excludes the renderer file. |
 | 5 | §5.3 puts `--cursor-autohide=no` and `--taskbar-progress=no` in the base set; §7.5 lists both as inert under `--wid` | core may contribute them; a **feature module** contributing any inert flag still throws | Both statements are in the spec. Setting them from core is harmless belt-and-braces; the check that matters is the one that stops a module from using a dead flag *instead of* `ctx.window`. |
 | 6 | `test:legacy-shim` "fails the build once every one of the 22 has an owner" | it asserts the table only ever **shrinks**; the build-failing half is gated on the renderer being repointed | Wave 0 itself gave all 22 an owner, because it migrated the modules that claim them — while the renderer's buttons and sliders still speak the legacy `PlayerAction` vocabulary. As written the deadline would fire on day one and delete a shim that is still load-bearing. The honest expiry is "all 22 owned **and** no renderer call site left"; the shrink-only assertion holds meanwhile. |
+
+### What the post-Wave-0 audit changed
+
+Three verifiers went at Wave 0 and returned FAIL / FAIL / PASS-with-leaks. The
+list below is what moved as a result; everything above already describes the
+current state.
+
+| # | Was | Is |
+|---|---|---|
+| 7 | `ctx.panel()`, `statsSection()`, `settingsSection()`, `settingsComponent()` pushed into arrays nothing read | four hosts render them; M28's panel, M07's stats block, M31's settings section and M15's settings component are the proof, and `index.html` / `main.ts` / `styles.css` are forbidden to modules |
+| 8 | the settings form hardcoded ten controls and collided with eight modules | generated from descriptors; `settings.html` is an empty `<main>` |
+| 9 | `ctx.ipc.send(ch, p, 'settings')` was silently dropped | `windowsFor()` returns the settings window; it also runs the feature glob, with `ctx.surface` to tell you which window you are in |
+| 10 | the guard stripped two prefixes, space-joined only | the eleven prefixes mpv accepts, in the array-element form it actually uses; plus `set_property_string`, the underscore aliases, and `loadfile`'s options argument |
+| 11 | `sub-reload` was declared as a *property*, where it enforced nothing | `ownsCommands`, with the same duplicate check and runtime guard, and a test that fails if a command name appears in `ownsProperties` |
+| 12 | `mpvBus.manager` was public: `mpvBus.manager.client.setProperty('aid',2)` bypassed everything | `#private`; the bus exposes no path to a raw write, and `check:forbidden` greps `core/mpv/*` too |
+| 13 | a dropped write in a shipped build was counted and never read | first refusal toasts, all of them show in the stats overlay |
+| 14 | no module registered an arbiter, so every `requestSet` returned `'no-arbiter'` while the error recommended it | M11 arbitrates `aid`, M07 the two d3d11 surface options, and the hint tells you the truth when there is none |
+| 15 | "an option follows its property's owner" was prose | a boot error naming the owner; M05/M06/M07 resolved (§4) |
+| 16 | 30 of 78 files under `src/` had no owner | all owned; `check:partition` fails the build otherwise |
 
 Two smaller notes:
 
@@ -685,7 +916,12 @@ Two smaller notes:
 
 - [ ] Directory name equals `id`.
 - [ ] Every property you write is in `ownsProperties` **and** in
-      `docs/parity/modules.json`. `npm test` checks both directions.
+      `docs/parity/modules.json`. `npm test` checks both directions. That
+      includes anything you pass in `loadfile`'s options map, and anything you
+      write behind an mpv prefix.
+- [ ] Every mpv COMMAND only you may issue is in `ownsCommands` and in
+      `modules.json`'s `ownedCommands`. A command is not a property; declaring
+      it as one enforces nothing.
 - [ ] Every property you write that you do **not** own goes through a mediator
       or `requestSet`, and is listed in `requestsProperties`.
 - [ ] Settings, commands, IPC channels and i18n keys are all prefixed with your
@@ -693,9 +929,17 @@ Two smaller notes:
 - [ ] Keybind defaults use **physical** codes for all three presets.
 - [ ] Every state-changing command fires an OSD message.
 - [ ] Per-file state goes through a slice, never through your own JSON file.
-- [ ] No import of `windows.ts`, `ipc.ts`, `preload/index.ts`, another feature
-      module, or Electron's `dialog`. `npm run check:forbidden` proves it.
+- [ ] No import of `windows.ts`, `ipc.ts`, `preload/index.ts`, `core/mpv/*`,
+      the renderer core, another feature module, or Electron's `dialog`.
+      `npm run check:forbidden` proves it.
+- [ ] Your UI is a `ctx.panel()` / `ctx.statsSection()` / `ctx.seekbarLayer()` /
+      `ctx.settingsSection()`, and your CSS is in your own directory. You did
+      not touch `index.html`, `main.ts` or `styles.css`.
+- [ ] Your files are claimed by your row in `modules.json`.
+      `npm run check:partition` proves it.
+- [ ] Your renderer half declares everything its state subscriber closes over
+      BEFORE it subscribes (§10).
 - [ ] Your `dispose()` releases timers, watchers, sleep blockers and child
       processes.
-- [ ] `npm run verify` is green, and your §6.3 acceptance row is ticked in your
-      module's `VERIFY.md`.
+- [ ] `npm run verify` is green, `npm run e2e:overlay` is clean, and your §6.3
+      acceptance row is ticked in your module's `VERIFY.md`.

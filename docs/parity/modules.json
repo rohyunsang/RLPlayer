@@ -10,6 +10,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/core/no-network.ts",
@@ -37,6 +39,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/core/errors.ts",
@@ -62,6 +66,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/core/i18n/"
@@ -91,6 +97,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/core/settings/",
@@ -125,8 +133,11 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
+      "src/main/core/manifest.test.ts",
       "src/main/core/registry-order.test.ts",
       "src/main/core/registry-order.ts",
       "src/main/core/registry.ts",
@@ -175,6 +186,8 @@
     ],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/core/mpv/arg-owner.test.ts",
@@ -205,6 +218,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/core/mpv/guards.test.ts",
@@ -233,6 +248,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/core/mpv/chain.test.ts",
@@ -263,6 +280,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/core/mpv/af-chain.ts"
@@ -290,6 +309,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/core/input/",
@@ -325,6 +346,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/core/osd/"
@@ -351,6 +374,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/core/state/per-file.test.ts",
@@ -384,6 +409,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/core/dialog.ts",
@@ -410,6 +437,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/core/ipc.ts",
@@ -440,6 +469,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/renderer/index.html",
@@ -478,6 +509,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [
       "rl-autolevel",
       "rl-cshift",
@@ -499,14 +532,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -541,6 +583,16 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {
+      "video-geometry.setFitMode": [
+        "keepaspect",
+        "panscan",
+        "video-zoom",
+        "video-pan-x",
+        "video-pan-y"
+      ]
+    },
+    "usesMediators": [],
     "ownedFilterLabels": [
       "rl-cropdetect",
       "rl-hflip",
@@ -568,14 +620,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -597,6 +658,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [
       "rl-deblock",
       "rl-denoise",
@@ -624,14 +687,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -650,6 +722,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [
       "rl-deint"
     ],
@@ -667,14 +741,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -708,6 +791,8 @@
       "d3d11-output-format"
     ],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [
       "rl-dv",
       "rl-truehdr"
@@ -725,14 +810,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -792,6 +886,8 @@
       "d3d11-output-format"
     ],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [
       "rl-lut",
       "rl-vsr"
@@ -811,14 +907,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -860,6 +965,8 @@
       "d3d11-output-csp",
       "d3d11-output-format"
     ],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/video-decode/",
@@ -875,14 +982,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -904,6 +1020,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [
       "rl-mi"
     ],
@@ -919,14 +1037,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -946,6 +1073,8 @@
       "panscan"
     ],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [
       "rl-360",
       "rl-3d"
@@ -963,14 +1092,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -995,6 +1133,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [
       "rlboost",
       "rltempo"
@@ -1014,14 +1154,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -1049,6 +1198,23 @@
     "arbitrates": [
       "aid"
     ],
+    "mediates": {
+      "audio-tracks.reinitDecoder": [
+        "aid"
+      ],
+      "audio-tracks.selectStreamFormat": [
+        "vid",
+        "aid"
+      ],
+      "audio-tracks.setTrackAutoSelection": [
+        "audio-display",
+        "cover-art-auto",
+        "cover-art-whitelist",
+        "subs-with-matching-audio",
+        "track-auto-selection"
+      ]
+    },
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/audio-tracks/",
@@ -1064,14 +1230,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -1087,6 +1262,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [
       "rleq",
       "rlfeq",
@@ -1106,14 +1283,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -1138,6 +1324,8 @@
       "aid"
     ],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [
       "rldlg",
       "rlnight",
@@ -1155,14 +1343,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -1183,6 +1380,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [
       "rlch"
     ],
@@ -1200,14 +1399,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -1237,6 +1445,8 @@
       "aid"
     ],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [
       "rlac3"
     ],
@@ -1256,14 +1466,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -1279,6 +1498,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [
       "rlcry",
       "rlfx",
@@ -1299,14 +1520,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -1342,6 +1572,12 @@
       "subs-with-matching-audio"
     ],
     "arbitrates": [],
+    "mediates": {
+      "subs-tracks.reload": [
+        "sid"
+      ]
+    },
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/subs-tracks/",
@@ -1364,14 +1600,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -1387,10 +1632,12 @@
       "sub-codepage"
     ],
     "ownedCommands": [],
-    "requestsProperties": [
-      "sub-reload"
-    ],
+    "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [
+      "subs-tracks.reload"
+    ],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/subs-formats/",
@@ -1408,14 +1655,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -1481,10 +1737,12 @@
       "sub-use-margins"
     ],
     "ownedCommands": [],
-    "requestsProperties": [
-      "sub-reload"
-    ],
+    "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [
+      "subs-tracks.reload"
+    ],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/subs-style/",
@@ -1507,14 +1765,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -1538,6 +1805,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/subs-sync/",
@@ -1554,14 +1823,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -1578,6 +1856,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/subs-browser/",
@@ -1593,14 +1873,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -1621,6 +1910,8 @@
     ],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/capture-still/",
@@ -1643,14 +1934,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -1668,6 +1968,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/capture-encode/",
@@ -1689,14 +1991,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -1712,6 +2023,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/nav-seek/",
@@ -1733,14 +2046,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -1764,6 +2086,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/nav-chapters/",
@@ -1784,14 +2108,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -1811,6 +2144,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/nav-bookmarks/",
@@ -1833,14 +2168,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -1856,6 +2200,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/nav-thumbnails/",
@@ -1872,14 +2218,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -1908,6 +2263,13 @@
     ],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {
+      "playlist.openPaths": [
+        "start"
+      ],
+      "playlist.seriesPrefix": []
+    },
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/playlist/",
@@ -1957,14 +2319,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -1985,6 +2356,8 @@
       "cover-art-whitelist"
     ],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/mediainfo/",
@@ -2012,14 +2385,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -2035,6 +2417,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/history/",
@@ -2051,14 +2435,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -2079,6 +2472,8 @@
       "panscan"
     ],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/shell-window/",
@@ -2118,14 +2513,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -2141,6 +2545,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/shell-taskbar/",
@@ -2157,14 +2563,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -2181,6 +2596,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/shell-system/",
@@ -2202,14 +2619,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -2225,6 +2651,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/shell-associations/",
@@ -2247,14 +2675,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -2297,6 +2734,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/stream-open/",
@@ -2324,14 +2763,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -2356,6 +2804,8 @@
       "vid"
     ],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/stream-ytdl/",
@@ -2371,14 +2821,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -2402,6 +2861,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/disc-devices/",
@@ -2415,14 +2876,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -2438,6 +2908,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/settings-ui/",
@@ -2456,14 +2928,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -2479,6 +2960,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/input-ui/",
@@ -2491,14 +2974,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   },
   {
@@ -2515,6 +3007,8 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
+    "mediates": {},
+    "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/transfer/",
@@ -2528,14 +3022,23 @@
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
-      "src/main/ipc.ts",
-      "src/preload/index.ts",
-      "src/main/menu.ts",
       "src/shared/keybinds.ts",
-      "src/main/mpv/manager.ts",
-      "src/main/core/window/windows.ts",
+      "src/shared/media-types.ts",
+      "src/main/index.ts",
+      "src/main/ipc.ts",
+      "src/main/core/",
+      "src/main/mpv/",
+      "src/preload/index.ts",
+      "src/renderer/index.html",
+      "src/renderer/settings.html",
+      "src/renderer/src/main.ts",
+      "src/renderer/src/settings.ts",
+      "src/renderer/src/styles.css",
+      "src/renderer/src/util.ts",
+      "src/renderer/src/core/",
       "mpv `vf` / `af` (use ctx.vf / ctx.af)",
-      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)"
+      "any mpv property not in ownedProperties (use ctx.mpv.requestSet)",
+      "any mpv command owned by another module (use its mediator)"
     ]
   }
 ]

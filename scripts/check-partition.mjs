@@ -34,7 +34,16 @@ const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const manifestPath = path.join(repo, 'docs', 'parity', 'modules.json')
 const modules = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
 
-const tracked = execFileSync('git', ['ls-files', 'src'], { cwd: repo, encoding: 'utf8' })
+// `--others --exclude-standard` includes files that are NEW but not ignored.
+// Listing only tracked files meant an unowned file stayed invisible until the
+// commit that added it had already landed, which is one commit too late to be
+// useful — and it is exactly how four of this repo's own files slipped past the
+// first run of this check.
+const tracked = execFileSync(
+  'git',
+  ['ls-files', '--cached', '--others', '--exclude-standard', 'src'],
+  { cwd: repo, encoding: 'utf8' }
+)
   .split('\n')
   .map((l) => l.trim())
   .filter(Boolean)
