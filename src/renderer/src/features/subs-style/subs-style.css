@@ -1,0 +1,110 @@
+/*
+ * M19 subs-style, renderer half.
+ *
+ * Every selector is prefixed `substyle-` and lives in this module's own
+ * directory: `src/renderer/src/styles.css` and `settings.css` are core's, and a
+ * feature selector sitting in either is what `check:partition` fails the build
+ * for. The host elements (`.setting-custom`, the settings-section wrapper) are
+ * core's; everything inside them is ours.
+ */
+
+/* --- the #AARRGGBB colour control (4 rows of S18) ----------------------- */
+
+.substyle-color {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/*
+ * The swatch is drawn over a checkerboard so ALPHA IS VISIBLE. `sub-back-color`
+ * defaults to #AF000000 — 69% black — and against the settings page background
+ * that is indistinguishable from opaque black, which is exactly the value
+ * people come to this control to change.
+ */
+.substyle-swatch {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 4px;
+  overflow: hidden;
+  background-image:
+    linear-gradient(45deg, #7a7a7a 25%, transparent 25%, transparent 75%, #7a7a7a 75%),
+    linear-gradient(45deg, #7a7a7a 25%, transparent 25%, transparent 75%, #7a7a7a 75%);
+  background-color: #bdbdbd;
+  background-size: 10px 10px;
+  background-position:
+    0 0,
+    5px 5px;
+  flex: none;
+}
+
+.substyle-swatch-fill {
+  position: absolute;
+  inset: 0;
+}
+
+.substyle-picker {
+  width: 40px;
+  height: 24px;
+  padding: 0;
+  flex: none;
+}
+
+.substyle-alpha {
+  width: 110px;
+}
+
+.substyle-hex {
+  width: 10ch;
+  font-family: ui-monospace, "Consolas", monospace;
+  text-transform: uppercase;
+}
+
+.substyle-hex.substyle-bad {
+  outline: 1px solid #e06c6c;
+}
+
+.substyle-small {
+  opacity: 0.7;
+  font-size: 0.85em;
+}
+
+/* --- the live state / preset section ------------------------------------ */
+
+.substyle-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.substyle-presets {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/*
+ * A note that is only sometimes true gets a colour that says which. The
+ * image-subtitle case is a warning (the controls above genuinely do nothing);
+ * the ASS-override-off case is information (that is the intended default).
+ */
+.substyle-note {
+  border-left: 3px solid rgba(255, 255, 255, 0.3);
+  padding: 6px 10px;
+  line-height: 1.45;
+}
+
+.substyle-note.substyle-warn {
+  border-left-color: #e0a44c;
+}
+
+.substyle-note.substyle-info {
+  border-left-color: #5c9ad6;
+}
+
+.substyle-codec {
+  font-family: ui-monospace, "Consolas", monospace;
+}

@@ -6,11 +6,13 @@ import type { SettingDescriptor, SettingSection, SettingType } from '@shared/fea
  * No Electron, no DOM, no `node:*`: this file is where the logic lives so it can
  * be driven by `style.test.ts` (§13). `index.ts` holds wiring only.
  *
- * EVERY ROW BELOW WAS MEASURED AGAINST THE PINNED BINARY over JSON IPC
- * (`resources/mpv/mpv.exe`, v0.41.0-923-g7b8915bc1) — name, type, range, the
- * exact accepted spellings and the READBACK shape. Five things came out of that
- * run that the spec's §2 tables do not say, and each one is a bug somebody would
- * otherwise have written:
+ * EVERY ROW BELOW WAS MEASURED AGAINST THE PINNED BINARY — name, type, range and
+ * default from `mpv.exe --list-options`, and the accepted spellings plus the
+ * READBACK SHAPE from a live `--input-ipc-server` session over the Windows named
+ * pipe (`resources/mpv/mpv.exe`, v0.41.0-923-g7b8915bc1). Every claim below was
+ * re-run against that binary; six things came out of it that the spec's §2
+ * tables do not say, and each one is a bug somebody would otherwise have
+ * written:
  *
  *  1. A choice property whose value is `no` or `yes` READS BACK AS A JSON
  *     BOOLEAN, not as the string you wrote:
@@ -23,26 +25,49 @@ import type { SettingDescriptor, SettingSection, SettingType } from '@shared/fea
  *
  *     So `peek<string>('sub-ass-override') === 'no'` is FALSE while the property
  *     is exactly `no`. `fromMpv()` is the only thing allowed to read one of
- *     these back.
+ *     these back — and it is NOT `coerce()`, which is the trap the draft of this
+ *     file fell into. `coerce()` also honours `boolMap`, which exists for the
+ *     v0.1.1 CHECKBOX (`true` meant "use my font", i.e. `force`). Feed mpv's
+ *     `true` — which means `yes` — through `coerce()` and it silently becomes
+ *     `force`: two states apart, and the one that overrides a release group's
+ *     typesetting. The two decoders are separate functions for that reason, and
+ *     `style.test.ts` asserts both directions.
  *  2. An OUT-OF-RANGE write does not clamp and does not report a range error —
  *     it fails with `unsupported format for accessing property`, which reads
- *     like a type error and is easy to log-and-ignore:
+ *     like a type error and is easy to log-and-ignore. Re-measured, all eight:
  *
  *        sub-pos 200 · sub-margin-x -5 · sub-blur 21 · sub-spacing 11
  *        sub-gauss 4 · sub-scale 101 · sub-font-size 0 · image-subs-hdr-peak 5
  *
- *     all FAIL. `coerce()` clamps to the range the binary reported, so a
- *     slider that overshoots is our bug and not a silent no-op.
+ *     fail and the property keeps its OLD value (`sub-pos` stayed 100), while
+ *     `sub-pos 150` succeeds. `coerce()` clamps to the range the binary
+ *     reported, so a slider that overshoots is our bug and not a silent no-op.
  *  3. `sub-shadow-size` DOES NOT EXIST (`property not found`) — the shadow is
  *     offset-driven, as S18 says. `sub-shadow-color` is an alias for
- *     `sub-back-color` (verified: writing one moves the other), so there is no
- *     separate shadow colour to expose.
- *  4. `sub-outline-size` is an UNBOUNDED Float: `-1` is accepted. mpv will not
- *     stop us from shipping a negative outline; the table does.
+ *     `sub-back-color` (verified twice: `--list-options` prints
+ *     `alias for sub-back-color`, and writing `sub-shadow-color "#11223344"`
+ *     reads back on `sub-back-color`), so there is no separate shadow colour to
+ *     expose. `sub-border-color`/`sub-border-size` are likewise aliases for
+ *     `sub-outline-color`/`sub-outline-size`.
+ *  4. `sub-outline-size`, `sub-shadow-offset` and `sub-margin-y-offset` are
+ *     UNBOUNDED (`Float (default: 1.65)`, no range printed): `-1` and `-3` are
+ *     both ACCEPTED and read back. mpv will not stop us shipping a negative
+ *     outline; the table does.
  *  5. A String-list property accepts a bare string and reads back as a
- *     one-element list (`sub-filter-regex "x"` -> `["x"]`), and the
+ *     one-element list (`sub-filter-regex "x"` -> `["x"]`), accepts a real JSON
+ *     array (`["()","[]","（）"]` round-trips exactly), and the
  *     choice-or-integer pair accept the numeric STRING form and read back as a
  *     number (`image-subs-hdr-peak "1000"` -> `1000`).
+ *  6. A Color NORMALISES ON READBACK: `sub-color "#FF00FF"` — a six-digit hex,
+ *     which mpv accepts — reads back as `"#FFFF00FF"`, i.e. `#AARRGGBB` with
+ *     alpha forced opaque. So a six-digit value is not wrong, it is just not
+ *     canonical; `parseColor()`/`formatColor()` produce mpv's own spelling so a
+ *     round trip through the settings store is stable.
+ *
+ * Two properties are DELIBERATELY ABSENT and must stay absent. `sub-speed` is
+ * M20's (§3.7), and `sub-fps` — which exists in this binary as
+ * `Float (default: 0)` — is what S30 says never to ship UI for: lavf's microdvd
+ * demuxer has already converted frames to timestamps, so it scales nothing.
  */
 
 export type GroupKey = 'font' | 'colour' | 'position' | 'ass' | 'filter' | 'image'
@@ -66,11 +91,26 @@ export interface StyleRow {
   readonly max?: number
   readonly step?: number
   readonly choices?: readonly string[]
+  /**
+   * What the keybindable cycle command steps through, when that is NARROWER
+   * than `choices`. S21 spells the ASS-override cycle
+   * `cycle-values sub-ass-override no scale force strip` — four states, `yes`
+   * deliberately omitted, because `yes` and `scale` differ only in whether
+   * `sub-scale` is also allowed through and a user tapping one key cannot tell
+   * them apart. The SELECT still offers all five.
+   */
+  readonly cycleChoices?: readonly string[]
   readonly pathMode?: 'file' | 'directory'
+  /** Native browse-dialog filters, for a `path` row whose type is known. */
+  readonly pathFilters?: readonly { readonly name: string; readonly extensions: string[] }[]
   /**
    * A stored boolean maps to these. Only for `assOverride`, whose v0.1.1
    * descriptor was a `bool` under the same id: a user who ticked it has `true`
    * in config.json and must not get `coerce()`'s fallback silently.
+   *
+   * READ FINDING 1 BEFORE REUSING THIS. It encodes what the old CHECKBOX meant,
+   * which is not what mpv's boolean readback means. `fromMpv()` never consults
+   * it.
    */
   readonly boolMap?: { readonly true: string; readonly false: string }
   /**
@@ -276,10 +316,32 @@ export const ROWS: readonly StyleRow[] = [
     keywords: ['테두리 방식', '불투명 상자', 'border style', 'box']
   },
 
+  {
+    /**
+     * TEXT subtitles, not image ones — so it belongs beside the colour rows and
+     * not in the 'Image subtitles' block where the draft filed it, next to
+     * image-subs-hdr-peak. The two properties are a confusable pair with
+     * opposite subjects, and a label reading 'Text subtitle HDR peak' under a
+     * heading reading 'Image subtitles (PGS/VobSub)' is worse than no grouping.
+     */
+    key: 'subHdrPeak',
+    mpv: 'sub-hdr-peak',
+    kind: 'enum',
+    group: 'colour',
+    order: 126,
+    def: 'auto',
+    choices: ['auto', 'sdr', '203', '400', '1000', '4000'],
+    advanced: true,
+    keywords: ['hdr', '밝기', 'peak', 'nits']
+  },
+
   // --- S19 · S23 position, margins, alignment ------------------------------
   {
     key: 'pos',
     mpv: 'sub-pos',
+    // mpv's type here is `Float (0 to 150)`; a whole-number step is a UI choice,
+    // not a type constraint — writing an integer to a Float property is exact.
+    // The keybind steps by 1, which is what mpv's own `r`/`R` do.
     kind: 'int',
     group: 'position',
     order: 140,
@@ -392,6 +454,7 @@ export const ROWS: readonly StyleRow[] = [
     def: 'no',
     mpvDefault: 'scale',
     choices: ['no', 'yes', 'scale', 'force', 'strip'],
+    cycleChoices: ['no', 'scale', 'force', 'strip'],
     boolMap: { true: 'force', false: 'no' },
     keywords: ['ass', '스타일 덮어쓰기', 'override', 'style']
   },
@@ -431,6 +494,9 @@ export const ROWS: readonly StyleRow[] = [
     mpv: 'sub-ass-styles',
     kind: 'path',
     pathMode: 'file',
+    // `--list-options` marks this `String (default: ) [file]`; only the style
+    // block of the file is read, so any ASS/SSA will do.
+    pathFilters: [{ name: 'ASS/SSA', extensions: ['ass', 'ssa'] }],
     group: 'ass',
     order: 164,
     def: '',
@@ -646,17 +712,6 @@ export const ROWS: readonly StyleRow[] = [
     choices: ['sdr', 'video', 'video-static', 'video-dynamic', '203', '400', '1000', '4000'],
     advanced: true,
     keywords: ['hdr', '밝기', 'peak', 'nits']
-  },
-  {
-    key: 'subHdrPeak',
-    mpv: 'sub-hdr-peak',
-    kind: 'enum',
-    group: 'image',
-    order: 206,
-    def: 'auto',
-    choices: ['auto', 'sdr', '203', '400', '1000', '4000'],
-    advanced: true,
-    keywords: ['hdr', '밝기', 'peak', 'nits']
   }
 ]
 
@@ -750,7 +805,20 @@ export function coerce(row: StyleRow, value: unknown): unknown {
       return typeof value === 'boolean' ? value : row.def
     case 'int':
     case 'float': {
-      const n = typeof value === 'number' ? value : Number(value)
+      /**
+       * `Number()` IS NOT A GUARD HERE, and the draft used it as one.
+       * `Number(null)`, `Number('')`, `Number([])` and `Number(false)` are all
+       * `0` — finite, so they passed the `Number.isFinite` check and then
+       * clamped to the row MINIMUM. A `config.json` with
+       * `"subs-style.fontSize": null` produced 8-pixel subtitles instead of the
+       * 38 the descriptor promises, which is indistinguishable from a real
+       * setting the user cannot remember making. Only a number, or a string that
+       * is actually a number, is numeric input; everything else is absent.
+       */
+      let n: number
+      if (typeof value === 'number') n = value
+      else if (typeof value === 'string' && value.trim() !== '') n = Number(value)
+      else return row.def
       if (!Number.isFinite(n)) return row.def
       return clampNumber(row, n)
     }
@@ -795,8 +863,25 @@ export function coerce(row: StyleRow, value: unknown): unknown {
  * `peek<string>()` comparison is wrong for two of the five states. It also
  * folds the numeric readback of the choice-or-integer pair
  * (`image-subs-hdr-peak` -> `1000`) back to the string form the enum stores.
+ *
+ * IT IS NOT `coerce()`, AND THE DIFFERENCE IS TWO STATES WIDE. The draft of this
+ * file defined `fromMpv = coerce`, and `coerce()` honours `boolMap` — which
+ * encodes what the v0.1.1 CHECKBOX meant (`true` = "use my font" = `force`).
+ * mpv's `true` means `yes`. So `fromMpv(assOverride, true)` returned `'force'`
+ * for a property that was actually `yes`: reading mpv would have reported that
+ * we are overriding a release group's typesetting when we are not. The bug was
+ * dormant only because nothing called it. Here the mpv side is decoded on its
+ * own terms and `boolMap` is never consulted.
  */
 export function fromMpv(row: StyleRow, raw: unknown): unknown {
+  if (row.kind === 'enum' && typeof raw === 'boolean') {
+    const choices = row.choices ?? []
+    const s = raw ? 'yes' : 'no'
+    // A boolean readback is only meaningful for a choice set that HAS yes/no.
+    // Nothing else in this table has one, so falling back to the row default
+    // beats inventing a state.
+    return choices.includes(s) ? s : row.def
+  }
   return coerce(row, raw)
 }
 
@@ -843,8 +928,13 @@ function typeOf(row: StyleRow): SettingType {
       return { kind: 'string' }
     case 'list':
       return { kind: 'list', of: 'string' }
-    case 'path':
-      return { kind: 'path', mode: row.pathMode ?? 'file' }
+    case 'path': {
+      const t: SettingType = { kind: 'path', mode: row.pathMode ?? 'file' }
+      if (row.pathFilters) {
+        return { ...t, filters: row.pathFilters.map((f) => ({ ...f, extensions: [...f.extensions] })) }
+      }
+      return t
+    }
     case 'color':
       /**
        * THE ONE ESCAPE HATCH THIS MODULE USES, and it is here because
@@ -912,14 +1002,23 @@ function visibilityOf(row: StyleRow): ((get: <V>(id: string) => V) => boolean) |
         const list = get<unknown>('subs-style.filterRegex')
         return Array.isArray(list) ? list.length > 0 : false
       }
-    case 'scaleSigns':
-      // Only `yes`/`scale`/`force` scale anything, so signs cannot be scaled
-      // under `no`/`strip`.
-      return (get) => {
-        const v = get<unknown>('subs-style.assOverride')
-        const s = typeof v === 'boolean' ? (v ? 'force' : 'no') : String(v ?? 'no')
-        return s === 'yes' || s === 'scale' || s === 'force'
-      }
+    /**
+     * `scaleSigns` DELIBERATELY HAS NO visibleWhen, and that is a reversal.
+     *
+     * The obvious rule is "signs cannot be scaled while the override is
+     * `no`/`strip`, so hide it there" — and the mpv manual does tie
+     * `--sub-scale-signs` to the override. But S24 also records, from the
+     * manual, that `sub-scale` "affects ASS subtitles as well" REGARDLESS of the
+     * override, which is the whole reason that row carries a warning. Those two
+     * statements cannot both be fully true, and settling it needs a typeset ASS
+     * sample on screen — which needs a build, which this module has not had.
+     *
+     * A wrong `visibleWhen` HIDES a control the user needs and gives no reason;
+     * a wrong sentence in a description is a wording fix. So the dependency is
+     * stated in `subs-style.desc.scaleSigns` instead of enforced here. Restore
+     * the predicate only after watching a sign scale (or not) under
+     * `sub-ass-override=no`.
+     */
     default:
       return null
   }
@@ -970,7 +1069,13 @@ export const PRESETS: readonly StylePreset[] = [
     }
   },
   {
-    // Accessibility: opaque box, no transparency to read through, large text.
+    /**
+     * Accessibility: fully opaque box, large bold text, and YELLOW rather than
+     * white — `#FFFFFF00` is `#AARRGGBB`, so alpha FF, red FF, green FF, blue
+     * 00. That is deliberate and not a mistyped white: yellow on opaque black
+     * is the highest-legibility pairing for low vision and is what PotPlayer
+     * users on this preset pick by hand.
+     */
     id: 'accessible',
     values: {
       fontSize: 64,
@@ -1030,7 +1135,15 @@ export function cycleNext(choices: readonly string[], current: unknown): string 
   const first = choices[0] ?? ''
   if (choices.length === 0) return first
   const i = choices.indexOf(String(current))
+  // `indexOf` -> -1 for a value outside the cycle list, and (-1 + 1) % n is 0,
+  // so an out-of-cycle current (e.g. `yes`, which the select offers and the
+  // cycle skips) lands on the FIRST cycle state rather than the second.
   return choices[(i + 1) % choices.length] ?? first
+}
+
+/** What a cycle keybind steps through: the narrowed list where one exists. */
+export function cycleChoicesOf(row: StyleRow): readonly string[] {
+  return row.cycleChoices ?? row.choices ?? []
 }
 
 /** A step on a numeric row, clamped to the verified range. */

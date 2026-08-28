@@ -4,8 +4,10 @@ import {
   ROWS,
   argFor,
   coerce,
+  cycleChoicesOf,
   cycleNext,
   descriptors,
+  fromMpv,
   isImageSubCodec,
   presetWrites,
   resetWrites,
@@ -73,11 +75,30 @@ function writeSetting(row: StyleRow, value: unknown): void {
 }
 
 function pushRow(row: StyleRow): void {
-  void ctx.mpv.set(row.mpv, toMpv(row, valueOf(row))).catch((e: Error) => {
-    // A refused write here is a real defect (a range the table got wrong, or a
-    // property this build does not have), so it is logged rather than swallowed
-    // — but it must not take the rest of the batch down with it.
-    ctx.log.warn(`could not set ${row.mpv}: ${e.message}`)
+  const sent = toMpv(row, valueOf(row))
+  void ctx.mpv.set(row.mpv, sent).catch(async (e: Error) => {
+    /**
+     * A refused write here is a real defect — a range this table got wrong, or a
+     * property this build does not have — so it is logged rather than swallowed,
+     * but it must not take the rest of the batch down with it.
+     *
+     * AND IT SAYS WHAT MPV ACTUALLY HOLDS. An out-of-range write fails with
+     * `unsupported format for accessing property` and leaves the OLD value in
+     * place (finding 2), so the settings store and mpv have silently diverged at
+     * exactly this point. `could not set sub-pos` alone sends the next person
+     * hunting a type error; `could not set sub-pos to 200 (mpv holds 100)` names
+     * the range problem. `fromMpv()` and not `coerce()` for the readback —
+     * finding 1.
+     */
+    let held = 'unreadable'
+    try {
+      held = JSON.stringify(fromMpv(row, await ctx.mpv.get<unknown>(row.mpv)))
+    } catch {
+      /* the property may not exist in this build, which the message below says */
+    }
+    ctx.log.warn(
+      `could not set ${row.mpv} to ${JSON.stringify(sent)} (mpv holds ${held}): ${e.message}`
+    )
   })
 }
 
@@ -114,20 +135,48 @@ export interface SubsStyleUiState {
   codec: string | null
   assOverride: string
   presets: readonly string[]
+  /**
+   * Setting id -> the current `#AARRGGBB`, for the four `custom` colour controls.
+   *
+   * WHY THE PAYLOAD CARRIES VALUES AT ALL. `SettingBinding.onChange` fires only
+   * for writes the settings FORM made, so a colour changed by a preset, by
+   * `resetStyle` or by a keybind leaves the swatch showing the old colour with
+   * no way to know. That is a property of the core binding, not a bug in it —
+   * M12 hit the same thing and answered it the same way, with its own state
+   * channel. A colour control that lies about the colour is worse than none.
+   */
+  colors: Readonly<Record<string, string>>
 }
+
+/** The payload's key set, pinned by `module.test.ts`. See the duplication note. */
+export const UI_STATE_KEYS = ['assOverride', 'codec', 'colors', 'imageSub', 'presets'] as const
 
 function uiState(): SubsStyleUiState {
   const row = rowByKey('assOverride')
+  const colors: Record<string, string> = {}
+  for (const r of ROWS) if (r.kind === 'color') colors[settingIdOf(r)] = String(valueOf(r))
   return {
     imageSub: isImageSubCodec(subCodec),
     codec: subCodec,
     assOverride: row ? String(valueOf(row)) : 'no',
-    presets: PRESETS.map((p) => p.id)
+    presets: PRESETS.map((p) => p.id),
+    colors
   }
 }
 
+/**
+ * Coalesced to one message per turn. `applyPreset` writes eight settings, each
+ * of which would otherwise be its own broadcast and its own full re-render of
+ * the settings page's section.
+ */
+let broadcastQueued = false
 function broadcast(): void {
-  ctx.ipc.send('subs-style:state', uiState(), 'settings')
+  if (broadcastQueued) return
+  broadcastQueued = true
+  queueMicrotask(() => {
+    broadcastQueued = false
+    ctx.ipc.send('subs-style:state', uiState(), 'settings')
+  })
 }
 
 // --- OSD helpers ----------------------------------------------------------
@@ -150,10 +199,17 @@ function stepRow(key: string, delta: number, label: string, fmt: (v: number) => 
   osd(`${label} ${fmt(next)}`)
 }
 
+/**
+ * The keybindable half of an enum row. Steps the row's CYCLE list, which for
+ * `assOverride` is S21's four states and not the select's five — see
+ * `StyleRow.cycleChoices`.
+ */
 function cycleRow(key: string): void {
   const row = rowByKey(key)
-  if (!row?.choices) return
-  const next = cycleNext(row.choices, valueOf(row))
+  if (!row) return
+  const choices = cycleChoicesOf(row)
+  if (choices.length === 0) return
+  const next = cycleNext(choices, valueOf(row))
   writeSetting(row, next)
   osd(`${ctx.i18n.t(`subs-style.label.${key}`)}: ${optLabel(key, next)}`)
 }
@@ -244,6 +300,15 @@ const mod: FeatureModule = {
   async setup(c): Promise<void> {
     ctx = c
 
+    /**
+     * FIRST, before anything that can resolve a key. `settings.define()` snapshots
+     * descriptors whose labels the settings window later resolves, the legacy
+     * migration below can emit an OSD line, and `ctx.i18n.t()` returns the raw KEY
+     * for a message that is not registered yet — which is how a Korean UI ends up
+     * showing `subs-style.label.font` to somebody. Nothing here is expensive.
+     */
+    registerMessages()
+
     ctx.settings.define(descriptors())
 
     /**
@@ -269,9 +334,12 @@ const mod: FeatureModule = {
         ctx.settings.onChange<unknown>(settingIdOf(row), () => {
           pushRow(row)
           if (row.reload) requestReload()
+          // Everything the settings page's own section renders — the override
+          // state and the four colours — has to reach it however it changed:
+          // form, keybind, menu radio, preset or reset.
+          if (row.key === 'assOverride' || row.kind === 'color') broadcast()
           if (row.key === 'assOverride') {
             void mirrorLegacyStyle({ subAssOverride: valueOf(row) === 'force' })
-            broadcast()
           }
           if (row.key === 'scale') {
             void mirrorLegacyStyle({ subScale: valueOf(row) as number })
@@ -323,6 +391,15 @@ const mod: FeatureModule = {
     ctx.ipc.handle<void, SubsStyleUiState>('subs-style:query', () => uiState())
     ctx.ipc.on<{ id?: string }>('subs-style:applyPreset', (req) => {
       applyPreset(String(req?.id ?? ''))
+    })
+    /**
+     * Reset is not a preset — it clears every row back to its descriptor default
+     * rather than writing a named subset — so the settings page needs its own
+     * channel rather than a magic preset id that `presetById()` would have to
+     * pretend not to find.
+     */
+    ctx.ipc.on<void>('subs-style:reset', () => {
+      void ctx.commands.invoke('subs-style.resetStyle')
     })
 
     ctx.commands.register([
@@ -464,6 +541,25 @@ const mod: FeatureModule = {
         run: (arg) => applyPreset(String(arg ?? ''))
       },
       {
+        /**
+         * The arg-driven half of the border-style row: the menu renders it as a
+         * radio group, `cycleBorderStyle` is the keybindable half. Both write the
+         * same setting, so there is one source of truth and no state to sync.
+         */
+        id: 'subs-style.applyBorderStyle',
+        labelKey: 'subs-style.cmd.applyBorderStyle',
+        category: 'subtitles',
+        internal: true,
+        run: (arg) => {
+          const row = rowByKey('borderStyle')
+          if (!row) return
+          writeSetting(row, String(arg))
+          osd(
+            `${ctx.i18n.t('subs-style.label.borderStyle')}: ${optLabel('borderStyle', String(arg))}`
+          )
+        }
+      },
+      {
         id: 'subs-style.resetStyle',
         labelKey: 'subs-style.cmd.resetStyle',
         category: 'subtitles',
@@ -541,24 +637,6 @@ const mod: FeatureModule = {
       ]
     })
 
-    // The border-style radio group needs an arg-driven entry point of its own;
-    // `cycleBorderStyle` is the keybindable half of the same row.
-    ctx.commands.register([
-      {
-        id: 'subs-style.applyBorderStyle',
-        labelKey: 'subs-style.cmd.cycleBorderStyle',
-        category: 'subtitles',
-        internal: true,
-        run: (arg) => {
-          const row = rowByKey('borderStyle')
-          if (!row) return
-          writeSetting(row, String(arg))
-          osd(`${ctx.i18n.t('subs-style.label.borderStyle')}: ${optLabel('borderStyle', String(arg))}`)
-        }
-      }
-    ])
-
-    registerMessages()
   },
 
   dispose(): void {
@@ -638,7 +716,8 @@ function registerMessages(): void {
     'subs-style.label.justify': '줄 정렬',
     'subs-style.desc.justify': '여러 줄일 때 줄을 어느 쪽에 맞출지 정합니다.',
     'subs-style.label.useMargins': '검은 띠에도 자막 그리기',
-    'subs-style.desc.useMargins': '화면 위아래 검은 띠 영역까지 자막을 내보냅니다.',
+    'subs-style.desc.useMargins':
+      '화면 위아래 검은 띠 영역까지 자막을 내보냅니다. 자막이 없을 때도 아래쪽에 항상 같은 여백을 두려면 이 설정이 아니라 화면 설정의 "아래쪽 화면 여백"을 쓰세요.',
     'subs-style.label.assForceMargins': 'ASS 자막도 검은 띠에 그리기',
     'subs-style.desc.assForceMargins': 'ASS 자막에도 위 설정을 강제합니다.',
 
@@ -647,7 +726,7 @@ function registerMessages(): void {
       '기본값은 "끔"입니다. 제작자가 지정한 글꼴·위치를 그대로 보여 줍니다. "강제"로 두면 위의 글꼴·색상 설정이 이깁니다.',
     'subs-style.label.scaleSigns': '간판 자막도 배율 적용',
     'subs-style.desc.scaleSigns':
-      '"비율" 모드에서 간판·효과 자막이 어긋나지 않게 해 줍니다. 애니메이션 자막에 특히 유용합니다.',
+      '자막 배율·글자 크기를 간판·효과 자막(위치가 지정된 ASS 이벤트)에도 함께 적용합니다. "비율"이나 "강제" 모드에서 애니메이션 자막이 어긋나지 않게 해 줍니다.',
     'subs-style.label.assScaleWithWindow': 'ASS 자막도 창 크기에 맞추기',
     'subs-style.desc.assScaleWithWindow': '제작자 의도와 달라질 수 있어 기본은 끔입니다.',
     'subs-style.label.assStyleOverrides': 'ASS 스타일 개별 지정',
@@ -761,6 +840,7 @@ function registerMessages(): void {
     'subs-style.cmd.posDown': '자막 아래로',
     'subs-style.cmd.cycleAssOverride': 'ASS 스타일 덮어쓰기 순환',
     'subs-style.cmd.cycleBorderStyle': '자막 테두리 방식 순환',
+    'subs-style.cmd.applyBorderStyle': '자막 테두리 방식 지정',
     'subs-style.cmd.toggleBold': '자막 굵게 켜기/끄기',
     'subs-style.cmd.toggleSdh': '청각장애인용 표기 제거 켜기/끄기',
     'subs-style.cmd.toggleEmbeddedFonts': '포함된 글꼴 사용 켜기/끄기',
@@ -778,7 +858,17 @@ function registerMessages(): void {
     'subs-style.imageSubWarning':
       '지금 선택된 자막은 이미지 자막({codec})입니다. 글꼴·색상·테두리 설정은 이 자막에 적용되지 않고, 아래 "이미지 자막" 항목만 적용됩니다.',
     'subs-style.assOffNote':
-      'ASS 스타일 덮어쓰기가 "끔"이라 ASS/SSA 자막에는 위의 글꼴·색상 설정이 적용되지 않습니다. 제작자 스타일을 그대로 보여 주는 기본 동작입니다.'
+      'ASS 스타일 덮어쓰기가 "끔"이라 ASS/SSA 자막에는 위의 글꼴·색상 설정이 적용되지 않습니다. 제작자 스타일을 그대로 보여 주는 기본 동작입니다.',
+
+    // --- the renderer half's own strings ---
+    'subs-style.ui.sectionTitle': '자막 모양 — 프리셋과 지금 상태',
+    'subs-style.ui.noTrack': '지금 켜져 있는 자막이 없어, 아래 설정은 자막을 켠 뒤에 보입니다.',
+    'subs-style.ui.textTrack': '지금 선택된 자막은 글자 자막입니다. 아래 설정이 모두 적용됩니다.',
+    'subs-style.ui.alpha': '불투명도',
+    'subs-style.ui.colorHex': '색 코드',
+    'subs-style.ui.colorHint': '#AARRGGBB 또는 #RRGGBB로 적을 수 있습니다.',
+    'subs-style.ui.colorInvalid': '색 코드를 알아볼 수 없어 이전 값을 그대로 둡니다.',
+    'subs-style.ui.preview': '미리보기'
   })
 
   ctx.i18n.register('en', {
@@ -850,7 +940,8 @@ function registerMessages(): void {
     'subs-style.label.justify': 'Line justification',
     'subs-style.desc.justify': 'How multi-line subtitles line up.',
     'subs-style.label.useMargins': 'Draw into the letterbox bars',
-    'subs-style.desc.useMargins': 'Lets subtitles use the black bars above and below.',
+    'subs-style.desc.useMargins':
+      'Lets subtitles use the black bars above and below. To reserve a fixed bottom band even when no subtitle is showing, use the video bottom margin in the video settings instead — mpv has no subtitle-side equivalent.',
     'subs-style.label.assForceMargins': 'Force margins for ASS too',
     'subs-style.desc.assForceMargins': 'Applies the setting above to ASS subtitles as well.',
 
@@ -859,7 +950,7 @@ function registerMessages(): void {
       'Off by default, so release-group styling renders as authored. "Force" makes the font and colour settings above win.',
     'subs-style.label.scaleSigns': 'Scale typeset signs',
     'subs-style.desc.scaleSigns':
-      'What makes "scale" mode safe on anime: signs and effects keep their placement.',
+      'Applies the subtitle scale and font size to signs too (positioned ASS events). This is what keeps typeset signs from drifting in "scale" and "force" mode on anime.',
     'subs-style.label.assScaleWithWindow': 'Scale ASS with the window',
     'subs-style.desc.assScaleWithWindow': 'Off by default; on can diverge from the author intent.',
     'subs-style.label.assStyleOverrides': 'Targeted ASS style overrides',
@@ -973,6 +1064,7 @@ function registerMessages(): void {
     'subs-style.cmd.posDown': 'Subtitles down',
     'subs-style.cmd.cycleAssOverride': 'Cycle ASS style override',
     'subs-style.cmd.cycleBorderStyle': 'Cycle subtitle border style',
+    'subs-style.cmd.applyBorderStyle': 'Set subtitle border style',
     'subs-style.cmd.toggleBold': 'Toggle bold subtitles',
     'subs-style.cmd.toggleSdh': 'Toggle SDH filtering',
     'subs-style.cmd.toggleEmbeddedFonts': 'Toggle embedded fonts',
@@ -990,7 +1082,19 @@ function registerMessages(): void {
     'subs-style.imageSubWarning':
       'The selected subtitle track is an image format ({codec}). Font, colour and border settings do not apply to it — only the "Image subtitles" group below does.',
     'subs-style.assOffNote':
-      'The ASS style override is off, so the font and colour settings above do not apply to ASS/SSA subtitles. That is the default: release styling renders as authored.'
+      'The ASS style override is off, so the font and colour settings above do not apply to ASS/SSA subtitles. That is the default: release styling renders as authored.',
+
+    // --- the renderer half's own strings ---
+    'subs-style.ui.sectionTitle': 'Subtitle appearance — presets and current state',
+    'subs-style.ui.noTrack':
+      'No subtitle track is on, so nothing below is being drawn yet. Turn a track on to see the effect.',
+    'subs-style.ui.textTrack':
+      'The selected subtitle track is a text track, so everything below applies to it.',
+    'subs-style.ui.alpha': 'Opacity',
+    'subs-style.ui.colorHex': 'Hex',
+    'subs-style.ui.colorHint': 'Either #AARRGGBB or #RRGGBB.',
+    'subs-style.ui.colorInvalid': 'That is not a colour we can read, so the previous value stands.',
+    'subs-style.ui.preview': 'Preview'
   })
 }
 
