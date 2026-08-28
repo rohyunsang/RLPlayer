@@ -9,7 +9,9 @@ import {
   CHAIN_COMMANDS,
   COMMAND_SIDE_EFFECTS,
   CORE_OWNERSHIP,
-  OwnerMap
+  NON_MUTATING_COMMANDS,
+  OwnerMap,
+  PROPERTY_WRITING_COMMANDS
 } from './ownership.ts'
 
 /**
@@ -248,4 +250,120 @@ test('every command the spec says a module owns is encoded in modules.json', () 
     `the spec claims command ownership the manifest does not encode. Prose that nothing ` +
       `enforces is how 'seek' ended up owned by nobody:\n  ${[...new Set(missing)].join('\n  ')}`
   )
+})
+
+// ---------------------------------------------------------------------------
+// THE COMMAND UNIVERSE, DERIVED FROM THE BINARY.
+// ---------------------------------------------------------------------------
+
+/**
+ * WHY THE PREVIOUS TEST ABOVE WAS NOT ENOUGH.
+ *
+ * `every state-mutating command has exactly one owner` iterates
+ * `Object.keys(COMMAND_SIDE_EFFECTS)` — a HAND-WRITTEN table. So a command that
+ * is not in that table is invisible to the check whose whole job is to find
+ * commands nobody thought about. That is the identical self-referential
+ * blindness that let `seek` ship owned by nobody: the test could only ever
+ * confirm what someone had already remembered.
+ *
+ * Measured on this tree before the fix:
+ *
+ *   OwnerMap.assertCommand('nav-chapters', 'script-binding', strict) -> true
+ *   commandOwnerOf('script-binding')                                 -> null
+ *   commandOwnerOf('mouse')                                          -> null
+ *
+ * Both are named in the spec (§2.6 L45, §2.7 U06 for `script-binding`; §5.1 and
+ * §4 for `mouse`), both mutate state, and neither had an owner.
+ *
+ * So the universe comes from the PINNED BINARY now —
+ * `docs/parity/mpv-commands.json`, generated from `--input-cmdlist` — and every
+ * name in it must be classified. There are five ways to be classified and each
+ * one is a decision someone made on purpose:
+ *
+ *   owned            a module or a core piece declared it in ownsCommands
+ *   property-writing guarded through the property it NAMES (`set`, `cycle`, …)
+ *   chain-reserved   only core/vf-chain and core/af-chain may issue it
+ *   banned           nobody may issue it, whoever they are
+ *   non-mutating     declared in NON_MUTATING_COMMANDS with a written reason
+ *
+ * Anything else fails the build, including a command a future mpv adds.
+ */
+const CLASSIFIERS: ReadonlyArray<[string, (n: string) => boolean]> = [
+  ['owned', (n) => ownerMap().commandOwnerOf(n) !== null],
+  ['property-writing', (n) => PROPERTY_WRITING_COMMANDS.has(n)],
+  ['chain-reserved', (n) => CHAIN_COMMANDS.has(n)],
+  ['banned', (n) => BANNED_COMMANDS.has(n)],
+  ['non-mutating', (n) => NON_MUTATING_COMMANDS.has(n)]
+]
+
+const classify = (name: string): string | null =>
+  CLASSIFIERS.find(([, fn]) => fn(name))?.[0] ?? null
+
+/** Every code span in the spec, concatenated. */
+const SPEC_CODE = [...spec.matchAll(/`+([^`]+)`+/g)].map((m) => m[1]).join('\n')
+
+/**
+ * The commands the spec NAMES, matched inside code spans and tolerant of mpv's
+ * underscore spelling.
+ *
+ * Deliberately over-inclusive: `{config, keybinds, mouse, resume, playlist}` in
+ * §5.1 is a list of settings STORES, and it is what surfaces the mpv command
+ * `mouse`. A false positive here can only ever force an ownership decision that
+ * was never made; it can never hide one. That is the right way round.
+ */
+const namedInSpec = (name: string): boolean =>
+  new RegExp(`(^|[^A-Za-z0-9_-])${name.replace(/-/g, '[-_]')}([^A-Za-z0-9_-]|$)`).test(SPEC_CODE)
+
+test('every mpv command the SPEC names is owned, banned, or declared inert', () => {
+  const unowned = dump.commands.filter((n) => namedInSpec(n) && classify(n) === null)
+  assert.deepEqual(
+    unowned,
+    [],
+    `these commands exist in ${dump.version}, are named in docs/parity/00-parity-spec.md, ` +
+      `and belong to nobody — so OwnerMap.assertCommand() returns true for every module ` +
+      `that issues one:\n  ${unowned.join('\n  ')}\n` +
+      `Give each an owner in docs/parity/modules.json, ban it in BANNED_COMMANDS, or add it ` +
+      `to NON_MUTATING_COMMANDS with the reason it writes nothing.`
+  )
+})
+
+test('EVERY command the pinned binary has is classified, not just the ones we remembered', () => {
+  // The strict form of the same rule, over the whole cmdlist. This is what makes
+  // an mpv bump a failing test rather than a silent widening of what any module
+  // may issue.
+  const unclassified = dump.commands.filter((n) => classify(n) === null)
+  assert.deepEqual(
+    unclassified,
+    [],
+    `${unclassified.length} of ${dump.commands.length} commands in ${dump.version} are ` +
+      `unclassified:\n  ${unclassified.join('\n  ')}\n` +
+      `Every one needs a decision: an owner, a ban, or a line in NON_MUTATING_COMMANDS ` +
+      `saying why it writes nothing. "Nobody has needed it yet" is not a classification — ` +
+      `it is what 'seek' and 'script-binding' both were.`
+  )
+})
+
+test('the classification of each command is unambiguous', () => {
+  // A command that is both owned and banned, or both property-writing and
+  // declared inert, means two people disagreed and the first classifier in the
+  // list silently won.
+  const ambiguous: string[] = []
+  for (const name of dump.commands) {
+    const hits = CLASSIFIERS.filter(([, fn]) => fn(name)).map(([k]) => k)
+    // `set`/`cycle`/… are property-writing AND may also be owned by nobody —
+    // that is one classification. Two or more is a contradiction.
+    if (hits.length > 1) ambiguous.push(`${name}: ${hits.join(' + ')}`)
+  }
+  assert.deepEqual(ambiguous, [], `contradictory classifications:\n  ${ambiguous.join('\n  ')}`)
+})
+
+test('the spec-named set is what we think it is, so the rule cannot silently stop matching', () => {
+  // A regex that matches nothing passes every assertion built on it. These four
+  // are the cases the rule exists for; if the extraction breaks, this fails
+  // before the ownership assertions above start reporting "clean".
+  for (const name of ['script-binding', 'mouse', 'seek', 'ab-loop']) {
+    assert.ok(namedInSpec(name), `the spec-mention extraction stopped finding '${name}'`)
+  }
+  assert.ok(!namedInSpec('drop-buffers'), 'fixture drift: drop-buffers is now named in the spec')
+  assert.ok(dump.commands.filter(namedInSpec).length > 40)
 })

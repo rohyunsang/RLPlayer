@@ -128,7 +128,46 @@ export const BANNED_COMMANDS = new Set([
    * mpv's built-ins, every one of which stomps somebody's owned property. A
    * module that wants a preset applies its own properties.
    */
-  'apply-profile'
+  'apply-profile',
+  /**
+   * `update-clipboard` pushes mpv's `clipboard/text` into the SYSTEM clipboard.
+   *
+   * Every clipboard path in this product is Electron's (`clipboard.writeText`):
+   * L25 "copy media info", L34 "copy path(s)", M22's "paste into Paint". mpv
+   * writing the same clipboard from the other side is a race with no owner and
+   * no benefit — we never set `clipboard/text`, so what it would write is
+   * whatever mpv last put there. There is no correct use of it here.
+   */
+  'update-clipboard'
+])
+
+/**
+ * COMMANDS THAT MUTATE NOTHING, each with the reason it is on this list.
+ *
+ * This exists so the ownership question can be asked about EVERY command the
+ * pinned binary has, rather than only about the ones somebody remembered to put
+ * in `COMMAND_SIDE_EFFECTS`. `commands.test.ts` walks the binary's own
+ * `--input-cmdlist` (via docs/parity/mpv-commands.json) and requires each name
+ * to be classified: owned, banned, chain-reserved, property-writing — or here.
+ *
+ * That inversion is the point. The old test iterated the hand-written
+ * side-effect table, so a command missing from that table was invisible to the
+ * check that existed to find missing commands — the same self-referential
+ * blindness that let `seek` ship with no owner. Adding a name here is now a
+ * deliberate, reviewable claim that it writes nothing, and bumping the mpv pin
+ * surfaces every command the new build added.
+ */
+export const NON_MUTATING_COMMANDS = new Set([
+  // Pure string transforms. Each returns a value and touches no player state.
+  'escape-ass',
+  'expand-path',
+  'expand-text',
+  'normalize-path',
+  // mpv's documented no-op. It exists to bind a key to nothing.
+  'ignore',
+  // Terminal output only. We run `--terminal=yes --msg-level=all=error` and
+  // nothing parses mpv's status line, so this reaches no state we hold.
+  'flush-status-line'
 ])
 
 /**
@@ -232,6 +271,27 @@ export const CORE_OWNERSHIP: readonly OwnershipDeclaration[] = [
       'show-text',
       'show-progress',
       'print-text',
+      // …and the same argument for everything else that draws inside mpv's own
+      // video surface. These render UNDER our overlay's opaque areas (U06), so a
+      // module using them produces something the user can only half see.
+      'osd-overlay',
+      'overlay-add',
+      'overlay-remove',
+      // INPUT INJECTION, the same family as keypress/keydown/keyup above.
+      // `mouse` was named in §6 and owned by nobody: `assertCommand(x,'mouse')`
+      // returned true for every module. mpv's child HWND is `EnableWindow(hwnd,0)`
+      // under `--wid` and we pass `--input-cursor=no`, so synthesised pointer
+      // input either does nothing or drives mpv's own bindings behind the
+      // overlay's back. Neither is a module's to decide.
+      'mouse',
+      'begin-vo-dragging',
+      // mpv's own native context menu. Ours is `ctx.menu` (§3.3.5).
+      'context-menu',
+      // Transport-level: drops the demuxer and AV buffers. It belongs with the
+      // respawn path, not with whichever module wanted a faster seek.
+      'drop-buffers',
+      // The property-notification plumbing IS this bus.
+      'notify-property',
       // mpv's own resume file. Ours is core/state/per-file; a module writing
       // mpv's as well is how two resume positions come to disagree.
       'write-watch-later-config',

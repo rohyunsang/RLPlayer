@@ -170,9 +170,12 @@
       "pause"
     ],
     "ownedCommands": [
+      "begin-vo-dragging",
+      "context-menu",
       "define-section",
       "delete-watch-later-config",
       "disable-section",
+      "drop-buffers",
       "enable-section",
       "keybind",
       "keydown",
@@ -181,6 +184,11 @@
       "load-config-file",
       "load-input-conf",
       "load-script",
+      "mouse",
+      "notify-property",
+      "osd-overlay",
+      "overlay-add",
+      "overlay-remove",
       "print-text",
       "quit",
       "quit-watch-later",
@@ -2388,7 +2396,11 @@
       "M11"
     ],
     "ownedProperties": [],
-    "ownedCommands": [],
+    "ownedCommands": [
+      "script-binding",
+      "script-message",
+      "script-message-to"
+    ],
     "requestsProperties": [
       "audio-display",
       "cover-art-auto",
