@@ -1,22 +1,55 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { AF_ORDER, AF_REFUSERS, FilterChain, VF_ORDER, VF_REFUSERS } from './chain.ts'
+import { AF_ORDER, AF_REFUSERS, VF_ORDER, VF_REFUSERS, createChain, type ChainAdmin } from './chain.ts'
+import type { FilterChainService } from '@shared/feature-api'
 
 /**
  * test:chains (§6.2): "vf/af ordering policy, label replacement,
  * disable-in-place, queueing before file-loaded, unregistered-label rejection."
  */
 
+/**
+ * The chain is driven the way production drives it: through the ADMIN object
+ * `createChain()` returns, and through one `serviceFor(id)` facade per module.
+ * The `FilterChain` instance is not exported and not reachable — which is the
+ * fix for `vfChain.exec.command(['vf','set','hflip'])` — so a test that reached
+ * for it would be testing a shape production no longer has.
+ */
 function makeChain(kind: 'vf' | 'af' = 'vf'): {
-  chain: FilterChain
+  chain: ChainAdmin & { set: Setter; remove: Remover; toggle: Toggler; command: Commander }
   sent: unknown[][]
 } {
   const sent: unknown[][] = []
-  const chain = new FilterChain({
+  const admin = createChain({
     kind,
     order: kind === 'vf' ? VF_ORDER : AF_ORDER,
     refusers: kind === 'vf' ? VF_REFUSERS : AF_REFUSERS
   })
+  const services = new Map<string, FilterChainService>()
+  const svc = (owner: string): FilterChainService => {
+    let s = services.get(owner)
+    if (!s) {
+      s = admin.serviceFor(owner)
+      services.set(owner, s)
+    }
+    return s
+  }
+  const chain = {
+    claim: admin.claim,
+    serviceFor: admin.serviceFor,
+    attachExec: admin.attachExec,
+    onFileLoaded: admin.onFileLoaded,
+    onUnload: admin.onUnload,
+    serialise: admin.serialise,
+    get hasCpuFilter(): boolean {
+      return admin.hasCpuFilter
+    },
+    set: (owner: string, label: string, spec: string) => svc(owner).set(label, spec),
+    remove: (owner: string, label: string) => svc(owner).remove(label),
+    toggle: (owner: string, label: string, on: boolean) => svc(owner).toggle(label, on),
+    command: (owner: string, label: string, opt: string, value: string, filter: string) =>
+      svc(owner).command(label, opt, value, filter)
+  }
   // The exec is attached rather than constructed in: only core/mpv/bus can
   // hand out a raw vf/af command, and a test stands in for it here.
   chain.attachExec({
@@ -26,6 +59,46 @@ function makeChain(kind: 'vf' | 'af' = 'vf'): {
     }
   })
   return { chain, sent }
+}
+
+type Setter = (owner: string, label: string, spec: string) => void
+type Remover = (owner: string, label: string) => void
+type Toggler = (owner: string, label: string, on: boolean) => void
+type Commander = (
+  owner: string,
+  label: string,
+  opt: string,
+  value: string,
+  filter: string
+) => Promise<{ path: 'command' | 'rebuild' }>
+
+test('the chain object hands out no path back to its own state', () => {
+  const { chain } = makeChain()
+  const admin = createChainProbe()
+  for (const forbidden of ['exec', 'slots', 'claims', 'cfg', 'ready', 'pending', 'applying']) {
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(admin, forbidden),
+      false,
+      `the chain admin exposes '${forbidden}' at RUNTIME. TypeScript's \`private\` erases to an ` +
+        `ordinary enumerable property, which is how vfChain.exec.command(['vf','set','hflip']) ` +
+        `landed a raw filter-chain write from a feature module.`
+    )
+    assert.equal(
+      (admin as unknown as Record<string, unknown>)[forbidden],
+      undefined,
+      `chain admin.${forbidden} is readable`
+    )
+  }
+  assert.deepEqual(
+    Object.keys(admin).sort(),
+    ['attachExec', 'claim', 'hasCpuFilter', 'onFileLoaded', 'onUnload', 'serialise', 'serviceFor'],
+    'the admin surface is exactly these seven; anything else is a way in'
+  )
+  void chain
+})
+
+function createChainProbe(): ChainAdmin {
+  return createChain({ kind: 'vf', order: VF_ORDER, refusers: VF_REFUSERS })
 }
 
 test('an unregistered label throws at claim time, naming the reserved table', () => {

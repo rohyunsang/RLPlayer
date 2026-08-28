@@ -494,18 +494,136 @@ export function canonicalCommand(name: string): string {
 }
 
 /**
- * Strip mpv's command prefixes and return the verb, or null if `args` does not
- * start with a string.
+ * COMMAND SHAPE, checked before any guard reads the array. FAIL CLOSED.
+ *
+ * THE BUG THIS EXISTS FOR. Every guard below started with `verbOf()`, and
+ * `verbOf()` answered `null` — "I do not recognise this" — whenever the head
+ * was not a primitive string. `null` then flowed into `propertiesWrittenBy()`
+ * (→ `[]`, nothing to own-check), `isChainCommand()` (→ false), and
+ * `isBannedCommand()` (→ false). So "unrecognised" meant "allowed", and the
+ * whole of §3.7 switched itself off for any command shape it had not been
+ * taught. Measured in strict/dev mode, 9 of 11 probes landed and 0 threw:
+ *
+ *   [new String('set'), 'speed', 4]        → JSON `["set","speed",4]`, unchecked
+ *   [new String('vf'), 'set', 'hflip']     → a raw filter-chain write (§0.2 r5)
+ *   [new String('apply-profile'), 'fast']  → the BANNED command, unchecked
+ *   ['set', new String('speed'), 4]        → verb recognised, PROPERTY skipped
+ *
+ * The last one is the sharpest: the head is a real string, so `verbOf` was
+ * happy, and only the property name was boxed — `explicitPropertiesWrittenBy`
+ * did `typeof name === 'string' ? [name] : []` and returned nothing to check.
+ *
+ * A boxed primitive is `typeof 'object'` and `JSON.stringify`s as a plain
+ * string, so mpv executes exactly what the guard refused to look at. The same
+ * is true of any object carrying a `toJSON`. The fix is not to teach the guards
+ * one more shape — it is to refuse every shape that is not the one shape the
+ * wire format has: JSON primitives, plus a plain object/array for `loadfile`'s
+ * options argument.
+ *
+ * LIMIT, stated honestly: a Proxy that lies about `toJSON` and its prototype
+ * would still get through. This is a guardrail against accidents and against
+ * the ordinary bypass, not a sandbox — a module that wants to lie about its
+ * own object identity is already running in-process.
+ */
+const JSON_PRIMITIVE = new Set(['string', 'number', 'boolean'])
+
+function shapeProblem(v: unknown, where: string, nested: boolean): string | null {
+  if (v === null) return null
+  const t = typeof v
+  if (t === 'number') {
+    return Number.isFinite(v as number) ? null : `${where} is ${String(v)}, which JSON drops`
+  }
+  if (JSON_PRIMITIVE.has(t)) return null
+  if (t === 'undefined') return `${where} is undefined, which JSON.stringify drops`
+  if (t !== 'object') return `${where} is a ${t}`
+
+  const tag = Object.prototype.toString.call(v)
+  if (tag !== '[object Object]' && tag !== '[object Array]') {
+    // `[object String]` is `new String('set')`, the whole reason for this file.
+    return (
+      `${where} is ${tag}, not a JSON value. It serialises to something the ownership ` +
+      `guards never inspected, which is a bypass, not a convenience.`
+    )
+  }
+  if (typeof (v as { toJSON?: unknown }).toJSON === 'function') {
+    return `${where} carries a toJSON(), so what mpv receives is not what was checked`
+  }
+  if (nested) {
+    // One level only: `loadfile`'s options map, whose values are scalars.
+    return `${where} nests an object or array more than one level deep`
+  }
+  const entries: ReadonlyArray<readonly [string, unknown]> = Array.isArray(v)
+    ? v.map((x, i) => [String(i), x] as const)
+    : Object.entries(v as Record<string, unknown>)
+  for (const [k, val] of entries) {
+    const p = shapeProblem(val, `${where}.${k}`, true)
+    if (p) return p
+  }
+  return null
+}
+
+/**
+ * Why `args` is not a legal mpv command, or null when it is.
+ *
+ * Exported so `guards.test.ts` can assert on the reason rather than only on the
+ * throw, and so a future caller that wants to report instead of throw can.
+ */
+export function commandShapeProblem(args: readonly unknown[]): string | null {
+  if (!Array.isArray(args)) return 'an mpv command is an array'
+  if (args.length === 0) return 'an mpv command is a non-empty array; this one is empty'
+  for (let i = 0; i < args.length; i++) {
+    const p = shapeProblem(args[i], `argument ${i}`, false)
+    if (p) return p
+  }
+  return null
+}
+
+/** Throws unless every element of `args` is a JSON value mpv can receive. */
+export function assertCommandShape(args: readonly unknown[]): void {
+  const problem = commandShapeProblem(args)
+  if (problem === null) return
+  throw new ContributionError(
+    `refusing an mpv command whose shape the ownership guards cannot read: ${problem}. ` +
+      `Every element must be a string, a finite number, a boolean, null, or (for loadfile's ` +
+      `options argument) a flat object or array of those. An unrecognised shape used to ` +
+      `disable every check in §3.7 silently; it is a hard error now.`
+  )
+}
+
+/**
+ * Strip mpv's command prefixes and return the verb.
  *
  * `['no-osd','set','speed','2']` → `{ verb: 'set', at: 1 }`. The legacy
  * space-joined spelling mpv's input.conf uses (`'no-osd set'`) is handled too,
  * even though it is `invalid parameter` over JSON IPC, because it costs one
  * line and a guard should not depend on which spelling reached it.
+ *
+ * THROWS rather than returning null when the head is not a primitive string.
+ * Returning null meant "unrecognised", and every caller read that as "nothing
+ * to guard" — see the note on `commandShapeProblem` above. A head that is not
+ * a string is a command nobody can police, so it does not run.
+ *
+ * `['bogus-prefix','set',…]` is NOT this case: the head is a string, so the
+ * verb is `bogus-prefix`, it matches no table, and mpv rejects it on its own.
  */
 export function verbOf(args: readonly unknown[]): { verb: string; at: number } | null {
+  // THE SINGLE CHOKE POINT. `isChainCommand`, `isBannedCommand`, `commandNameOf`
+  // and both halves of `propertiesWrittenBy` all funnel through here, so the
+  // shape check belongs here rather than in each of them:
+  // `['set', new String('speed'), 4]` has a legal head and fails only on the
+  // boxed PROPERTY NAME, which a head-only check misses in exactly the guard
+  // that mattered.
+  assertCommandShape(args)
   let at = 0
   let head = args[at]
-  if (typeof head !== 'string') return null
+  if (typeof head !== 'string') {
+    // Shape-legal but still not a string head: a plain object or a number in
+    // position 0. mpv cannot execute it and no guard can read it.
+    throw new ContributionError(
+      `an mpv command must start with a command NAME; argument 0 is ${typeof head}. ` +
+        `This used to return null, which every guard read as 'nothing to check'.`
+    )
+  }
 
   // Space-joined: 'no-osd set' or even 'async no-osd set'.
   const parts = head.trim().split(/\s+/)
@@ -544,6 +662,11 @@ export function verbOf(args: readonly unknown[]): { verb: string; at: number } |
  * anything".
  */
 export function explicitPropertiesWrittenBy(args: readonly unknown[]): string[] {
+  // The shape is checked inside `verbOf`, which every guard in this file goes
+  // through. `['set', new String('speed'), 4]` is the case that matters here:
+  // the head was fine, only the property NAME was boxed, and the
+  // `typeof name === 'string'` test below returned an empty list — so the write
+  // was ownership-checked against nothing and mpv received `["set","speed",4]`.
   const found = verbOf(args)
   if (!found) return []
   const verb = canonicalCommand(found.verb)

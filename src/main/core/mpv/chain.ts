@@ -1,4 +1,5 @@
 import { ContributionError } from '../errors.ts'
+import type { FilterChainService } from '@shared/feature-api'
 
 /**
  * core/mpv/chain — the shared implementation behind vf-chain and af-chain
@@ -44,12 +45,32 @@ interface Slot {
   enabled: boolean
 }
 
-export class FilterChain {
-  private readonly slots = new Map<string, Slot>()
-  private readonly claims = new Map<string, string>()
-  private ready = false
-  private pending = false
-  private applying: Promise<void> | null = null
+/**
+ * EVERY FIELD IS `#`-PRIVATE, and the class is not exported.
+ *
+ * `private` in TypeScript is a compile-time fiction: it erases to an ordinary
+ * enumerable own property. `vf-chain.ts` exported the `vfChain` SINGLETON, so
+ * from any feature module
+ *
+ *     Object.keys(vfChain)                      // ['slots','claims','ready',…,'exec']
+ *     vfChain.exec.command(['vf','set','hflip'])// a raw filter-chain write
+ *     vfChain.claim('attacker-module', ['rl-lut'])
+ *
+ * both landed — the second bypassing §0.2 rule 5 entirely, the third stealing a
+ * Wave-1 reserved label before its owner exists. `capability.test.ts` asserted
+ * `!/chainExec/` on the source, which was cosmetic twice over: the field is
+ * called `exec`, and grepping a name proves nothing about the runtime object.
+ *
+ * So: `#` fields (unreachable at runtime, not merely untyped), no exported
+ * instance, and `createChain()` hands back an admin object that closes over the
+ * chain and exposes four methods. There is nothing to reach into.
+ */
+class FilterChain {
+  readonly #slots = new Map<string, Slot>()
+  readonly #claims = new Map<string, string>()
+  #ready = false
+  #pending = false
+  #applying: Promise<void> | null = null
 
   /**
    * The raw `vf`/`af` exec, handed over by `core/mpv/bus` at boot.
@@ -60,81 +81,81 @@ export class FilterChain {
    * and a public `chainExec` is a public filter-chain write. Now the bus hands
    * each chain a closure, and nothing else can reach one.
    */
-  private exec: ChainExec | null = null
+  #exec: ChainExec | null = null
 
-  private readonly cfg: ChainConfig
+  readonly #cfg: ChainConfig
 
   constructor(cfg: ChainConfig) {
-    this.cfg = cfg
+    this.#cfg = cfg
   }
 
   attachExec(exec: ChainExec): void {
-    this.exec = exec
+    this.#exec = exec
   }
 
-  private command_(args: unknown[]): Promise<unknown> {
-    if (!this.exec) {
+  #command(args: unknown[]): Promise<unknown> {
+    if (!this.#exec) {
       throw new ContributionError(
-        `${this.cfg.kind}-chain was used before core/registry attached its mpv exec.`
+        `${this.#cfg.kind}-chain was used before core/registry attached its mpv exec.`
       )
     }
-    return this.exec.command(args)
+    return this.#exec.command(args)
   }
 
   /** Boot-time label claim. Two modules claiming one label is a boot error. */
   claim(ownerId: string, labels: readonly string[]): void {
     for (const label of labels) {
-      if (!this.cfg.order.includes(label)) {
+      if (!this.#cfg.order.includes(label)) {
         throw new ContributionError(
-          `module '${ownerId}' claims ${this.cfg.kind} label '${label}', which is not in the ` +
-            `reserved label table (§5.5). Reserved ${this.cfg.kind} labels: ${this.cfg.order.join(', ')}.`
+          `module '${ownerId}' claims ${this.#cfg.kind} label '${label}', which is not in the ` +
+            `reserved label table (§5.5). Reserved ${this.#cfg.kind} labels: ${this.#cfg.order.join(', ')}.`
         )
       }
-      const existing = this.claims.get(label)
+      const existing = this.#claims.get(label)
       if (existing && existing !== ownerId) {
         throw new ContributionError(
-          `${this.cfg.kind} label collision on '${label}': claimed by both '${existing}' and '${ownerId}'.`
+          `${this.#cfg.kind} label collision on '${label}': claimed by both '${existing}' and '${ownerId}'.`
         )
       }
-      this.claims.set(label, ownerId)
+      this.#claims.set(label, ownerId)
     }
   }
 
-  private assertOwned(ownerId: string, label: string): void {
-    const owner = this.claims.get(label)
+  #assertOwned(ownerId: string, label: string): void {
+    const owner = this.#claims.get(label)
     if (owner !== ownerId) {
       throw new ContributionError(
         owner
-          ? `module '${ownerId}' may not touch ${this.cfg.kind} label '${label}' (owned by '${owner}').`
-          : `${this.cfg.kind} label '${label}' is not declared by any module. Add it to ` +
+          ? `module '${ownerId}' may not touch ${this.#cfg.kind} label '${label}' (owned by '${owner}').`
+          : `${this.#cfg.kind} label '${label}' is not declared by any module. Add it to ` +
               `ownsFilterLabels and to the §5.5 table.`
       )
     }
   }
 
   set(ownerId: string, label: string, spec: string): void {
-    this.assertOwned(ownerId, label)
-    const prev = this.slots.get(label)
-    this.slots.set(label, { label, owner: ownerId, spec, enabled: prev?.enabled ?? true })
-    this.schedule()
+    this.#assertOwned(ownerId, label)
+    const prev = this.#slots.get(label)
+    this.#slots.set(label, { label, owner: ownerId, spec, enabled: prev?.enabled ?? true })
+    this.#schedule()
   }
 
   remove(ownerId: string, label: string): void {
-    this.assertOwned(ownerId, label)
-    if (this.slots.delete(label)) this.schedule()
+    this.#assertOwned(ownerId, label)
+    if (this.#slots.delete(label)) this.#schedule()
   }
 
   /** Disable in place, so the module's settings survive a toggle (A25). */
   toggle(ownerId: string, label: string, enabled: boolean): void {
-    this.assertOwned(ownerId, label)
-    const slot = this.slots.get(label)
+    this.#assertOwned(ownerId, label)
+    const slot = this.#slots.get(label)
     if (!slot || slot.enabled === enabled) return
     slot.enabled = enabled
-    this.schedule()
+    this.#schedule()
   }
 
   has(label: string): boolean {
-    return this.slots.has(label)
+    return this.#slots.has(label)
   }
 
   /**
@@ -149,19 +170,19 @@ export class FilterChain {
     value: string,
     lavfiFilterName: string
   ): Promise<{ path: 'command' | 'rebuild' }> {
-    this.assertOwned(ownerId, label)
-    if (!this.slots.has(label)) {
+    this.#assertOwned(ownerId, label)
+    if (!this.#slots.has(label)) {
       throw new ContributionError(
-        `${this.cfg.kind}.command() on '${label}', which has no slot. Call set() first.`
+        `${this.#cfg.kind}.command() on '${label}', which has no slot. Call set() first.`
       )
     }
-    if (this.cfg.refusers.includes(lavfiFilterName)) {
-      await this.apply()
+    if (this.#cfg.refusers.includes(lavfiFilterName)) {
+      await this.#apply()
       return { path: 'rebuild' }
     }
     try {
-      await this.command_([
-        `${this.cfg.kind}-command`,
+      await this.#command([
+        `${this.#cfg.kind}-command`,
         label,
         option,
         value,
@@ -171,18 +192,18 @@ export class FilterChain {
     } catch (e) {
       // A filter that turns out not to implement process_command must not take
       // the slider down with it; fall back to the rebuild that always works.
-      this.cfg.log?.(
-        `[${this.cfg.kind}-chain] ${lavfiFilterName} refused ${this.cfg.kind}-command ` +
+      this.#cfg.log?.(
+        `[${this.#cfg.kind}-chain] ${lavfiFilterName} refused ${this.#cfg.kind}-command ` +
           `(${(e as Error).message}); rebuilding the chain instead`
       )
-      await this.apply()
+      await this.#apply()
       return { path: 'rebuild' }
     }
   }
 
   /** Every lavfi filter forces hwdec frames back to system memory. */
   get hasCpuFilter(): boolean {
-    for (const s of this.slots.values()) {
+    for (const s of this.#slots.values()) {
       if (s.enabled && s.spec.includes('lavfi=')) return true
     }
     return false
@@ -191,8 +212,8 @@ export class FilterChain {
   /** The exact string handed to mpv, in policy order. */
   serialise(): string {
     const out: string[] = []
-    for (const label of this.cfg.order) {
-      const slot = this.slots.get(label)
+    for (const label of this.#cfg.order) {
+      const slot = this.#slots.get(label)
       if (!slot) continue
       out.push(`@${label}:${slot.enabled ? '' : '!'}${slot.spec}`)
     }
@@ -201,40 +222,98 @@ export class FilterChain {
 
   /** Called by the bus on `file-loaded`. Flushes anything queued. */
   onFileLoaded(): void {
-    this.ready = true
-    if (this.pending) void this.apply()
+    this.#ready = true
+    if (this.#pending) void this.#apply()
   }
 
   /** Called by the bus when the file goes away or mpv respawns. */
   onUnload(): void {
-    this.ready = false
+    this.#ready = false
   }
 
-  private schedule(): void {
-    if (!this.ready) {
-      this.pending = true
+  #schedule(): void {
+    if (!this.#ready) {
+      this.#pending = true
       return
     }
-    void this.apply()
+    void this.#apply()
   }
 
   /** One `<x>f set` with the whole chain: deterministic, order-correct, and
    *  it cannot leave a half-applied graph the way add/remove pairs can. */
-  private apply(): Promise<void> {
-    this.pending = false
+  #apply(): Promise<void> {
+    this.#pending = false
     const run = async (): Promise<void> => {
       const chain = this.serialise()
       try {
-        await this.command_([this.cfg.kind, 'set', chain])
+        await this.#command([this.#cfg.kind, 'set', chain])
       } catch (e) {
-        this.cfg.log?.(
-          `[${this.cfg.kind}-chain] failed to apply "${chain}": ${(e as Error).message}`
+        this.#cfg.log?.(
+          `[${this.#cfg.kind}-chain] failed to apply "${chain}": ${(e as Error).message}`
         )
       }
     }
     // Serialise applies: two overlapping `set`s can land out of order.
-    this.applying = (this.applying ?? Promise.resolve()).then(run, run)
-    return this.applying
+    this.#applying = (this.#applying ?? Promise.resolve()).then(run, run)
+    return this.#applying
+  }
+}
+
+/**
+ * The ONLY surface anything outside this file ever holds.
+ *
+ * `createChain()` builds the FilterChain and returns this: four methods, closed
+ * over an instance that is never handed out. `core/registry` holds one per kind
+ * and calls `claim()` at boot and `serviceFor()` per module; `core/mpv/bus`
+ * calls `attachExec()` and the two lifecycle hooks. Nothing else can obtain one,
+ * because `vf-chain.ts` and `af-chain.ts` create theirs exactly once.
+ */
+export interface ChainAdmin {
+  /** Boot-time reserved-label claim (§5.5). Two owners for one label throws. */
+  claim(ownerId: string, labels: readonly string[]): void
+  /** The per-module facade handed to `ctx.vf` / `ctx.af`. */
+  serviceFor(ownerId: string): FilterChainService
+  /** Wired once by the bus, which owns the raw `vf`/`af` exec. */
+  attachExec(exec: ChainExec): void
+  onFileLoaded(): void
+  onUnload(): void
+  /** READS. The exact string handed to mpv, and whether any lavfi pass is live
+   *  (→ hwdec frames come back to system memory). Reads are never owned. */
+  serialise(): string
+  readonly hasCpuFilter: boolean
+}
+
+/**
+ * Build a chain and return only its admin surface.
+ *
+ * The instance is a local. There is no property on the returned object that
+ * reaches it, no `exec`, no `slots`, no `claims` — which is the difference
+ * between this and the exported singleton it replaces, where `Object.keys()`
+ * listed all three.
+ */
+export function createChain(cfg: ChainConfig): ChainAdmin {
+  const chain = new FilterChain(cfg)
+  return {
+    claim: (ownerId, labels) => chain.claim(ownerId, labels),
+    attachExec: (exec) => chain.attachExec(exec),
+    onFileLoaded: () => chain.onFileLoaded(),
+    onUnload: () => chain.onUnload(),
+    serialise: () => chain.serialise(),
+    get hasCpuFilter(): boolean {
+      return chain.hasCpuFilter
+    },
+    serviceFor(ownerId: string): FilterChainService {
+      return {
+        set: (label, spec) => chain.set(ownerId, label, spec),
+        remove: (label) => chain.remove(ownerId, label),
+        toggle: (label, enabled) => chain.toggle(ownerId, label, enabled),
+        command: (label, option, value, filter) =>
+          chain.command(ownerId, label, option, value, filter),
+        get hasCpuFilter(): boolean {
+          return chain.hasCpuFilter
+        }
+      }
+    }
   }
 }
 

@@ -1,8 +1,8 @@
 import { ContributionError } from './errors.ts'
 import { validateIds, topoSort, type DiscoveredModule } from './registry-order.ts'
 import { CORE_OWNERSHIP, OwnerMap } from './mpv/ownership.ts'
-import { vfChain, createVfService } from './mpv/vf-chain.ts'
-import { afChain, createAfService } from './mpv/af-chain.ts'
+import { createVfChain } from './mpv/vf-chain.ts'
+import { createAfChain } from './mpv/af-chain.ts'
 import type { MpvBus } from './mpv/bus.ts'
 import { createI18nService, t } from './i18n/index.ts'
 import { createWindowService, releaseSleepBlocksFor } from './window/index.ts'
@@ -62,14 +62,25 @@ export class Registry {
   private readonly processes = new Set<{ pid?: number | undefined; kill(s?: string): boolean }>()
   private owners: OwnerMap | null = null
 
+  /**
+   * The two filter chains, as ADMIN OBJECTS rather than instances.
+   *
+   * `createVfChain()` / `createAfChain()` each build one and throw on a second
+   * call, so the registry is the only holder and a module that dynamic-imports
+   * `core/mpv/vf-chain.ts` gets a factory that refuses instead of the singleton
+   * whose `exec` and `claim` were both reachable in one line.
+   */
+  readonly #vf = createVfChain()
+  readonly #af = createAfChain()
+
   private readonly deps: RegistryDeps
 
   constructor(deps: RegistryDeps) {
     this.deps = deps
     // The chains get their raw exec from the bus, in a closure. This is the
     // only call site, and `chainExec` is private to the bus.
-    deps.mpv.registerChain(vfChain)
-    deps.mpv.registerChain(afChain)
+    deps.mpv.registerChain(this.#vf)
+    deps.mpv.registerChain(this.#af)
   }
 
   ownerMap(): OwnerMap | null {
@@ -104,8 +115,8 @@ export class Registry {
       const labels = s.module.ownsFilterLabels ?? []
       const vf = labels.filter((l) => l.startsWith('rl-'))
       const af = labels.filter((l) => !l.startsWith('rl-'))
-      if (vf.length) vfChain.claim(s.id, vf)
-      if (af.length) afChain.claim(s.id, af)
+      if (vf.length) this.#vf.claim(s.id, vf)
+      if (af.length) this.#af.claim(s.id, af)
     }
 
     // 4. setup(), in dependency order, isolated.
@@ -189,8 +200,8 @@ export class Registry {
     // vf/af are granted only to modules that declared they need them, so an
     // accidental `ctx.vf!.set(...)` in a module that never declared it is a
     // type error and then a crash in dev, not a silent chain write.
-    if (mod.usesVideoFilters) (ctx as { vf?: unknown }).vf = createVfService(id)
-    if (mod.usesAudioFilters) (ctx as { af?: unknown }).af = createAfService(id)
+    if (mod.usesVideoFilters) (ctx as { vf?: unknown }).vf = this.#vf.serviceFor(id)
+    if (mod.usesAudioFilters) (ctx as { af?: unknown }).af = this.#af.serviceFor(id)
     return ctx
   }
 

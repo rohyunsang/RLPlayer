@@ -3,11 +3,14 @@ import assert from 'node:assert/strict'
 import {
   MPV_COMMAND_PREFIXES,
   OwnerMap,
+  assertCommandShape,
   commandNameOf,
+  commandShapeProblem,
   isBannedCommand,
   isChainCommand,
   propertiesWrittenBy,
-  propertyWrittenBy
+  propertyWrittenBy,
+  verbOf
 } from './ownership.ts'
 
 /**
@@ -230,5 +233,112 @@ test('the hint tells an undeclared caller to declare, not to call a dead path', 
   assert.throws(
     () => map.assertWrite('audio-eq', 'nobody-owns-this', true, noop),
     /Reads are unrestricted/
+  )
+})
+
+// ---------------------------------------------------------------------------
+// FAIL CLOSED: an unrecognised command SHAPE used to disable every guard here.
+// ---------------------------------------------------------------------------
+
+/**
+ * The eleven probes from the audit, verbatim, with what each one put on the
+ * wire. Nine landed and none threw, because `verbOf()` returned `null` for a
+ * non-string head and every caller read `null` as "nothing to check".
+ *
+ * The fourth is the one that shows the bug is not really about the head:
+ * `['set', new String('speed'), 4]` has a perfectly ordinary string head, so
+ * `verbOf` was satisfied — and `explicitPropertiesWrittenBy` then did
+ * `typeof name === 'string' ? [name] : []` and returned an empty list, so the
+ * write was ownership-checked against nothing at all.
+ */
+const BOXED_ATTACKS: Array<[string, unknown[], string]> = [
+  ['boxed set', [new String('set'), 'speed', 4], '["set","speed",4]'],
+  ['boxed raw vf', [new String('vf'), 'set', 'hflip'], '["vf","set","hflip"]'],
+  ['boxed apply-profile', [new String('apply-profile'), 'fast'], '["apply-profile","fast"]'],
+  ['boxed property name', ['set', new String('speed'), 4], '["set","speed",4]'],
+  ['boxed screenshot-raw', [new String('screenshot-raw')], '["screenshot-raw"]'],
+  ['boxed af', [new String('af'), 'set', 'anull'], '["af","set","anull"]'],
+  [
+    'boxed loadfile with options',
+    [new String('loadfile'), 'x.mkv', 'replace', 0, 'speed=9'],
+    '["loadfile","x.mkv","replace",0,"speed=9"]'
+  ],
+  ['array head', [['set'], 'speed', 4], '[["set"],"speed",4]'],
+  ['number head', [0, 'set', 'speed', 4], '[0,"set","speed",4]'],
+  ['empty command', [], '[]'],
+  [
+    'toJSON smuggling',
+    [{ toJSON: () => 'set' }, 'speed', 4],
+    '["set","speed",4]'
+  ]
+]
+
+const REFUSED = /refusing an mpv command whose shape|must start with a command NAME/
+
+test('a command shape the guards cannot read is REFUSED, not waved through', () => {
+  for (const [name, args, onWire] of BOXED_ATTACKS) {
+    // EVERY guard funnels through `verbOf`, and every one of them must refuse
+    // rather than answer "nothing here". Answering "nothing here" is what put
+    // ${onWire} on the wire with no ownership check at all.
+    for (const [guard, fn] of [
+      ['propertiesWrittenBy', () => propertiesWrittenBy(args)],
+      ['isChainCommand', () => isChainCommand(args)],
+      ['isBannedCommand', () => isBannedCommand(args)],
+      ['commandNameOf', () => commandNameOf(args)],
+      ['verbOf', () => verbOf(args)]
+    ] as Array<[string, () => unknown]>) {
+      assert.throws(fn, REFUSED, `${guard} accepted '${name}', which reaches mpv as ${onWire}`)
+    }
+  }
+})
+
+test('a boxed primitive or a toJSON is named as a SHAPE problem, not a head problem', () => {
+  // The distinction matters for the error message: a boxed argument anywhere in
+  // the array is the bypass, and the developer needs to be told which argument.
+  const boxed = BOXED_ATTACKS.filter(([n]) => /boxed|toJSON|empty/.test(n))
+  assert.equal(boxed.length, 9)
+  for (const [name, args] of boxed) {
+    assert.notEqual(commandShapeProblem(args), null, `'${name}' is accepted as a legal shape`)
+    assert.throws(() => assertCommandShape(args), /refusing an mpv command whose shape/, name)
+  }
+  // A flat array argument is LEGAL — `['subprocess', {args: […]}]` and
+  // `['osd-overlay', …]` need one — so `[['set'],'speed',4]` is refused by the
+  // head rule rather than by the shape rule. Both refuse; only one is a shape bug.
+  assert.equal(commandShapeProblem([['set'], 'speed', 4]), null)
+  assert.throws(() => verbOf([['set'], 'speed', 4]), /must start with a command NAME/)
+})
+
+test('the shapes mpv actually takes still pass untouched', () => {
+  const legal: unknown[][] = [
+    ['set', 'speed', 1.5],
+    ['no-osd', 'set', 'speed', '1.5'],
+    ['async', 'no-osd', 'set', 'speed', 2],
+    ['no-osd set', 'speed', 3],
+    ['seek', 5, 'exact'],
+    ['loadfile', 'x.mkv', 'replace', 0, 'speed=2.5'],
+    ['loadfile', 'x.mkv', 'replace', -1, { speed: '3.0', 'sub-delay': 1 }],
+    ['script-message-to', 'x', 'y'],
+    ['set', 'ab-loop-a', 'no'],
+    ['change-list', 'glsl-shaders', 'clr', ''],
+    ['osd-overlay', 1, 'ass-events', '', 0, 0, 0, 'no', true],
+    ['sub-add', 'a.srt', 'select', 'title', null]
+  ]
+  for (const args of legal) {
+    assert.equal(commandShapeProblem(args), null, JSON.stringify(args))
+    assert.doesNotThrow(() => assertCommandShape(args))
+  }
+  // A string head that is simply not a known verb is NOT a shape error: mpv
+  // rejects it on its own and the guards correctly find nothing to own.
+  assert.equal(commandShapeProblem(['bogus-prefix', 'set', 'speed', 1]), null)
+  assert.deepEqual(verbOf(['bogus-prefix', 'set', 'speed', 1]), { verb: 'bogus-prefix', at: 0 })
+  assert.equal(propertyWrittenBy(['bogus-prefix', 'set', 'speed', 1]), null)
+})
+
+test('a nested object more than one level deep is refused', () => {
+  // loadfile's options map is flat. Anything deeper is a shape the guards were
+  // never taught to walk, and walking it wrongly is how the next hole opens.
+  assert.notEqual(
+    commandShapeProblem(['loadfile', 'x.mkv', 'replace', 0, { opts: { speed: 2 } }]),
+    null
   )
 })

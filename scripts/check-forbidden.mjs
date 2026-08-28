@@ -28,15 +28,35 @@
  *     `require('../../core/mpv/bus.ts')` escalated to a full ownership bypass
  *     and this script printed "clean (90 files scanned)" and exited 0.
  *
- * So the rules are declared as data now, and `--self-test` runs every one of
- * them against the exact strings above plus the lines that must NOT trip them.
- * A rule that stops catching its own regression fails the build.
+ * AND THEN A THIRD, which is why this file no longer scans lines. Every rule ran
+ * against `text.split(/\r?\n/)`, one line at a time, so a specifier on a
+ * different line from its `import(` matched nothing. Three spellings were
+ * measured resolving at runtime to the same `core/mpv/vf-chain` singleton while
+ * this script printed "clean":
+ *
+ *     await import(
+ *       '../../core/mpv/vf-chain.ts'
+ *     )
+ *     createRequire(import.meta.url)('../../core/mpv/vf-chain.ts')
+ *     await import(
+ *       head + tail
+ *     )
+ *
+ * A line is not a unit of syntax. `scripts/lib/lex.mjs` blanks comments and (in
+ * the `bare` view) string contents across the WHOLE file, preserving offsets so
+ * a match still reports a line, and every rule below is now a whole-file regex.
+ *
+ * So the rules are declared as data, and `--self-test` runs every one of them
+ * against the exact sources above — multi-line included — plus the ones that
+ * must NOT trip them. A rule that stops catching its own regression fails the
+ * build.
  *
  * Run: npm run check:forbidden       (add --self-test to check the checker)
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { lex } from './lib/lex.mjs'
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const failures = []
@@ -54,16 +74,51 @@ function walk(dir, out = []) {
 const srcFiles = walk(path.join(repo, 'src'))
 const rel = (f) => path.relative(repo, f).replace(/\\/g, '/')
 
-function forbid(files, pattern, message, allow = () => false) {
+// ---------------------------------------------------------------------------
+// The lexed views, and the matcher that runs a rule over one of them.
+// ---------------------------------------------------------------------------
+
+/**
+ * `code` keeps string CONTENTS (an import specifier is a string, so the
+ * module-path rules need it) and blanks comments. `bare` blanks both, so the
+ * identifier rules see code only: `'the default-apps fetch'` and
+ * `"npm run fetch:mpv"` are prose, and a check that fires on prose is a check
+ * people learn to ignore.
+ */
+const lexed = new Map()
+function viewsOf(file) {
+  let v = lexed.get(file)
+  if (!v) {
+    const text = fs.readFileSync(file, 'utf8')
+    v = { text, ...lex(text) }
+    lexed.set(file, v)
+  }
+  return v
+}
+
+/** The source line a match landed on, trimmed, for the failure message. */
+function lineText(text, index) {
+  const start = text.lastIndexOf('\n', index) + 1
+  let end = text.indexOf('\n', index)
+  if (end < 0) end = text.length
+  return text.slice(start, end).trim()
+}
+
+const global_ = (re) => new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g')
+
+/**
+ * @param view 'bare' (default) for identifier rules, 'code' for module paths.
+ */
+function forbid(files, pattern, message, allow = () => false, view = 'bare') {
+  const re = global_(pattern)
   for (const file of files) {
     if (allow(rel(file))) continue
-    const text = fs.readFileSync(file, 'utf8')
-    const lines = text.split(/\r?\n/)
-    lines.forEach((line, i) => {
-      // A line that explains why we do NOT do something is not a violation.
-      if (/^\s*(\/\/|\*|\/\*)/.test(line)) return
-      if (pattern.test(line)) failures.push(`${rel(file)}:${i + 1}  ${message}\n    ${line.trim()}`)
-    })
+    const v = viewsOf(file)
+    for (const m of (view === 'code' ? v.code : v.bare).matchAll(re)) {
+      failures.push(
+        `${rel(file)}:${v.lineAt(m.index)}  ${message}\n    ${lineText(v.text, m.index)}`
+      )
+    }
   }
 }
 
@@ -74,7 +129,9 @@ function forbid(files, pattern, message, allow = () => false) {
 /**
  * Node modules that can open a socket, in every spelling that reaches one:
  * `import x from`, `import 'x'`, `export … from`, `require('x')` and
- * `import('x')` — the last of which is what the previous version missed.
+ * `import('x')` — the last of which is what the previous version missed. The
+ * `\s*` runs are newline-tolerant now, because `import(\n  'node:https'\n)` is
+ * the same escalation with a line break in it.
  *
  * `net` is on the list and is exempted for ONE file: `src/main/mpv/client.ts`
  * connects to mpv's JSON IPC over a Windows NAMED PIPE (`\\.\pipe\…`), which is
@@ -82,8 +139,12 @@ function forbid(files, pattern, message, allow = () => false) {
  * module name rather than a blanket pass, because "this file is allowed sockets"
  * is exactly the shape of exemption that later hides a real one.
  */
-const NETWORK_MODULE_RE =
-  /(?:^|[^\w$])(?:import|export)\s*(?:[\w$*{},\s]*?\s*from\s*)?['"](?:node:)?(?:dns|dns\/promises|https|http|http2|tls|dgram|net|undici|node-fetch|axios|got|request)['"]|\b(?:require|import)\s*\(\s*['"](?:node:)?(?:dns|dns\/promises|https|http|http2|tls|dgram|net|undici|node-fetch|axios|got|request)['"]\s*\)/
+const NET_MODULES =
+  '(?:node:)?(?:dns|dns\\/promises|https|http|http2|tls|dgram|net|undici|node-fetch|axios|got|request)'
+const NETWORK_MODULE_RE = new RegExp(
+  `(?:^|[^\\w$])(?:import|export)\\s*(?:[\\w$*{},\\s]*?\\s*from\\s*)?['"]${NET_MODULES}['"]` +
+    `|\\b(?:require|import)\\s*\\(\\s*['"]${NET_MODULES}['"]\\s*\\)`
+)
 
 /**
  * Runtime entry points, matched as IDENTIFIERS rather than as calls.
@@ -123,33 +184,35 @@ const NETWORK_EXEMPT = {
   'src/main/core/no-network.test.ts': /setProxy|resolveHost|setSpellChecker/
 }
 
-/** Blanks the contents of string and template literals, keeping the quotes. */
-function stripStrings(line) {
-  return line
-    .replace(/'(?:[^'\\]|\\.)*'/g, "''")
-    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
-    .replace(/`(?:[^`\\]|\\.)*`/g, '``')
-}
-
 function networkAllowed(relPath, line) {
   const rule = NETWORK_EXEMPT[relPath]
   return rule !== undefined && rule.test(line.trim())
 }
 
+/**
+ * The network rule needs both views at once: the MODULE half reads specifiers
+ * (strings), the IDENTIFIER half must not read them. So it runs each half over
+ * its own view and merges by offset.
+ */
 function forbidNetwork(files) {
+  const moduleRe = global_(NETWORK_MODULE_RE)
+  const identRe = global_(NETWORK_IDENTIFIER_RE)
   for (const file of files) {
     const r = rel(file)
-    const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/)
-    lines.forEach((line, i) => {
-      if (/^\s*(\/\/|\*|\/\*)/.test(line)) return
-      // The IDENTIFIER rule runs on the line with string literals blanked out.
-      // `'the default-apps fetch'` and `"npm run fetch:mpv"` are prose, and a
-      // check that fires on prose is a check people learn to ignore. The MODULE
-      // rule keeps the quotes, because there the module name IS the string.
-      if (!NETWORK_MODULE_RE.test(line) && !NETWORK_IDENTIFIER_RE.test(stripStrings(line))) return
-      if (networkAllowed(r, line)) return
-      failures.push(`${r}:${i + 1}  ${NETWORK_MESSAGE}\n    ${line.trim()}`)
-    })
+    const v = viewsOf(file)
+    const hits = [
+      ...[...v.code.matchAll(moduleRe)].map((m) => m.index),
+      ...[...v.bare.matchAll(identRe)].map((m) => m.index)
+    ].sort((a, b) => a - b)
+    const seen = new Set()
+    for (const idx of hits) {
+      const lineNo = v.lineAt(idx)
+      if (seen.has(lineNo)) continue
+      seen.add(lineNo)
+      const line = lineText(v.text, idx)
+      if (networkAllowed(r, line)) continue
+      failures.push(`${r}:${lineNo}  ${NETWORK_MESSAGE}\n    ${line}`)
+    }
   }
 }
 
@@ -158,17 +221,42 @@ function forbidNetwork(files) {
  *
  * The path fragments are the same list as before; what changed is that a static
  * `from '…'` is no longer the only way to be caught. `import('…')`,
- * `require('…')` and a bare side-effect `import '…'` all count, and a dynamic
- * import whose specifier is not a string literal is refused outright — there is
- * no legitimate reason for a feature module to compute a module path, and
- * allowing one would reopen the hole by another name.
+ * `require('…')`, `createRequire(…)(…)` and a bare side-effect `import '…'` all
+ * count — across line breaks, which is what the line scanner could not do — and
+ * a dynamic import whose specifier is not a string literal is refused outright.
+ * There is no legitimate reason for a feature module to compute a module path,
+ * and allowing one would reopen the hole by another name.
  */
 const CORE_PATHS =
   '(?:\\/ipc|\\/core\\/menu|\\/core\\/legacy-bridge|\\/core\\/mpv|\\/core\\/registry|\\/core\\/input|\\/core\\/osd|\\/core\\/state|\\/core\\/settings|\\/core\\/no-network|\\/core\\/window|preload\\/index|shared\\/keybinds)'
 const CORE_IMPORT_RE = new RegExp(
-  `(?:from|import|require)\\s*\\(?\\s*['"][^'"]*${CORE_PATHS}[^'"]*['"]`
+  `(?:from|import|require|createRequire\\s*\\([^)]*\\))\\s*\\(?\\s*['"][^'"]*${CORE_PATHS}[^'"]*['"]`
 )
-const COMPUTED_IMPORT_RE = /\bimport\s*\(\s*(?!['"])[^)]/
+/**
+ * A dynamic import whose specifier is not a string LITERAL.
+ *
+ * The lookahead matters more than it looks. The obvious spelling —
+ * `import\s*\(\s*(?!['"])[^)]` — reads correctly and is wrong across line
+ * breaks: `\s*` backtracks to zero width, the negative lookahead then passes on
+ * the newline, and `await import(\n  './thing.ts'\n)` — a perfectly ordinary
+ * literal import — is reported. Anchoring the whitespace INSIDE the lookahead
+ * removes the backtrack: `\s*` must be followed by a non-space that is not a
+ * quote, and there is no shorter match to fall back to.
+ */
+const COMPUTED_IMPORT_RE = /\bimport\s*\((?=\s*[^\s'"])/
+
+/**
+ * `createRequire` at all, in a feature module.
+ *
+ * `createRequire(import.meta.url)('../../core/mpv/vf-chain.ts')` was measured
+ * resolving to the live singleton. CORE_IMPORT_RE catches that exact spelling,
+ * but `const req = createRequire(import.meta.url)` followed by `req(p)` twenty
+ * lines later is the same escalation with the two halves separated, and no
+ * lexical rule can follow the binding. A feature module has never needed
+ * `createRequire` and never will: everything it may reach arrives on
+ * `FeatureContext`. So the FUNCTION is forbidden, not one of its call shapes.
+ */
+const CREATE_REQUIRE_RE = /\bcreateRequire\b/
 
 // --- test:no-hijack (P33) --------------------------------------------------
 forbid(
@@ -190,7 +278,9 @@ forbid(
   // dereferences it, and createElementNS needs it verbatim.
   /https?:\/\/(?!www\.w3\.org\/|github\.com\/rohyunsang)/,
   'no remote origin in shipped code; the releases link is the one exception ' +
-    'and it is opened in the user’s browser, never fetched'
+    'and it is opened in the user’s browser, never fetched',
+  () => false,
+  'code'
 )
 
 // `eval` and `new Function` are the one gap that string-stripping opens: a
@@ -208,7 +298,9 @@ const featureFiles = srcFiles.filter((f) => /\/(main|renderer\/src)\/features\//
 forbid(
   featureFiles,
   /(?:from|import|require)\s*\(?\s*['"][^'"]*window\/windows['"]/,
-  'no feature module imports windows.ts — use ctx.window (§3.3.7)'
+  'no feature module imports windows.ts — use ctx.window (§3.3.7)',
+  () => false,
+  'code'
 )
 forbid(featureFiles, /new BrowserWindow/, 'no feature module constructs a BrowserWindow')
 
@@ -217,14 +309,26 @@ forbid(
   featureFiles,
   CORE_IMPORT_RE,
   'no feature module imports a shared core file — everything arrives on FeatureContext. ' +
-    'This now matches dynamic import() and require() too: `await import("../../core/mpv/bus.ts")` ' +
-    'was a full ownership bypass that the static-only regex printed "clean" for'
+    'This now matches dynamic import(), require() and createRequire() too, ACROSS LINE BREAKS: ' +
+    '`await import(\\n  "../../core/mpv/vf-chain.ts"\\n)` was a full ownership bypass that both ' +
+    'the static-only regex and the line-at-a-time scanner printed "clean" for',
+  () => false,
+  'code'
 )
 forbid(
   featureFiles,
   COMPUTED_IMPORT_RE,
   'a feature module may not compute a module specifier. A computed import is how a ' +
-    'path-fragment grep gets walked around, and no module has a reason to need one'
+    'path-fragment grep gets walked around, and no module has a reason to need one',
+  () => false,
+  'code'
+)
+forbid(
+  featureFiles,
+  CREATE_REQUIRE_RE,
+  'no feature module calls createRequire(). It is a second module loader that no ' +
+    'specifier rule can follow once the returned function is bound to a name, and a ' +
+    'feature module has no use for one: everything it may reach arrives on FeatureContext'
 )
 
 // The renderer half has the same rule: a module's UI reaches the overlay
@@ -235,24 +339,28 @@ forbid(
   rendererFeatureFiles,
   /(?:from|import|require)\s*\(?\s*['"][^'"]*\/core\/(?:index|feature-host|panel-host|stats-host|seekbar-host|settings-form)/,
   'no renderer module imports the renderer core — the contribution points on ' +
-    'RendererFeatureContext are the whole API'
+    'RendererFeatureContext are the whole API',
+  () => false,
+  'code'
 )
 forbid(
   rendererFeatureFiles,
-  /getElementById\(\s*['"](?:stage|chrome|controls|titlebar|seek|seekLayers|osd|toasts|panelRoot|stats|playlistBtn|mediaTitle)['"]/,
-  "no renderer module reaches into the overlay's own chrome by id; contribute a panel"
+  /getElementById\(\s*['"](?:stage|chrome|controls|titlebar|seek|seekLayers|osd|toasts|panelRoot|stats|transportExtras|playlistBtn|mediaTitle)['"]/,
+  "no renderer module reaches into the overlay's own chrome by id; contribute a panel",
+  () => false,
+  'code'
 )
 
 // --- one module never imports another (§3.0) -------------------------------
 for (const file of featureFiles) {
-  const text = fs.readFileSync(file, 'utf8')
+  const v = viewsOf(file)
   const own = rel(file).split('/features/')[1]?.split('/')[0]
-  for (const m of text.matchAll(
+  for (const m of v.code.matchAll(
     /(?:from|import|require)\s*\(?\s*['"]([^'"]*\/features\/([a-z0-9-]+)\/[^'"]*)['"]/g
   )) {
     if (m[2] !== own) {
       failures.push(
-        `${rel(file)}  module '${own}' imports module '${m[2]}' directly. ` +
+        `${rel(file)}:${v.lineAt(m.index)}  module '${own}' imports module '${m[2]}' directly. ` +
           `Cross-module calls go through ctx.commands.invoke() (§3.7.3).`
       )
     }
@@ -261,6 +369,10 @@ for (const file of featureFiles) {
 
 // ---------------------------------------------------------------------------
 // --self-test: the regressions these rules exist for, as fixtures.
+//
+// Fixtures are whole FILES now, not lines, because three of the escalations
+// below span lines and a line-shaped fixture cannot express them. Each one is
+// run through the same `lex()` the real check uses.
 // ---------------------------------------------------------------------------
 
 const MUST_CATCH = [
@@ -277,14 +389,23 @@ const MUST_CATCH = [
   ['network', `const r = await fetch(url)`],
   ['network', `new WebSocket("wss://example.com")`],
   ['network', `navigator.sendBeacon("/x", d)`],
+  // …and the multi-line spellings the LINE scanner could not see.
+  ['network', `const https = await import(\n  "node:https"\n)`],
+  ['network', `import {\n  connect\n} from "node:tls"`],
   // The ownership escalations the static-import regex missed.
   ['core-import', `const { mpvBus } = await import("../../core/mpv/bus.ts")`],
   ['core-import', `const bus = require("../../core/mpv/bus.ts")`],
   ['core-import', `import { mpvBus } from '../../core/mpv/bus.ts'`],
   ['core-import', `import "../../core/registry.ts"`],
   ['core-import', `export { x } from '../../core/settings/store.ts'`],
+  // …and the three the LINE scanner missed, measured resolving at runtime to
+  // the same core/mpv/vf-chain singleton.
+  ['core-import', `const chain = await import(\n  "../../core/mpv/vf-chain.ts"\n)`],
+  ['core-import', `createRequire(import.meta.url)(\n  "../../core/mpv/vf-chain.ts"\n)`],
+  ['create-require', `const req = createRequire(import.meta.url)\nconst m = req(p)`],
   ['computed-import', `const bus = await import(BUS_PATH)`],
-  ['computed-import', 'const m = await import(`../../core/mpv/${name}.ts`)']
+  ['computed-import', 'const m = await import(`../../core/mpv/${name}.ts`)'],
+  ['computed-import', `const m = await import(\n  head + tail\n)`]
 ]
 
 const MUST_NOT_CATCH = [
@@ -295,33 +416,60 @@ const MUST_NOT_CATCH = [
   ['network', 'const m = `mpv.exe not found. Run "npm run fetch:mpv".`'],
   ['network', `ctx.ipc.handle('audio-devices:list', async () => [])`],
   ['network', `import type { FeatureModule } from '@shared/feature-api'`],
+  // A COMMENT is prose too, wherever on the line it sits. The old scanner only
+  // skipped a line whose first characters were a comment opener, so a trailing
+  // comment's code half was invisible while its prose half was scanned.
+  ['network', `const x = 1 // we never fetch() anything`],
+  ['network', `/*\n * We do not import("node:https") here.\n */\nconst x = 1`],
   ['core-import', `import type { Chapter } from '../../../shared/types.ts'`],
   ['core-import', `import './playlist.css'`],
-  ['computed-import', `const mod = await import('./thing.ts')`]
+  ['core-import', `// see ../../core/mpv/bus.ts for why\nconst x = 1`],
+  ['create-require', `const s = 'createRequire is not used here'`],
+  ['computed-import', `const mod = await import('./thing.ts')`],
+  // The multi-line LITERAL import: legal, and the reason the lookahead above is
+  // anchored. The obvious spelling of that rule reports this one.
+  ['computed-import', `const mod = await import(\n  './thing.ts'\n)`],
+  ['computed-import', `const mod = await import(\n  "./thing.ts"\n)`],
+  // A regex literal containing a slash must not open a phantom comment.
+  ['computed-import', `const re = /https?:\\/\\/x/\nconst mod = await import('./a.ts')`]
 ]
 
 function selfTest() {
+  const test = (re, view) => (text) => {
+    const v = lex(text)
+    return global_(re).test(view === 'code' ? v.code : v.bare)
+  }
+  const network = (text) => {
+    const v = lex(text)
+    return (
+      global_(NETWORK_MODULE_RE).test(v.code) || global_(NETWORK_IDENTIFIER_RE).test(v.bare)
+    )
+  }
   const rules = {
-    network: (line) =>
-      NETWORK_MODULE_RE.test(line) || NETWORK_IDENTIFIER_RE.test(stripStrings(line)),
-    'core-import': (line) => CORE_IMPORT_RE.test(line),
-    'computed-import': (line) => COMPUTED_IMPORT_RE.test(line)
+    network,
+    'core-import': test(CORE_IMPORT_RE, 'code'),
+    'create-require': test(CREATE_REQUIRE_RE, 'bare'),
+    'computed-import': test(COMPUTED_IMPORT_RE, 'code')
   }
   const bad = []
-  for (const [rule, line] of MUST_CATCH) {
-    if (!rules[rule](line)) bad.push(`rule '${rule}' FAILED TO CATCH:  ${line}`)
+  const show = (s) => s.replace(/\n/g, '\\n')
+  for (const [rule, text] of MUST_CATCH) {
+    if (!rules[rule](text)) bad.push(`rule '${rule}' FAILED TO CATCH:  ${show(text)}`)
   }
-  for (const [rule, line] of MUST_NOT_CATCH) {
-    if (rules[rule](line)) bad.push(`rule '${rule}' false positive on:  ${line}`)
+  for (const [rule, text] of MUST_NOT_CATCH) {
+    if (rules[rule](text)) bad.push(`rule '${rule}' false positive on:  ${show(text)}`)
   }
   if (bad.length > 0) {
     console.error('check:forbidden --self-test found %d broken rule(s):\n', bad.length)
     for (const b of bad) console.error('  ' + b)
     process.exit(1)
   }
+  const multiline = MUST_CATCH.filter(([, t]) => t.includes('\n')).length
   console.log(
-    'check:forbidden --self-test: %d regressions caught, %d clean lines untouched',
+    'check:forbidden --self-test: %d regressions caught (%d of them multi-line), ' +
+      '%d clean sources untouched',
     MUST_CATCH.length,
+    multiline,
     MUST_NOT_CATCH.length
   )
 }

@@ -122,6 +122,49 @@ test('createService validates the id and refuses to grant privilege on request',
   assert.match(bus, /!bus\.knownIds\.has\(ownerId\)/)
 })
 
+test('naming yourself core is not a credential', () => {
+  // MEASURED: `createService('core/mpv/bus')` — WITHOUT the privileged flag,
+  // which is the thing that was actually checked — was minted a working service
+  // and wrote core's `pause`. The id check read
+  //   `!privileged && !PRIVILEGED_IDS.has(ownerId) && !bus.knownIds.has(ownerId)`
+  // so any of the three core ids skipped it entirely, and `assertWrite` then
+  // consulted the owner map, which agrees that core owns `pause`.
+  // CODE ONLY. bus.ts quotes the broken expression in the comment that explains
+  // why it is gone, and an assertion that fires on prose is an assertion people
+  // delete the prose to satisfy.
+  const code = bus.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  assert.doesNotMatch(
+    code,
+    /!privileged && !PRIVILEGED_IDS\.has\(ownerId\) && !bus\.knownIds\.has\(ownerId\)/,
+    'the id check exempts core ids again. Core mints its services with ' +
+      '{ privileged: true } from src/main/index.ts; it never needs the exemption, and the ' +
+      'exemption is what let a feature module claim the core id.'
+  )
+  assert.match(
+    code,
+    /if \(!privileged && !bus\.knownIds\.has\(ownerId\)\)/,
+    'every non-privileged id must be one core/registry actually loaded'
+  )
+})
+
+test('the command SHAPE is checked before any other guard, for privileged callers too', () => {
+  // `assertCommandShape` has to run above the `if (privileged) return true`
+  // early-out: a boxed argument is not a permission question, it is a command
+  // the guards cannot read, and core has no business sending one either.
+  const start = bus.indexOf('const checkCommand = (args: unknown[]): boolean => {')
+  assert.ok(start > 0, 'checkCommand not found in bus.ts')
+  const body = bus.slice(start, bus.indexOf(`${String.fromCharCode(10)}    }`, start))
+  const shapeAt = body.indexOf('assertCommandShape(args)')
+  const privilegedAt = body.indexOf('if (privileged) return true')
+  assert.ok(shapeAt >= 0, 'checkCommand no longer validates the command shape')
+  assert.ok(privilegedAt >= 0)
+  assert.ok(
+    shapeAt < privilegedAt,
+    'the shape check moved below the privileged early-out, so a boxed command from core ' +
+      'reaches mpv unread again'
+  )
+})
+
 test('only the registry mints a module service, and it bakes in the real id', () => {
   const registry = fs.readFileSync(path.join(repo, 'src/main/core/registry.ts'), 'utf8')
   assert.match(registry, /mpv: registry\.deps\.mpv\.createService\(id\)/)
@@ -141,13 +184,60 @@ test('only the registry mints a module service, and it bakes in the real id', ()
 test('the filter chains get their exec from the bus, not from a public method', () => {
   for (const kind of ['vf', 'af']) {
     const chain = fs.readFileSync(path.join(here, `${kind}-chain.ts`), 'utf8')
-    assert.ok(
-      !/chainExec/.test(chain),
-      `${kind}-chain.ts calls chainExec, which means it is public again`
-    )
     assert.ok(!/from '\.\/bus\.ts'/.test(chain), `${kind}-chain.ts imports the bus directly`)
   }
   assert.match(bus, /chain\.attachExec\(\{ command: \(args\) => this\.chainExec\(args\) \}\)/)
+})
+
+/**
+ * THE COSMETIC ASSERTION THIS REPLACES.
+ *
+ * The old test was `assert.ok(!/chainExec/.test(chain))` — a grep for a NAME, on
+ * a file that never had that name in it. The field is called `exec`, it was a
+ * TypeScript `private` (which erases to an ordinary enumerable own property),
+ * and the chain SINGLETON was exported, so all of this ran from a feature module
+ * and all of it landed:
+ *
+ *     const { vfChain } = await import('../../core/mpv/vf-chain.ts')
+ *     Object.keys(vfChain)                          // includes 'exec'
+ *     vfChain.exec.command(['vf', 'set', 'hflip'])  // raw chain write
+ *     vfChain.claim('attacker-module', ['rl-lut'])  // stole a reserved label
+ *
+ * Both halves of that were wrong: grepping a name proves nothing about the
+ * runtime object, and the name was not even the right one. So this asserts on
+ * the real thing — what the module EXPORTS, and what the exported value's own
+ * properties are when you look at it.
+ */
+test('vf-chain and af-chain export a factory and no instance', async () => {
+  for (const kind of ['vf', 'af']) {
+    const mod: Record<string, unknown> = await import(`./${kind}-chain.ts`)
+    const factory = kind === 'vf' ? 'createVfChain' : 'createAfChain'
+    assert.deepEqual(
+      Object.keys(mod).sort(),
+      [factory],
+      `${kind}-chain.ts exports more than its factory. An exported FilterChain instance is ` +
+        `reachable in one dynamic import, and every one of its fields with it.`
+    )
+
+    const admin = (mod[factory] as () => Record<string, unknown>)()
+    for (const forbidden of ['exec', 'slots', 'claims', 'cfg', 'ready', 'pending', 'applying']) {
+      assert.equal(
+        Object.prototype.hasOwnProperty.call(admin, forbidden),
+        false,
+        `${kind} chain admin has an own property '${forbidden}' at RUNTIME`
+      )
+      assert.equal(admin[forbidden], undefined, `${kind} chain admin.${forbidden} is readable`)
+    }
+    assert.deepEqual(
+      Object.keys(admin).sort(),
+      ['attachExec', 'claim', 'hasCpuFilter', 'onFileLoaded', 'onUnload', 'serialise', 'serviceFor'],
+      `the ${kind} admin surface grew a member; every one of them is a way in`
+    )
+
+    // Created ONCE. A module that dynamic-imports the file finds a factory that
+    // refuses rather than a second chain with no claims and a live exec.
+    assert.throws(() => (mod[factory] as () => unknown)(), /created once/)
+  }
 })
 
 test('feature modules are imported LAZILY, so core is wired before any of them runs', () => {

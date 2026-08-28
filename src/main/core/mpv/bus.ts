@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { MpvManager, CORE_OBSERVED } from '../../mpv/manager'
 import {
   OwnerMap,
+  assertCommandShape,
   commandNameOf,
   isBannedCommand,
   isChainCommand,
@@ -481,10 +482,19 @@ class MpvBus {
           `sets: it belongs to ${[...PRIVILEGED_IDS].join(', ')} and to nothing else.`
       )
     }
-    if (!privileged && !PRIVILEGED_IDS.has(ownerId) && !bus.knownIds.has(ownerId)) {
+    // NO EXEMPTION FOR CORE IDS. This used to read
+    // `!privileged && !PRIVILEGED_IDS.has(ownerId) && !bus.knownIds.has(ownerId)`,
+    // so `createService('core/mpv/bus')` — without the privileged flag, which is
+    // the thing that IS checked — skipped the id check entirely and was minted a
+    // working service for core's own id. It then wrote core's `pause`, because
+    // `assertWrite` asks the owner map, and the owner map says core owns `pause`.
+    // Naming yourself core is not a credential; being loaded by the registry is.
+    if (!privileged && !bus.knownIds.has(ownerId)) {
       throw new ContributionError(
         `'${ownerId}' is not a module core/registry loaded. A service is minted for a module ` +
-          `by the registry, once, with its own id — an id is not something a caller supplies.`
+          `by the registry, once, with its own id — an id is not something a caller supplies. ` +
+          `Core's own ids are no exception: they arrive here with { privileged: true } from ` +
+          `src/main/index.ts, and privilege is granted by this file, never asked for.`
       )
     }
 
@@ -507,6 +517,16 @@ class MpvBus {
      * to skip the chain THROW and merely return.
      */
     const checkCommand = (args: unknown[]): boolean => {
+      // SHAPE FIRST, privileged or not, before any guard reads the array.
+      //
+      // `[new String('vf'), 'set', 'hflip']` used to walk past every check in
+      // this function: `isBannedCommand`, `isChainCommand` and `commandNameOf`
+      // all funnel through `verbOf`, `verbOf` answered null for a non-string
+      // head, and null read as "nothing to guard". It then serialised to
+      // `["vf","set","hflip"]` and mpv ran it. Nine of eleven such probes landed
+      // and none threw. An unrecognised command shape is now a hard error —
+      // failing closed — rather than a silent disabling of §3.7.
+      assertCommandShape(args)
       // Banned outright, privileged or not: screenshot-raw kills mpv over the
       // JSON IPC pipe (§7.7 trap 5) and there is no correct use of it.
       if (isBannedCommand(args)) {
