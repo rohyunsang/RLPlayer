@@ -16,7 +16,6 @@ import { setVideoRegion } from './core/window/windows'
 import { notifyVideoRegion } from './core/window/index.ts'
 import { commandRegistry, resolvedKeybinds, setBinding, setPreset } from './core/input/index.ts'
 import { messageCatalog, t } from './core/i18n/index.ts'
-import { mpvBus } from './core/mpv/bus.ts'
 import type { SettingsRegistry } from './core/settings/registry.ts'
 import type { FileFilter, SettingDescriptor, SettingSection, SettingType } from '@shared/feature-api'
 import type { LegacyBridge } from './core/legacy-bridge.ts'
@@ -56,7 +55,13 @@ export function openSettingsWindow(): void {
       preload: path.join(__dirname, '../preload/index.js'),
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false
+      sandbox: false,
+      // THIS window is the one that made the leak real: it is the only page in
+      // the app with text inputs, and Wave 0 added them. Chromium's
+      // spellchecker then downloads a dictionary from redirector.gvt1.com.
+      // NOTE: this flag alone was measured NOT to stop it — the session call in
+      // core/no-network.ts is what does. Kept as defence in depth.
+      spellcheck: false
     }
   })
   settingsWindow.setMenu(null)
@@ -79,6 +84,8 @@ export function broadcastKeybinds(): void {
 }
 
 export interface CoreIpcDeps {
+  /** §3.5 rule 5: dropped foreign writes, for the stats overlay. */
+  refusals(): Array<{ moduleId: string; count: number }>
   legacy: LegacyBridge
   menu: MenuRegistry
   osd: OsdBus
@@ -239,7 +246,7 @@ export function registerCoreIpc(deps: CoreIpcDeps): void {
 
   // Ownership refusals, for the stats overlay. Empty in a dev build, because
   // there a foreign write throws instead.
-  ipcMain.handle('core-mpv:refusals', () => mpvBus.refusals())
+  ipcMain.handle('core-mpv:refusals', () => deps.refusals())
 
   // The catalog, flattened. Both renderer windows fetch it once at boot so
   // `ctx.t()` is synchronous by the time a module builds its DOM.

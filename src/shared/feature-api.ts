@@ -105,9 +105,29 @@ export interface FeatureContext {
   readonly lifecycle: LifecycleService
   readonly window: WindowService
   readonly dialog: DialogService
+  /**
+   * The network allowlist (§1.3). RLPlayer reaches ZERO hosts by default, and
+   * this service is how a module that genuinely needs one — R05's yt-dlp,
+   * M21's subtitle providers — finds out whether it may, without being able to
+   * grant itself permission. See src/main/core/no-network.ts.
+   */
+  readonly network: NetworkService
   /** Only granted to modules declaring `usesVideoFilters` / `usesAudioFilters`. */
   readonly vf?: FilterChainService
   readonly af?: FilterChainService
+}
+
+/**
+ * §1.3: "no network at rest" is the product. A module never opens a socket on
+ * a whim; it asks, and the answer comes from a static table in a core file that
+ * a reviewer can read in one screen.
+ */
+export interface NetworkService {
+  /** True when this module declared this exact host. Cheap; use it to grey a
+   *  provider out rather than throwing at the user. */
+  allowed(host: string): boolean
+  /** Throws, naming the file to edit, unless this module declared `host`. */
+  assertAllowed(host: string, reason: string): void
 }
 
 export interface PathService {
