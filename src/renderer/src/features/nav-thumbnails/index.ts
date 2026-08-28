@@ -1,7 +1,7 @@
 import './nav-thumbnails.css'
 import type { RendererFeatureModule } from '../../../../shared/renderer-api.ts'
 import type { Chapter } from '../../../../shared/types.ts'
-import { bucketTime, chapterAt, LruMap, shouldShowChapter } from './preview-state.ts'
+import { bucketTime, chapterAt, LruMap } from './preview-state.ts'
 
 /**
  * M27 nav-thumbnails, renderer half — N36's preview and N37's caption.
@@ -14,10 +14,18 @@ import { bucketTime, chapterAt, LruMap, shouldShowChapter } from './preview-stat
  * with a `hitTest`; there is nothing here to reach with Tab, because there is
  * nothing here to activate.
  *
- * Everything visible is contributed as ONE tooltip fragment, so the timecode
- * (core, order 0), this preview (order 10) and M25's chapter title on a tick
- * (order 20) compose inside the single `.seek-hover` box instead of stacking
- * three floating ones. `main.ts` is not touched, and neither is `styles.css`.
+ * Everything visible is contributed as TOOLTIP FRAGMENTS, so the timecode
+ * (core, order 0), this preview (order 10), N37's chapter caption (order 15) and
+ * M25's chapter title on a tick (order 20) compose inside the single
+ * `.seek-hover` box instead of stacking floating ones. `main.ts` is not touched,
+ * and neither is `styles.css`.
+ *
+ * The caption is a SEPARATE fragment carrying `role: 'chapter'`, which is how it
+ * and M25's title collapse to one line. This module no longer tries to work out
+ * whether M25 will print: `shouldShowChapter()` derived a suppression band from
+ * M25's `tolerancePx` and was wrong at 22 of 24 measured positions, because M25
+ * printed at every position and, even fixed, only prints when it WINS the
+ * hit-test. The host knows who claimed the pointer; nothing else can.
  */
 
 /**
@@ -74,9 +82,6 @@ const mod: RendererFeatureModule = {
     /** Bucketed time -> decoded frame. Sweeping the bar twice decodes once. */
     const cache = new LruMap<ThumbFrame>(96)
 
-    /** Seek-bar geometry, captured in render() so the caption can de-duplicate. */
-    let barWidth = 0
-
     // The tooltip fragment is built ONCE and handed back on every hover. The
     // host tears the tooltip's children out on each pointermove and re-appends
     // whatever the layers return, so returning the same nodes keeps the canvas
@@ -86,10 +91,12 @@ const mod: RendererFeatureModule = {
     wrap.className = 'rl-thumb-tip'
     const canvas = document.createElement('canvas')
     canvas.className = 'rl-thumb-canvas'
+    wrap.appendChild(canvas)
+    // The caption is a SIBLING fragment, not a child of the preview: the host
+    // de-duplicates per fragment, and a caption nested inside the image's
+    // fragment could only be dropped by dropping the image with it.
     const caption = document.createElement('span')
     caption.className = 'rl-thumb-chapter'
-    wrap.appendChild(canvas)
-    wrap.appendChild(caption)
 
     let hoverTime: number | null = null
     let paintedTime: number | null = null
@@ -205,15 +212,22 @@ const mod: RendererFeatureModule = {
 
     ctx.seekbarLayer({
       id: 'nav-thumbnails.preview',
-      // Core's timecode is order 0 and M25's chapter title is order 20, so the
-      // preview sits between them in the one shared tooltip.
-      order: 10,
+      /**
+       * LAYER order, which is a different namespace from the tooltip FRAGMENT
+       * order below. This was 10, the same as `nav-chapters.ticks`, and layer
+       * order decides paint order, hit-test order and z-index — so all three
+       * fell to module load order. The host rejects a duplicate now (rule 5).
+       *
+       * 5 rather than 15: this layer paints nothing on the bar and declares no
+       * `hitTest`, so it belongs at the bottom of the paint stack and last in
+       * hit order, where it cannot be in front of a tick or a pin.
+       */
+      order: 5,
 
-      render(c): void {
-        // No hitTest, so this layer paints nothing onto the bar itself; the
-        // only thing it needs from render() is the bar's width, for the
-        // chapter-caption de-duplication below.
-        barWidth = c.width
+      render(): void {
+        // No hitTest and nothing painted onto the bar itself, so there is
+        // nothing to do here. It used to capture `c.width`, which only the
+        // deleted `shouldShowChapter()` band arithmetic needed.
       },
 
       onHover(e): void {
@@ -238,18 +252,42 @@ const mod: RendererFeatureModule = {
         }, SETTLE_MS)
       },
 
-      tooltip(e): { el: HTMLElement; order: number } | null {
+      /**
+       * TWO fragments: the preview image, and N37's chapter caption.
+       *
+       * They are separate because they de-duplicate differently. Nothing else on
+       * the bar shows a thumbnail, so the image needs no role. The caption is
+       * "the chapter", which M25 also prints for the tick under the pointer — so
+       * it carries `role: 'chapter'` and the HOST keeps one of the two.
+       *
+       * WHAT THIS REPLACES. `shouldShowChapter()` used to suppress the caption
+       * inside a band derived from M25's `tolerancePx`, the chapter list and the
+       * bar width. Its premise — "M25 only prints within +/-6 px of a tick" —
+       * was false in two independent ways: M25 printed at EVERY position (24/24
+       * measured, always chapter 0), and even corrected, M25 only prints when it
+       * WINS the hit-test against every other layer on the bar, which no foreign
+       * module can know. Guessing at another layer's behaviour is the coupling
+       * the API exists to prevent; the host knows who claimed the pointer, so the
+       * host decides. That function and its arithmetic are gone.
+       */
+      tooltip(e): readonly { el: HTMLElement; order: number; role?: string }[] | null {
         if (!usable()) return null
         const t = bucketTime(e.time, duration, status.stepSec)
         // Keep whatever is on the canvas while the next frame decodes: a
         // preview that blanks between buckets flickers on every hover.
         canvas.hidden = paintedTime === null
 
-        const pxPerSec = duration > 0 && barWidth > 0 ? barWidth / duration : 0
-        const ch = shouldShowChapter(chapters, t, pxPerSec) ? chapterAt(chapters, t) : null
+        const ch = chapterAt(chapters, t)
         caption.textContent = ch ? ch.title : ''
         caption.hidden = ch === null
-        return { el: wrap, order: 10 }
+        // Order 10 puts the preview between core's timecode (0) and M25's
+        // chapter title (20); the caption sits just under the image at 15.
+        return ch === null
+          ? [{ el: wrap, order: 10 }]
+          : [
+              { el: wrap, order: 10 },
+              { el: caption, order: 15, role: 'chapter' }
+            ]
       }
     })
   }

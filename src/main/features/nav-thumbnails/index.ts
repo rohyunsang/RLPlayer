@@ -408,7 +408,11 @@ const mod: FeatureModule = {
     ctx.menu.contribute({
       id: 'nav-thumbnails.menu',
       labelKey: 'nav-thumbnails.menuTitle',
-      order: 45,
+      // 47, not 45: M25 nav-chapters is already at 45 and M26 nav-bookmarks at
+      // 46. Two sections at one order meant the context menu's order was decided
+      // by feature-discovery order (alphabetical directory listing), and core now
+      // rejects the tie rather than resolving it by accident.
+      order: 47,
       items: [{ commandId: 'nav-thumbnails.toggle' }]
     })
 

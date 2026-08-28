@@ -47,6 +47,29 @@ export class MenuRegistry {
     if (this.ids.has(id)) {
       throw new ContributionError(`duplicate menu section id '${id}'.`)
     }
+    /**
+     * A DUPLICATE `order` WITHIN ONE PARENT IS REJECTED TOO, and this one was
+     * already live: `nav-chapters.menu` and `nav-thumbnails.menu` both
+     * contributed at order 45, so which of the two appeared first in the context
+     * menu was decided by feature discovery order — alphabetical directory
+     * order, which nobody chose and nothing documented. Found by auditing every
+     * cross-module ordering namespace after the seek-bar layers collided at 10.
+     *
+     * Scoped to `parent`, because sections under different parents are never
+     * sorted against each other.
+     */
+    const clash = this.sections.find(
+      (s) => s.order === section.order && (s.parent ?? '') === (section.parent ?? '')
+    )
+    if (clash) {
+      throw new ContributionError(
+        `duplicate menu section order ${section.order}${
+          section.parent ? ` under '${section.parent}'` : ''
+        }: '${clash.id}' (${clash.ownerId}) and '${id}' (${ownerId}). order is the only thing ` +
+          `deciding which comes first, so a tie makes the menu depend on module load order. ` +
+          `Pick distinct orders and record them in docs/parity/02-wave0-api.md.`
+      )
+    }
     this.ids.add(id)
     this.sections.push({ ...section, ownerId })
   }

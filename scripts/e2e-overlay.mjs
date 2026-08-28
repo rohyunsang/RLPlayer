@@ -324,15 +324,37 @@ async function main() {
   // Prove the overlay is still alive rather than merely quiet: a dead renderer
   // also produces zero errors.
   /**
-   * The seek bar, driven for real.
+   * The seek bar, driven for real -- AND POSITIONALLY.
    *
-   * A pointermove over the middle of the bar has to produce a tooltip built from
-   * MORE THAN ONE fragment -- core's timecode plus at least the chapter layer's
-   * -- and Tab has to land on a contributed handle. Both were true of the unit
-   * tests and false of the shipped overlay: `SeekbarHost.tooltips()`, `.key()`
-   * and `.focusHandle()` had no production call sites at all, and `main.ts`
-   * returned early on every arrow key inside a range input, which the seek bar
-   * is. This is the assertion a unit test structurally cannot make.
+   * WHAT THIS USED TO ASSERT, AND WHY IT WAS WORTHLESS. It swept 39 positions,
+   * kept the LARGEST `#seekHover` child count it saw, and failed only if that
+   * count was below 2. M25's chapter fragment was present at EVERY x -- its
+   * tooltip did `chapters[Number(e.handle)]` and the host passed `''` for "no
+   * handle", so `Number('') === 0` printed chapter 0 unconditionally -- which
+   * means the assertion was satisfied by the very bug it existed to catch. It
+   * printed "seek tooltip fragments: 3 ... clean" while the tooltip said "Intro"
+   * at 24 of 24 positions and contradicted M27's own caption at 22 of them: at
+   * 5:00 and 9:20 the same box read "Intro" and "End" at once.
+   *
+   * "Present" is therefore not the property. CORRECT AT A KNOWN POSITION is.
+   * The oracle is the bar itself: M25 draws a `.seek-chapter-tick` per chapter
+   * carrying that chapter's `title`, so their positions and titles are readable
+   * from the DOM without the harness knowing what file is playing. For each
+   * sampled x the probe records what the tooltip actually says, and node asserts:
+   *
+   *   A. `.seek-tip-chapter` (M25's fragment) appears ONLY within the host's
+   *      6 px hit tolerance of a tick -- the exact claim that was false;
+   *   B. never two chapter captions in one box (M25's and M27's cannot both
+   *      print: that was 22 of 24 positions);
+   *   C. every caption that appears names the RIGHT chapter for that position;
+   *   D. across the sweep at least two DISTINCT chapter titles appear. It was
+   *      always exactly one, "Intro", and any check that cannot see that is
+   *      measuring nothing.
+   *
+   * Tab still has to land on a contributed handle: `SeekbarHost.tooltips()`,
+   * `.key()` and `.focusHandle()` had no production call sites at all, and
+   * `main.ts` returned early on every arrow key inside a range input, which the
+   * seek bar is. That part a unit test structurally cannot see either.
    */
   const probe = await s.send('Runtime.evaluate', {
     expression: `(() => {
@@ -341,12 +363,35 @@ async function main() {
       const at = (frac) => new PointerEvent('pointermove', {
         clientX: r.left + r.width * frac, clientY: r.top + r.height / 2, bubbles: true
       })
+      // The oracle, read off the bar M25 painted: one tick per chapter, each
+      // carrying its own title. No knowledge of the playing file required.
+      const ticks = [...document.querySelectorAll('#seekLayers .seek-chapter-tick')].map((n) => ({
+        pct: parseFloat(n.style.left),
+        title: n.title
+      })).filter((t) => Number.isFinite(t.pct)).sort((a, b) => a.pct - b.pct)
+
+      const visible = (n) => n && !n.hidden && (n.textContent ?? '').trim() !== ''
+      const box = () => document.getElementById('seekHover')
+
       // Sweep: a chapter tick is a few pixels wide, so one sample can miss it.
       let tipFragments = 0
+      const samples = []
       for (let i = 1; i < 40; i++) {
-        seek.dispatchEvent(at(i / 40))
-        const n = document.getElementById('seekHover')?.childElementCount ?? 0
+        const frac = i / 40
+        seek.dispatchEvent(at(frac))
+        const hover = box()
+        const n = hover?.childElementCount ?? 0
         if (n > tipFragments) tipFragments = n
+        const m25 = hover?.querySelector('.seek-tip-chapter')
+        const m27 = hover?.querySelector('.rl-thumb-chapter')
+        samples.push({
+          frac,
+          px: r.width * frac,
+          fragments: n,
+          time: hover?.querySelector('.seek-tip-time')?.textContent ?? '',
+          m25: visible(m25) ? (m25.textContent ?? '').trim() : null,
+          m27: visible(m27) ? (m27.textContent ?? '').trim() : null
+        })
       }
       seek.focus()
       let focusables = 0
@@ -360,6 +405,9 @@ async function main() {
         transportButtons: document.querySelectorAll('#transportExtras [data-transport-button]').length,
         ticks: document.querySelectorAll('#seekLayers .seek-chapter-tick').length,
         tipFragments,
+        barWidth: r.width,
+        chapterTicks: ticks,
+        tipSamples: samples,
         focusables,
         title: document.getElementById('mediaTitle')?.textContent ?? '',
         time: document.getElementById('timeNow')?.textContent ?? '',
@@ -522,6 +570,102 @@ async function main() {
         `every seek-bar assertion below is vacuously true, so this is checked FIRST.`
     )
   }
+  /**
+   * A-D from the block comment above. Each failure names the position, what the
+   * tooltip said, and what it should have said -- "the tooltip is wrong
+   * somewhere" is not a bug report.
+   */
+  {
+    const TOL_PX = 6 // SeekbarHost.DEFAULT_TOLERANCE
+    const ticks = dom.chapterTicks ?? []
+    const samples = dom.tipSamples ?? []
+    const problems = []
+
+    if (ticks.length < 2) {
+      problems.push(
+        `only ${ticks.length} chapter tick(s) on the bar, so there is nothing positional to ` +
+          `check. The profile's mpv.conf asks for 3.`
+      )
+    }
+    if (samples.length < 20) {
+      problems.push(`only ${samples.length} tooltip samples were taken`)
+    }
+
+    const claimedTick = (px) => {
+      let best = null
+      for (const t of ticks) {
+        const d = Math.abs(px - (t.pct / 100) * dom.barWidth)
+        if (d <= TOL_PX && (best === null || d < best.d)) best = { d, title: t.title }
+      }
+      return best?.title ?? null
+    }
+    const containing = (frac) => {
+      let found = null
+      for (const t of ticks) if (t.pct / 100 <= frac + 1e-9) found = t.title
+      return found
+    }
+
+    const printed = new Set()
+    for (const smp of samples) {
+      const onTick = claimedTick(smp.px)
+      // A. M25 prints ONLY where its own hitTest claimed.
+      if (smp.m25 !== null && onTick === null) {
+        problems.push(
+          `A: at ${(smp.frac * 100).toFixed(1)}% (${smp.time}) M25 printed '${smp.m25}' with no ` +
+            `chapter tick within ${TOL_PX} px. That is Number('') === 0 printing chapter 0 at ` +
+            `every position.`
+        )
+      }
+      if (smp.m25 !== null && onTick !== null && smp.m25 !== onTick) {
+        problems.push(
+          `A: at ${(smp.frac * 100).toFixed(1)}% M25 printed '${smp.m25}' but the tick it ` +
+            `claimed is '${onTick}'`
+        )
+      }
+      // B. Never two chapter captions in one box.
+      if (smp.m25 !== null && smp.m27 !== null) {
+        problems.push(
+          `B: at ${(smp.frac * 100).toFixed(1)}% (${smp.time}) the ONE tooltip carried two ` +
+            `chapter captions at once: M25 '${smp.m25}' and M27 '${smp.m27}'`
+        )
+      }
+      // C. Whatever is printed names the right chapter for this position.
+      const caption = smp.m25 ?? smp.m27
+      if (caption !== null && caption !== undefined) {
+        printed.add(caption)
+        const acceptable = [onTick, containing(smp.frac)].filter((x) => x !== null)
+        if (!acceptable.includes(caption)) {
+          problems.push(
+            `C: at ${(smp.frac * 100).toFixed(1)}% (${smp.time}) the tooltip said '${caption}'; ` +
+              `this position is inside '${containing(smp.frac)}'` +
+              (onTick ? ` and on the '${onTick}' tick` : '')
+          )
+        }
+      }
+    }
+    // D. The caption has to MOVE. One distinct title across the whole bar is
+    //    exactly what the old check reported as clean.
+    if (printed.size < 2) {
+      problems.push(
+        `D: the tooltip printed ${printed.size} distinct chapter title(s) across ${samples.length} ` +
+          `positions (${[...printed].join(', ') || 'none'}). It was always 'Intro'; a caption that ` +
+          `does not change with the pointer is not a caption.`
+      )
+    }
+
+    console.log(
+      `seek tooltip, positional     : ${samples.length} samples, ${ticks.length} ticks, ` +
+        `${printed.size} distinct chapter(s) printed: ${[...printed].join(' / ') || 'none'}`
+    )
+    if (problems.length > 0) {
+      failures.push(
+        'the seek tooltip is present but WRONG:\n    ' +
+          problems.slice(0, 12).join('\n    ') +
+          (problems.length > 12 ? `\n    ... and ${problems.length - 12} more` : '')
+      )
+    }
+  }
+
   if (dom.tipFragments < 2) {
     failures.push(
       `the seek tooltip composed ${dom.tipFragments} fragment(s); core's timecode plus at ` +

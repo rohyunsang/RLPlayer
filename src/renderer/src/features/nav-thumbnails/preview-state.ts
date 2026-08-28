@@ -37,32 +37,28 @@ export function chapterAt(chapters: readonly Chapter[], t: number): Chapter | nu
 }
 
 /**
- * Whether THIS layer should print the chapter title, given that M25 also does.
+ * `shouldShowChapter()` USED TO BE HERE, AND ITS DELETION IS THE POINT.
  *
- * M25's `nav-chapters.ticks` layer contributes a chapter fragment whenever its
- * own `hitTest` claims the pointer, which is within `tolerancePx` (6, the host's
- * default) of a tick, and it only draws ticks at all with two or more chapters.
- * N37 wants the chapter for ANY hover position, so the two overlap in exactly
- * that 12 px band and would print the same title twice.
+ * It answered "should this layer print the chapter title, given that M25 also
+ * does?" by re-deriving M25's hit-test band from the chapter list, the bar width
+ * and M25's `tolerancePx`. The premise — "M25 only prints within +/-6 px of a
+ * tick" — was false twice:
  *
- * There is no API to ask another layer whether it claimed a hover — and there
- * should not be one; a layer being able to see another layer's hit is how two
- * modules start depending on each other's internals. The band is derivable from
- * public information instead: the chapter list is in `PlayerState`, and
- * `timeToX` is on the layer context.
+ *   1. M25 printed at EVERY position. Its tooltip did
+ *      `chapters[Number(e.handle)]` and the host passed `''` for "no handle", so
+ *      `Number('') === 0` named chapter 0 unconditionally. Measured over 24
+ *      positions in the packaged build: 24/24 said "Intro", and 22 of them
+ *      contradicted this module's caption inside the same box.
+ *   2. Even with that fixed, M25 prints only when its `hitTest` WINS against
+ *      every other layer on the bar. Whether it did is not derivable from
+ *      anything a foreign module can see, and an API that let one layer ask
+ *      would be an API that couples two modules' internals.
+ *
+ * So the de-duplication moved to the host, which is the only thing that knows
+ * who claimed the pointer: both layers tag their fragment `role: 'chapter'` and
+ * `SeekbarHost.tooltips()` keeps one. There is no arithmetic left to test here,
+ * which is the correct amount for a question this module cannot answer.
  */
-export function shouldShowChapter(
-  chapters: readonly Chapter[],
-  t: number,
-  pxPerSec: number,
-  tolerancePx = 6
-): boolean {
-  if (chapters.length === 0) return false
-  if (chapters.length < 2) return true // M25 draws no ticks, so nothing collides
-  if (!(pxPerSec > 0)) return true
-  const band = tolerancePx / pxPerSec
-  return !chapters.some((ch) => Math.abs(ch.time - t) <= band)
-}
 
 /**
  * A bounded most-recently-used map, so sweeping the bar twice decodes once.

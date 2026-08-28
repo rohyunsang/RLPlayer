@@ -1,5 +1,8 @@
 import test, { beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   __resetForTests,
   createContext,
@@ -342,4 +345,109 @@ test('two modules cannot claim the same transport button id', () => {
     errors.some((e) => /duplicate transport button id/.test(e)),
     `the collision was not reported: ${errors.join(' | ')}`
   )
+})
+
+// ---------------------------------------------------------------------------
+// Every cross-module ORDERING namespace, audited after the seek bar collided
+// ---------------------------------------------------------------------------
+//
+// `SeekbarHost.register()` rejected a duplicate layer id and nothing rejected a
+// duplicate `order`, and the two shipped layers at order 10 collided. Auditing
+// the sibling namespaces found `ctx.panel()`, `ctx.statsSection()` and
+// `ctx.settingsSection()` rejecting NOTHING — not even a duplicate id — and
+// `ctx.transportButton()` checking the id but not the order. The tests below are
+// per-namespace rather than one loop, so a failure names the namespace.
+
+const orderClash = /duplicate .* order/
+const idClash = /duplicate .* id/
+
+test('two panels cannot share an order, and cannot share an id', () => {
+  const ctx = createContext('playlist', bridge, 'player')
+  const panel = (id: string, order: number): void => {
+    ctx.panel({ id, side: 'right', titleKey: 'x', order, mount: () => () => {} })
+  }
+  panel('playlist', 10)
+  assert.throws(() => panel('nav-bookmarks', 10), orderClash)
+  assert.throws(() => panel('playlist', 20), idClash)
+  panel('nav-bookmarks', 20)
+  assert.deepEqual(
+    panels.map((p) => p.id),
+    ['playlist', 'nav-bookmarks']
+  )
+})
+
+test('two stats sections cannot share an order, and cannot share an id', () => {
+  const ctx = createContext('video-decode', bridge, 'player')
+  const section = (id: string, order: number): void => {
+    ctx.statsSection({ id, order, titleKey: 'x', fields: () => [] })
+  }
+  section('video-decode.stats', 20)
+  assert.throws(() => section('mediainfo.stats', 20), orderClash)
+  assert.throws(() => section('video-decode.stats', 30), idClash)
+})
+
+test('two transport buttons cannot share an order', () => {
+  const ctx = createContext('playlist', bridge, 'player')
+  const button = (id: string, order: number): void => {
+    ctx.transportButton({ id, order, labelKey: 'x', mount: () => () => {}, onClick: () => {} })
+  }
+  button('playlist.toggle', 20)
+  assert.throws(() => button('nav-bookmarks.toggle', 20), orderClash)
+  button('nav-bookmarks.toggle', 30)
+})
+
+test('settings sections may share an order only in DIFFERENT pages', () => {
+  // The one namespace with a legitimate scope: two sections that are never
+  // sorted against each other cannot collide, and forbidding it would make 55
+  // modules coordinate an order across pages they cannot see.
+  const ctx = createContext('shell-window', bridge, 'settings')
+  const section = (id: string, order: number, page: 'playback' | 'video'): void => {
+    ctx.settingsSection({ id, section: page, order, titleKey: 'x', mount: () => () => {} })
+  }
+  section('shell-window.a', 6, 'playback')
+  section('shell-window.b', 6, 'video')
+  assert.throws(() => section('shell-window.c', 6, 'video'), orderClash)
+})
+
+test('the shipped contributions hold distinct orders in every namespace', () => {
+  // The throws above only matter if the tree passes them, and the menu namespace
+  // did NOT: nav-chapters.menu and nav-thumbnails.menu were both at 45.
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const repo = path.resolve(here, '..', '..', '..', '..')
+  const sources: string[] = []
+  const walk = (dir: string): void => {
+    if (!fs.existsSync(dir)) return
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name)
+      if (e.isDirectory()) walk(full)
+      else if (e.name === 'index.ts') sources.push(fs.readFileSync(full, 'utf8'))
+    }
+  }
+  walk(path.join(repo, 'src', 'main', 'features'))
+  walk(path.join(repo, 'src', 'renderer', 'src', 'features'))
+  const all = sources.join('\n')
+
+  const namespaces: Array<[string, RegExp]> = [
+    ['ctx.panel', /ctx\.panel\(\{\s*\n?\s*id:\s*'([^']+)'[\s\S]{0,400}?order:\s*(\d+)/g],
+    ['ctx.transportButton', /ctx\.transportButton\(\{\s*\n?\s*id:\s*'([^']+)'[\s\S]{0,400}?order:\s*(\d+)/g],
+    ['ctx.statsSection', /ctx\.statsSection\(\{\s*\n?\s*id:\s*'([^']+)'[\s\S]{0,400}?order:\s*(\d+)/g],
+    ['ctx.menu.contribute', /ctx\.menu\.contribute\(\{\s*\n?\s*id:\s*'([^']+)'[\s\S]{0,400}?order:\s*(\d+)/g],
+    ['ctx.seekbarLayer', /ctx\.seekbarLayer\(\{\s*\n?\s*id:\s*'([^']+)'[\s\S]{0,600}?order:\s*(\d+)/g]
+  ]
+  const problems: string[] = []
+  for (const [name, re] of namespaces) {
+    const byOrder = new Map<number, string[]>()
+    for (let m = re.exec(all); m !== null; m = re.exec(all)) {
+      const order = Number(m[2])
+      byOrder.set(order, [...(byOrder.get(order) ?? []), m[1] as string])
+    }
+    for (const [order, ids] of byOrder) {
+      // A single module contributing a parented submenu at the same order as its
+      // own parent is not a cross-module clash; distinct ids are what matter.
+      const unique = [...new Set(ids)]
+      if (unique.length > 1) problems.push(`${name} order ${order}: ${unique.join(', ')}`)
+    }
+    if (byOrder.size === 0) problems.push(`${name}: the scan found NO contributions at all`)
+  }
+  assert.deepEqual(problems, [], problems.join('\n  '))
 })

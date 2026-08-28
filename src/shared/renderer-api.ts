@@ -34,6 +34,13 @@ export interface SeekbarLayerCtx {
 }
 
 export interface SeekbarPointerEvent {
+  /**
+   * The handle of THIS layer under the pointer.
+   *
+   * Always a real handle on the pointer callbacks: they only fire for the layer
+   * whose `hitTest` claimed the press. `onHover` and `tooltip` fire at EVERY
+   * position, so they get `SeekbarUnclaimedEvent` instead — see why below.
+   */
   readonly handle: string
   readonly x: number
   readonly time: number
@@ -43,9 +50,62 @@ export interface SeekbarPointerEvent {
   preventDefault(): void
 }
 
-/** Hover carries a NULLABLE handle: the pointer may be over no handle at all,
- *  and an intersection type cannot widen `handle` back to null. */
-export type SeekbarHoverEvent = Omit<SeekbarPointerEvent, 'handle'> & { handle: string | null }
+/**
+ * "No handle" as a shape that CANNOT be mistaken for a handle.
+ *
+ * THE BUG THIS TYPE EXISTS FOR. The host used to hand every layer that did not
+ * claim the hit `handle = ''`, and M25's tooltip did
+ * `chapters[Number(e.handle)]`. `Number('') === 0`, so the chapter fragment
+ * rendered at every pointer position, always naming chapter 0. Measured over 24
+ * positions in the packaged build: 24/24 printed "Intro", and 22 of the 24
+ * contradicted M27's caption inside the same `#seekHover` box — at 5:00 and 9:20
+ * the tooltip said "Intro" and "End" simultaneously.
+ *
+ * So the absent case is a DISCRIMINATED UNION, and both halves of that matter:
+ *
+ *  - `claimed` makes the correct code obvious and reading `handle` as a string
+ *    a type error until you have checked it;
+ *  - the absent case carries `handle?: undefined` rather than `null` or `''`,
+ *    because `Number(undefined)` is `NaN` and `arr[NaN]` is `undefined`, while
+ *    `Number(null)` is `0` and `Number('')` is `0`. A careless consumer now gets
+ *    nothing instead of item zero. "No handle" is unrepresentable as a valid
+ *    index rather than merely discouraged.
+ */
+export type HandleClaim =
+  | { readonly claimed: true; readonly handle: string }
+  | { readonly claimed: false; readonly handle?: undefined }
+
+/** Hover and tooltip fire at every position, so their handle may be absent. */
+export type SeekbarUnclaimedEvent = Omit<SeekbarPointerEvent, 'handle'> & HandleClaim
+
+/** @deprecated The old name for `SeekbarUnclaimedEvent`; kept so an in-flight
+ *  module still compiles. It is the same type. */
+export type SeekbarHoverEvent = SeekbarUnclaimedEvent
+
+/**
+ * One contribution to the ONE shared tooltip.
+ *
+ * `role` is how two layers that legitimately want to print the same KIND of
+ * thing compose to one line instead of two. M25 prints the chapter title of the
+ * tick under the pointer; M27 prints the chapter containing the hovered time.
+ * Both are "the chapter", and before this existed M27 tried to derive whether
+ * M25 would print by re-deriving M25's hit-test band from the chapter list and
+ * the bar width. That premise was false in two directions — M25 printed
+ * everywhere (the bug above), and even when fixed M25 only prints if it WINS the
+ * hit-test, which a foreign layer cannot know — so the de-duplication belongs
+ * in the host, which is the only thing that knows who claimed the pointer.
+ *
+ * The rule, applied by `SeekbarHost.tooltips()`: among fragments sharing a role,
+ * the one from the layer that CLAIMED the pointer wins; failing that, the lowest
+ * `order` wins. Nothing else about a layer is visible to any other layer.
+ */
+export interface SeekbarTooltipFragment {
+  el: HTMLElement
+  /** Low to high inside the tooltip. Core's timecode is 0. */
+  order: number
+  /** Fragments sharing a role collapse to one. Omit if nothing can duplicate it. */
+  role?: string
+}
 
 export interface SeekbarLayer {
   id: string
@@ -58,14 +118,25 @@ export interface SeekbarLayer {
   onPointerMove?(e: SeekbarPointerEvent): void
   onPointerUp?(e: SeekbarPointerEvent & { cancelled: boolean }): void
   /** Hit-test independent, throttled to one frame. `null` on leave. */
-  onHover?(e: SeekbarHoverEvent | null): void
+  onHover?(e: SeekbarUnclaimedEvent | null): void
   /**
-   * A fragment for the ONE shared tooltip, merged with every other layer's by
-   * `order` (core's timecode is order 0). Returning a fragment is how the
-   * chapter title and the thumbnail compose with the time instead of stacking
-   * three floating boxes over each other.
+   * Fragments for the ONE shared tooltip, merged with every other layer's by
+   * `order` (core's timecode is order 0). Returning fragments is how the chapter
+   * title and the thumbnail compose with the time instead of stacking three
+   * floating boxes over each other.
+   *
+   * Return an ARRAY when the parts have different roles or want different
+   * positions in the merge: M27 returns its preview image and its chapter
+   * caption separately, so the host can drop the caption (role 'chapter') when
+   * M25 has the tick under the pointer without also dropping the image.
+   *
+   * The event is a `SeekbarUnclaimedEvent`: this runs at EVERY pointer position,
+   * not only where your `hitTest` claimed, so check `e.claimed` first. See the
+   * type for the 24/24-wrong-chapter bug that came of assuming otherwise.
    */
-  tooltip?(e: SeekbarPointerEvent): { el: HTMLElement; order: number } | null
+  tooltip?(
+    e: SeekbarUnclaimedEvent
+  ): SeekbarTooltipFragment | readonly SeekbarTooltipFragment[] | null
   /**
    * Every handle this layer currently offers, in the order Tab should reach
    * them. REQUIRED for an interactive layer (rule 4): a layer with `hitTest`

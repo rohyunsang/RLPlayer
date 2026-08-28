@@ -103,13 +103,38 @@ const mod: RendererFeatureModule = {
         const index = Number(e.handle)
         if (Number.isFinite(index)) ctx.ipc.send('nav-chapters:goto', { index })
       },
-      tooltip(e): { el: HTMLElement; order: number } | null {
-        const ch = chapters[Number(e.handle)]
+      /**
+       * The chapter title of the tick UNDER THE POINTER, and only then.
+       *
+       * `tooltip()` fires at every pointer position, not only where `hitTest`
+       * claimed, and the shipped version of this function was
+       * `chapters[Number(e.handle)]` against a host that passed `''` for "no
+       * handle". `Number('') === 0`, so this fragment rendered unconditionally,
+       * always naming chapter 0. Measured over 24 positions in the packaged
+       * build: 24/24 printed "Intro", and 22 of them contradicted M27's caption
+       * inside the same `#seekHover` box — at 5:00 and 9:20 the tooltip read
+       * "Intro" and "End" at once.
+       *
+       * Two things stop it coming back. The host's event is a discriminated
+       * union, so `e.claimed` is the first thing this reads; and the absent case
+       * carries `handle: undefined`, so even `Number(e.handle)` would be `NaN`
+       * and index nothing.
+       *
+       * `role: 'chapter'` is how this composes with M27's caption, which answers
+       * the same question for positions that are not on a tick. The host keeps
+       * one of the two — this one when the pointer is on a tick, because "the
+       * chapter you are pointing at" beats "the chapter this position is in".
+       */
+      tooltip(e): { el: HTMLElement; order: number; role: string } | null {
+        if (!e.claimed) return null
+        const index = Number(e.handle)
+        if (!Number.isInteger(index)) return null
+        const ch = chapters[index]
         if (!ch) return null
         const el = document.createElement('span')
         el.className = 'seek-tip-chapter'
         el.textContent = ch.title
-        return { el, order: 20 }
+        return { el, order: 20, role: 'chapter' }
       },
       onKey(e): void {
         const index = Number(e.handle)

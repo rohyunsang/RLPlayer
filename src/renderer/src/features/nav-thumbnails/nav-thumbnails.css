@@ -36,12 +36,18 @@
 }
 
 /*
- * N37's caption. M25 already contributes a chapter title when the pointer is
- * within `tolerancePx` of one of its ticks, so this one is suppressed inside
- * that band rather than printing the same title twice (see preview-state.ts).
+ * N37's caption. It is a SIBLING fragment of the preview rather than a child of
+ * it (see index.ts), so it carries its own wrapping rules: core's `.seek-hover`
+ * box is `white-space: nowrap` for its timecode.
+ *
+ * De-duplication against M25's chapter title is the HOST's, keyed off the
+ * fragment's `role`. This module used to derive a suppression band from M25's
+ * hit-test tolerance and was wrong at 22 of 24 measured positions.
  */
 .rl-thumb-chapter {
   display: block;
+  white-space: normal;
+  max-width: 480px;
   font-size: 11px;
   opacity: 0.85;
   text-align: center;
