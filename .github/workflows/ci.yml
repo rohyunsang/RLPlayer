@@ -99,6 +99,37 @@ jobs:
         if: '!cancelled()'
         run: npm run check:partition
 
+      # No control characters and no source file git treats as binary. A raw NUL
+      # in `audio-eq/index.ts` made `git diff` print "Bin 0 -> 11349 bytes" and
+      # `git grep` answer "binary file matches", so 326 lines of a shipped module
+      # landed with no reviewable diff at all -- and typecheck plus 395 tests were
+      # perfectly happy. `--self-test` rebuilds the exact byte that shipped and
+      # asserts the scanner FAILS on it.
+      - name: 'check:control-chars'
+        if: '!cancelled()'
+        run: npm run check:control-chars
+
+      # `mustNotTouch` was enforced NOWHERE: appending three lines to
+      # `src/renderer/src/main.ts` -- named in 40 of the 55 rows' lists -- gave
+      # both check:partition and check:forbidden exit 0, because both ask who OWNS
+      # a file and neither asks who CHANGED it. This asks. `--self-test` runs the
+      # rules against ten change-set fixtures, including that exact edit.
+      - name: 'check:ownership (self-test)'
+        if: '!cancelled()'
+        run: npm run check:ownership
+
+      # And against the REAL change set of this push or PR.
+      #
+      # Rule A (a feature module's change set may contain only its own files)
+      # needs nothing declared and runs everywhere. Rule B (every changed file
+      # belongs to one declared row) engages when the branch is named
+      # `feat/M03-…` / `module/video-enhance` / `core/renderer`, or when a commit
+      # carries a `Module:` trailer -- so a module branch is not on the honour
+      # system either, while a legitimate core commit is not failed for existing.
+      - name: 'check:ownership (this change set)'
+        if: '!cancelled()'
+        run: node scripts/check-ownership.mjs --base ${{ github.event.pull_request.base.sha || github.event.before }}
+
       # It has to actually build. `npm test` never touches the bundler, and a
       # renderer that does not compile is not caught by anything above.
       - name: Build
