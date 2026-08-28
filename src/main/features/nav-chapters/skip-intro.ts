@@ -14,6 +14,8 @@ import {
   learnEnding,
   learnIntro,
   observationFile,
+  planAutoSkip,
+  planManualSkip,
   recordObservation,
   resolveWindows,
   setPoint,
@@ -22,6 +24,8 @@ import {
   type ResolvedWindows,
   type SkipFolder,
   type SkipKind,
+  type SkipPlan,
+  type SkipRefusal,
   type SkipWindow
 } from './skip-model.ts'
 import { SkipStore } from './skip-store.ts'
@@ -60,6 +64,20 @@ import type { FeatureContext, Unsubscribe } from '@shared/feature-api'
 
 const EOF_MARGIN_SEC = 0.35
 const PROMPT_ARM_MS = 5000
+
+/**
+ * How long a seek THIS MODULE issued stays recognisable, and how close to its
+ * target it has to land.
+ *
+ * Without this the feature learns from itself. `onTime` treats any forward jump
+ * of 20 s or more as evidence the user wanted to skip, and an auto-skip IS a
+ * forward jump of 20 s or more — so every episode of a folder with a stored
+ * window wrote a fresh observation agreeing with the window that caused it, and
+ * `skip.json` filled with a self-reinforcing record of the feature's own
+ * behaviour. Asserted in skip-module.test.ts ('an auto-skip is not evidence').
+ */
+const SELF_SEEK_GRACE_MS = 4000
+const SELF_SEEK_TOLERANCE_SEC = 2
 
 /**
  * The panel/seek-bar payload.
@@ -106,6 +124,10 @@ export function installSkip(ctx: FeatureContext): SkipInstallation {
   const settled = new Set<SkipKind>()
   let lastSkip: { kind: SkipKind; from: number } | null = null
   let promptArmedUntil = 0
+  let promptKind: SkipKind | null = null
+  let promptTimer: ReturnType<typeof setTimeout> | null = null
+  /** A seek this module issued, so `onTime` does not read it as user evidence. */
+  let selfSeek: { target: number; until: number } | null = null
   const proposedThisSession = new Set<string>()
   let detecting = false
   let panelOpen = false
@@ -124,6 +146,8 @@ export function installSkip(ctx: FeatureContext): SkipInstallation {
     ctx.settings.get<boolean>('nav-chapters.skipFingerprint') === true
   const introSeconds = (): number =>
     Math.max(1, ctx.settings.get<number>('nav-chapters.skipIntroSeconds') || 90)
+  const endingSeconds = (): number =>
+    Math.max(5, ctx.settings.get<number>('nav-chapters.skipEndingSeconds') || 150)
 
   const duration = (): number => ctx.mpv.peek<number>('duration') ?? 0
   const timePos = (): number => ctx.mpv.peek<number>('time-pos') ?? 0
@@ -146,8 +170,22 @@ export function installSkip(ctx: FeatureContext): SkipInstallation {
     push()
   }
 
+  /**
+   * Record one hand-made skip as evidence for tier 2.
+   *
+   * Gated on `skipLearn`, not on `skipEnabled`. Those are different questions:
+   * `skipEnabled` is "may playback move on its own", and requiring it here would
+   * make tier 2 unreachable, because the natural order is skip two episodes by
+   * hand, accept the offer, THEN switch skipping on. `skipLearn` is the setting
+   * that says "you may write down what I skipped", it is user-visible, and with
+   * it off this module writes nothing to disk that the user did not set by hand.
+   */
   function writeObservation(kind: SkipKind, from: number, to: number): void {
     if (key === null || file === null) return
+    // The gate lives HERE, not at the two call sites, so a third call site cannot
+    // be added without it. `onTime` and the manual-fallback keypress both write
+    // observations, and gating only the first was the shape of the original bug.
+    if (!learnOn()) return
     const rec: SkipFolder = { ...(record() ?? {}) }
     const obs = {
       file: observationFile(file),
@@ -193,55 +231,109 @@ export function installSkip(ctx: FeatureContext): SkipInstallation {
   /**
    * Perform one skip, with the OSD and the undo the row demands.
    *
-   * `osd.show` names what was skipped and coalesces (it is gone in a second);
-   * the toast carries the undo and lives long enough to press. Both, because the
-   * row asks for both and because they answer different questions: "what just
-   * happened to my playback" and "how do I get it back".
+   * THE TARGET IS `skip-model.ts`'S DECISION, not this function's, and that is a
+   * repair rather than a tidy-up. The draft computed the target inline here --
+   * "if there is a window use it, otherwise jump to the end of the file" --
+   * while `planManualSkip()` sat fully written and fully commented next to the
+   * refusals it was written to enforce, called by nothing. The two disagreed,
+   * and the inline version was the dangerous one:
+   *
+   *   pressing "skip ending" at 00:30 of a 20-minute episode with no stored
+   *   window seeked to `duration - 0.35` and ENDED THE EPISODE. `planManualSkip`
+   *   refuses exactly that case and says where the window starts; its own
+   *   docstring names it as case two of three. Nothing called it, so the
+   *   docstring was the only place the rule existed.
+   *
+   * That is the shape of defect the audit rounds keep finding: not a missing
+   * check, a check that is present, tested, articulate and unreachable.
+   * `skip-model.test.ts` covers the plan; `skip-module.test.ts` asserts that this
+   * function's seek target IS the plan's, so the two cannot drift apart again.
    */
   async function performSkip(kind: SkipKind, reason: 'auto' | 'manual' | 'prompt'): Promise<void> {
     const from = timePos()
-    const win = kind === 'intro' ? windows.intro : windows.ending
     const dur = duration()
-    let target: number
-    if (win) {
-      target = kind === 'intro' ? win.end : Math.max(0, dur - EOF_MARGIN_SEC)
-    } else if (kind === 'intro') {
-      // PotPlayer's `Skip Intro %s`: no learned window, so jump the configured
-      // amount. Reachable ONLY from an explicit keypress — see the header.
-      target = from + introSeconds()
-    } else {
-      if (!(dur > 0)) return
-      target = Math.max(0, dur - EOF_MARGIN_SEC)
+    const plan: SkipPlan | SkipRefusal =
+      reason === 'manual'
+        ? planManualSkip(
+            kind,
+            from,
+            dur,
+            windows,
+            { introSeconds: introSeconds(), endingSeconds: endingSeconds() },
+            EOF_MARGIN_SEC
+          )
+        : planAutoSkip(kind, dur, windows, EOF_MARGIN_SEC)
+    if (!plan.ok) {
+      explainRefusal(kind, plan, reason)
+      return
     }
-    if (!(await seekTo(target))) return
+    // Claim the jump BEFORE issuing it: `time-pos` can arrive before the awaited
+    // invoke resolves, and a claim registered afterwards is a claim that missed.
+    selfSeek = { target: plan.target, until: Date.now() + SELF_SEEK_GRACE_MS }
+    if (!(await seekTo(plan.target))) {
+      selfSeek = null
+      return
+    }
     settled.add(kind)
     lastSkip = { kind, from }
-    ctx.osd.show({
-      kind: 'seek',
-      text: ctx.i18n.t('nav-chapters.skipped', {
-        what: label(kind),
-        at: formatClock(target)
-      })
+    // An explicit keypress with NO stored window is the one skip this module
+    // makes that is also evidence: the user just told us, on this file, where
+    // they wanted to be. A window-derived skip is the feature repeating itself.
+    if (reason === 'manual' && plan.via === 'fallback') writeObservation(kind, from, plan.target)
+    const text = ctx.i18n.t('nav-chapters.skipped', {
+      what: label(kind),
+      at: formatClock(plan.target)
     })
+    ctx.osd.show({ kind: 'seek', text })
     ctx.osd.toast({
       kind: 'info',
-      message: ctx.i18n.t('nav-chapters.skipped', {
-        what: label(kind),
-        at: formatClock(target)
-      }),
+      message: text,
       actionLabel: ctx.i18n.t('nav-chapters.undo'),
       onAction: () => void undoSkip()
     })
-    ctx.log.info(`skip ${kind} (${reason}): ${from.toFixed(1)} -> ${target.toFixed(1)}`)
+    ctx.log.info(
+      `skip ${kind} (${reason}, ${plan.via}): ${from.toFixed(1)} -> ${plan.target.toFixed(1)}`
+    )
     push()
+  }
+
+  /**
+   * Say why nothing moved.
+   *
+   * A refusal the user cannot see is indistinguishable from a broken keybind, and
+   * "the skip key does nothing sometimes" is the bug report this avoids. An
+   * automatic refusal is silent by design: there is no user action to explain,
+   * and `planAutoSkip` refusing is the NORMAL state of every file in every folder
+   * that has no stored window.
+   */
+  function explainRefusal(
+    kind: SkipKind,
+    refusal: SkipRefusal,
+    reason: 'auto' | 'manual' | 'prompt'
+  ): void {
+    if (reason !== 'manual') {
+      ctx.log.info(`skip ${kind} declined: ${refusal.reason}`)
+      return
+    }
+    if (refusal.reason === 'no-duration') {
+      ctx.osd.show({ kind: 'info', text: ctx.i18n.t('nav-chapters.skipNoDuration') })
+      return
+    }
+    ctx.osd.show({
+      kind: 'info',
+      text: ctx.i18n.t('nav-chapters.skipNotYet', {
+        what: label(kind),
+        at: formatClock(refusal.at ?? 0)
+      })
+    })
   }
 
   /**
    * Undo.
    *
-   * §2.5 spells the undo `{"command":["revert-seek"]}`. `revert-seek` is M24's
-   * command (§2.1) and M24 exposes NO mediator for it — `nav-seek.seek` is the
-   * only one — so issuing it from here would be refused by the owner map, and
+   * 2.5 spells the undo `{"command":["revert-seek"]}`. `revert-seek` is M24's
+   * command (2.1) and M24 exposes NO mediator for it -- `nav-seek.seek` is the
+   * only one -- so issuing it from here would be refused by the owner map, and
    * adding the mediator is a one-line PR against a module this row may not
    * touch. Reported as a finding.
    *
@@ -254,14 +346,37 @@ export function installSkip(ctx: FeatureContext): SkipInstallation {
     const last = lastSkip
     if (!last) return
     lastSkip = null
-    if (!(await seekTo(last.from))) return
+    selfSeek = { target: last.from, until: Date.now() + SELF_SEEK_GRACE_MS }
+    if (!(await seekTo(last.from))) {
+      selfSeek = null
+      return
+    }
     // The window is still under the playhead, so without this the next `time-pos`
-    // callback would re-enter it and skip again — an undo that undoes itself.
+    // callback would re-enter it and skip again -- an undo that undoes itself.
     settled.add(last.kind)
     ctx.osd.show({
       kind: 'seek',
       text: ctx.i18n.t('nav-chapters.undone', { what: label(last.kind) })
     })
+    push()
+  }
+
+  /**
+   * True when `next` is where a seek this module issued was aiming.
+   *
+   * Consuming the claim is the point: a SECOND jump to the same place, four
+   * seconds later, is the user and must count as evidence.
+   */
+  function consumeSelfSeek(next: number): boolean {
+    const claim = selfSeek
+    if (claim === null) return false
+    if (Date.now() > claim.until) {
+      selfSeek = null
+      return false
+    }
+    if (Math.abs(next - claim.target) > SELF_SEEK_TOLERANCE_SEC) return false
+    selfSeek = null
+    return true
   }
 
   // -------------------------------------------------------------------------
@@ -277,12 +392,14 @@ export function installSkip(ctx: FeatureContext): SkipInstallation {
     if (prev !== null) {
       const jump = jumpKind(prev, next, DEFAULT_TUNING)
       if (jump === 'forward') {
-        // A hand-made forward jump is the evidence tier 2 learns from. It is
-        // recorded whatever the setting says; only the PROPOSAL is gated, so
-        // switching learning on later still has something to work with.
-        const kind = classifyJump(prev, next, duration(), DEFAULT_TUNING)
+        // A hand-made forward jump is the evidence tier 2 learns from -- but only
+        // a HAND-made one. `consumeSelfSeek` is what stops this module's own
+        // skips from being fed back in as agreement with themselves.
+        const mine = consumeSelfSeek(next)
+        const kind = mine ? null : classifyJump(prev, next, duration(), DEFAULT_TUNING)
         if (kind) writeObservation(kind, prev, next)
       } else if (jump === 'backward') {
+        consumeSelfSeek(next)
         // The user deliberately went back. If they landed inside a window they
         // want to watch it, so this file's offer is spent.
         const inside = windowAt(next, windows)
@@ -303,28 +420,65 @@ export function installSkip(ctx: FeatureContext): SkipInstallation {
   /**
    * The 5 s "Skip Intro" affordance.
    *
-   * §2.5 asks for a five-second button. The only transient surface a module can
-   * reach is `ctx.osd.toast()`, whose lifetime is core's (6 s for `info`) and
-   * which a module cannot retract — so the BUTTON cannot be withdrawn when the
-   * playhead leaves the window. What is enforced here instead is the offer's
-   * validity: pressing it after `PROMPT_ARM_MS`, or once playback has left the
-   * window, does nothing rather than yanking playback from wherever the user has
-   * got to. Reported as a finding.
+   * 2.5 asks for a five-second BUTTON, and the draft could not give it one: the
+   * only transient surface it used was `ctx.osd.toast()`, whose lifetime is
+   * core's and which a module cannot retract, so the button outlived the window
+   * it belonged to.
+   *
+   * It is a real button now, and the surface is `ctx.transportButton()` -- the
+   * renderer half mounts a button it owns outright, so this half decides when it
+   * appears and when it goes away, which is the whole requirement. What the
+   * contribution points still cannot express is a floating button over the video
+   * (a `panel()` is a fixed dock -- 320 px on a side, 220 px on the bottom -- and
+   * its geometry is core's CSS), so with the chrome auto-hidden the button is not
+   * on screen, which is why the OSD line goes out alongside it. Reported as a
+   * finding.
+   *
+   * Two independent guards on acceptance, because the button's own withdrawal is
+   * a renderer-side timer and this half must not trust it: the arm deadline, and
+   * "is the playhead still inside the window it was armed for". Pressing a stale
+   * button does nothing rather than yanking playback out of a scene.
    */
   function offerSkip(kind: SkipKind): void {
     settled.add(kind)
     promptArmedUntil = Date.now() + PROMPT_ARM_MS
-    const armedFor = kind
-    ctx.osd.toast({
-      kind: 'info',
-      message: ctx.i18n.t('nav-chapters.offer', { what: label(kind) }),
-      actionLabel: ctx.i18n.t('nav-chapters.skipNow'),
-      onAction: () => {
-        if (Date.now() > promptArmedUntil) return
-        if (windowAt(timePos(), windows) !== armedFor) return
-        void performSkip(armedFor, 'prompt')
-      }
+    promptKind = kind
+    ctx.ipc.send('nav-chapters:skipPrompt', {
+      kind,
+      ms: PROMPT_ARM_MS,
+      label: ctx.i18n.t(kind === 'intro' ? 'nav-chapters.skipIntro' : 'nav-chapters.skipEnding')
     })
+    ctx.osd.show({
+      kind: 'info',
+      text: ctx.i18n.t('nav-chapters.offer', { what: label(kind) }),
+      durationMs: PROMPT_ARM_MS
+    })
+    if (promptTimer) clearTimeout(promptTimer)
+    promptTimer = setTimeout(() => {
+      promptTimer = null
+      withdrawPrompt()
+    }, PROMPT_ARM_MS)
+    promptTimer.unref?.()
+  }
+
+  function withdrawPrompt(): void {
+    if (promptTimer) {
+      clearTimeout(promptTimer)
+      promptTimer = null
+    }
+    if (promptKind === null) return
+    promptKind = null
+    promptArmedUntil = 0
+    ctx.ipc.send('nav-chapters:skipPrompt', { kind: null })
+  }
+
+  function acceptPrompt(): void {
+    const kind = promptKind
+    if (kind === null) return
+    const stale = Date.now() > promptArmedUntil || windowAt(timePos(), windows) !== kind
+    withdrawPrompt()
+    if (stale) return
+    void performSkip(kind, 'prompt')
   }
 
   // -------------------------------------------------------------------------
@@ -395,13 +549,28 @@ export function installSkip(ctx: FeatureContext): SkipInstallation {
     const dir = path.dirname(current)
     const self = path.basename(current).toLowerCase()
     const want = prefix.trim().toLowerCase()
-    const candidates = names
-      .filter((n) => n.toLowerCase() !== self)
+    const group = names
       .filter((n) => MEDIA.has(path.extname(n).slice(1).toLowerCase()))
       .filter((n) => want === '' || n.toLowerCase().startsWith(want))
-      .sort((a, b) => a.localeCompare(b, 'ko'))
-    const first = candidates[0]
-    return first === undefined ? null : path.join(dir, first)
+      // `numeric: true`, so episode 2 sorts before episode 10 rather than after
+      // it. This is NOT M28's `naturalCompare` -- that function lives in
+      // src/main/services/playlist.ts, which is M28's file, and M28 mediates only
+      // `seriesPrefix`. Importing it would couple this module to another
+      // module's internals; re-implementing StrCmpLogicalW here would duplicate
+      // the one computation the project has a 27,225-pair differential test for.
+      // So this is a LOCAL ordering used for exactly one thing -- picking which
+      // single sibling to compare audio against -- and it never reaches the UI.
+      .sort((a, b) => a.localeCompare(b, 'ko', { numeric: true }))
+    const mine = group.findIndex((n) => n.toLowerCase() === self)
+    if (mine < 0) {
+      const first = group[0]
+      return first === undefined ? null : path.join(dir, first)
+    }
+    // The ADJACENT episode, not the first one in the folder. Two consecutive
+    // episodes are far likelier to carry the same OP cut than episode 1 and
+    // episode 24 of a series that changed its opening halfway through.
+    const neighbour = group[mine + 1] ?? group[mine - 1]
+    return neighbour === undefined ? null : path.join(dir, neighbour)
   }
 
   async function runDetect(): Promise<void> {
@@ -574,6 +743,24 @@ export function installSkip(ctx: FeatureContext): SkipInstallation {
       order: 62
     },
     {
+      id: 'nav-chapters.skipEndingSeconds',
+      section: 'playback',
+      group: 'skip',
+      labelKey: 'nav-chapters.skipEndingSeconds',
+      descriptionKey: 'nav-chapters.skipEndingSecondsDesc',
+      /**
+       * How close to the end the skip-ending KEY works with no stored window.
+       *
+       * This exists because `planManualSkip` needs it and the draft had no
+       * setting for it -- which is how the inline version came to end the episode
+       * from anywhere in the file. It is deliberately not an auto-skip input:
+       * nothing derived from this number ever moves playback on its own.
+       */
+      type: { kind: 'int', min: 10, max: 900, step: 10 },
+      default: 150,
+      order: 63
+    },
+    {
       id: 'nav-chapters.skipEndingAnchor',
       section: 'playback',
       group: 'skip',
@@ -588,7 +775,7 @@ export function installSkip(ctx: FeatureContext): SkipInstallation {
       },
       default: 'end',
       advanced: true,
-      order: 63
+      order: 64
     },
     {
       id: 'nav-chapters.skipLearn',
@@ -598,7 +785,7 @@ export function installSkip(ctx: FeatureContext): SkipInstallation {
       descriptionKey: 'nav-chapters.skipLearnDesc',
       type: { kind: 'bool' },
       default: true,
-      order: 64
+      order: 65
     },
     {
       id: 'nav-chapters.skipFingerprint',
@@ -610,7 +797,7 @@ export function installSkip(ctx: FeatureContext): SkipInstallation {
       // OPT-IN (§2.5 tier 3, D-11). Even switched on it only ever proposes.
       default: false,
       advanced: true,
-      order: 65
+      order: 66
     }
   ])
 
@@ -751,6 +938,15 @@ export function installSkip(ctx: FeatureContext): SkipInstallation {
       case 'detect':
         void runDetect()
         break
+      case 'promptAccept':
+        acceptPrompt()
+        break
+      case 'promptDismiss':
+        withdrawPrompt()
+        break
+      case 'undo':
+        void undoSkip()
+        break
       case 'close':
         panelOpen = false
         push()
@@ -805,8 +1001,21 @@ export function installSkip(ctx: FeatureContext): SkipInstallation {
     prevTime = null
     settled.clear()
     lastSkip = null
-    prefix = await seriesPrefixOf(loaded)
-    key = folderKey(loaded, prefix)
+    selfSeek = null
+    withdrawPrompt()
+    /**
+     * A network source has no folder, and this is the guard that keeps
+     * `skip.json` from becoming a URL history.
+     *
+     * `folderKey('https://host/a/b.mp4', '')` is a perfectly well-formed key --
+     * `path.dirname` happily answers `https://host/a` -- so without this every
+     * stream the user opened would get a row in a file whose stated purpose is
+     * "two numbers per series folder". A null key makes the whole feature inert
+     * for the file: no window resolves, nothing is stored, nothing skips.
+     */
+    const local = ctx.mpv.isNetworkSource ? null : await seriesPrefixOf(loaded)
+    prefix = local ?? ''
+    key = local === null ? null : folderKey(loaded, local)
     recompute()
     push()
   }
@@ -916,7 +1125,20 @@ export function installSkip(ctx: FeatureContext): SkipInstallation {
     'nav-chapters.skipPanelClose': '닫기',
     'nav-chapters.skipPanelSource.manual': '직접 설정',
     'nav-chapters.skipPanelSource.learned': '학습됨',
-    'nav-chapters.skipPanelSource.fingerprint': '오디오 분석'
+    'nav-chapters.skipPanelSource.fingerprint': '오디오 분석',
+    'nav-chapters.skipNoDuration': '길이를 알 수 없는 스트림에서는 엔딩을 건너뛸 수 없습니다',
+    'nav-chapters.skipNotYet': '아직 건너뛸 구간이 아닙니다 — {what}{은/는} {at}부터입니다',
+    'nav-chapters.skipEndingSeconds': '엔딩 건너뛰기 허용 범위(초)',
+    'nav-chapters.skipEndingSecondsDesc':
+      '저장된 구간이 없을 때, 파일 끝에서 이 시간 안에 있을 때만 엔딩 건너뛰기 키가 동작합니다. 자동 건너뛰기에는 쓰이지 않습니다.',
+    'nav-chapters.skipPanelMode': '방식',
+    'nav-chapters.skipPanelSet': '여기로 설정',
+    'nav-chapters.skipPanelClear': '지우기',
+    'nav-chapters.skipPanelUnset': '설정 안 됨',
+    'nav-chapters.skipPanelOff': '꺼짐',
+    'nav-chapters.skipPanelOn': '켜짐',
+    'nav-chapters.skipPanelNoFile': '재생 중인 파일이 없습니다',
+    'nav-chapters.skipPanelHint': '여기서 정한 구간은 같은 폴더의 같은 시리즈 파일 전체에 적용됩니다.'
   })
   ctx.i18n.register('en', {
     'nav-chapters.skip': 'Skip',
@@ -982,13 +1204,31 @@ export function installSkip(ctx: FeatureContext): SkipInstallation {
     'nav-chapters.skipPanelClose': 'Close',
     'nav-chapters.skipPanelSource.manual': 'Set by hand',
     'nav-chapters.skipPanelSource.learned': 'Learned',
-    'nav-chapters.skipPanelSource.fingerprint': 'From audio'
+    'nav-chapters.skipPanelSource.fingerprint': 'From audio',
+    'nav-chapters.skipNoDuration': 'A stream with no duration has no ending to skip',
+    'nav-chapters.skipNotYet': 'Nothing to skip yet — {what} starts at {at}',
+    'nav-chapters.skipEndingSeconds': 'Skip-ending reach (seconds)',
+    'nav-chapters.skipEndingSecondsDesc':
+      'With no stored window, the skip-ending key only works within this many seconds of the end of the file. Never used for automatic skips.',
+    'nav-chapters.skipPanelMode': 'Mode',
+    'nav-chapters.skipPanelSet': 'Set here',
+    'nav-chapters.skipPanelClear': 'Clear',
+    'nav-chapters.skipPanelUnset': 'not set',
+    'nav-chapters.skipPanelOff': 'off',
+    'nav-chapters.skipPanelOn': 'on',
+    'nav-chapters.skipPanelNoFile': 'Nothing is playing',
+    'nav-chapters.skipPanelHint':
+      'A window set here applies to every file of the same series in this folder.'
   })
 
   return {
     dispose(): void {
       for (const off of offs) off()
       offs.length = 0
+      if (promptTimer) {
+        clearTimeout(promptTimer)
+        promptTimer = null
+      }
       store.dispose()
     }
   }

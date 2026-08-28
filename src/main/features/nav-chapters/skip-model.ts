@@ -373,14 +373,24 @@ export function planManualSkip(
   fallback: SkipFallback,
   eofMargin: number
 ): SkipPlan | SkipRefusal {
+  const eofOf = (d: number): number => Math.max(0, d - eofMargin)
   if (kind === 'intro') {
     const intro = w.intro
     if (intro && from < intro.end) return { ok: true, kind, target: intro.end, via: 'window' }
-    const target = duration > 0 ? Math.min(from + fallback.introSeconds, duration) : from + fallback.introSeconds
+    // Clamped to the EOF margin, not to `duration`.
+    //
+    // The draft clamped to `duration`, and a seek to exactly `duration` ends the
+    // file — so pressing "skip intro" thirty seconds from the end of a film
+    // closed it. That is the same defect as the ending case two paragraphs down,
+    // in the branch nobody looks at because it is the fallback.
+    const target =
+      duration > 0
+        ? Math.min(from + fallback.introSeconds, eofOf(duration))
+        : from + fallback.introSeconds
     return { ok: true, kind, target, via: 'fallback' }
   }
   if (!(duration > 0)) return { ok: false, reason: 'no-duration' }
-  const eof = Math.max(0, duration - eofMargin)
+  const eof = eofOf(duration)
   const ending = w.ending
   if (ending) {
     if (from >= ending.start) return { ok: true, kind, target: eof, via: 'window' }
@@ -526,7 +536,17 @@ export function learnIntro(
   const c = cluster(list, (o) => o.to, tuning.learnToleranceSec, tuning.learnMinFiles)
   if (!c) return null
   const introEnd = median(c.members.map((m) => m.to))
-  const introStart = median(c.members.map((m) => m.from))
+  // The EARLIEST press, not the median of the presses.
+  //
+  // The draft took the median of `from` too, and that is a defect you only see
+  // once you follow it into `enteredWindow`: pressing skip at 0:05 on one
+  // episode and 0:40 on another gives a median start of 0:22, so on episode 3
+  // the window does not arm until 0:22 and the offer arrives seventeen seconds
+  // after the point where the user twice showed they wanted it. The window's
+  // START is "how early may this be offered", which is a minimum, while its END
+  // is "where does the content resume", which is a consensus. Asserted in
+  // skip-model.test.ts ('the intro window arms at the earliest press').
+  const introStart = Math.min(...c.members.map((m) => m.from))
   if (!(introEnd > introStart)) return null
   return { kind: 'intro', introStart, introEnd, files: c.files }
 }

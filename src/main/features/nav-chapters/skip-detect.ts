@@ -60,6 +60,24 @@ export interface DecodedRegion {
 }
 
 /**
+ * Options `ctx.engine.spawn()` applies to every secondary itself (§5.3).
+ *
+ * Re-stating one is not an error mpv reports -- it is a silent last-one-wins, and
+ * the one that wins is not the one you can see here. M27 keeps the same list for
+ * the same reason; it is duplicated rather than imported because that file is
+ * M27's, and a two-line array is a smaller cost than a cross-module import.
+ */
+export const ENGINE_APPLIED_OPTIONS: readonly string[] = [
+  '--no-config',
+  '--idle',
+  '--terminal',
+  '--msg-level',
+  '--load-scripts',
+  '--ytdl',
+  '--input-ipc-server'
+]
+
+/**
  * The spawn line for one decoded region.
  *
  * Exported as a value because it is the part that needs verifying against the
@@ -80,7 +98,6 @@ export function decodeArgs(input: {
   return [
     // Load paused so `duration` can be read before the decode runs away.
     '--pause=yes',
-    '--keep-open=no',
     '--no-video',
     '--no-sub',
     '--load-stats-overlay=no',
@@ -96,6 +113,9 @@ export function decodeArgs(input: {
     `--ao-pcm-file=${input.outputFile}`,
     input.region === 'intro' ? '--start=0' : `--start=-${input.seconds}`,
     `--length=${input.seconds}`,
+    // `--` before the filename, or a rip whose name begins with a dash is parsed
+    // as an option. M27's poster path already learned this one.
+    '--',
     input.file
   ]
 }
@@ -164,8 +184,12 @@ export async function decodeRegion(
     const deadline = now() + timeout
     let lastSize = -1
     let stable = 0
+    let cancelled = false
     for (;;) {
-      if (deps.cancelled?.() === true) break
+      if (deps.cancelled?.() === true) {
+        cancelled = true
+        break
+      }
       let size = -1
       try {
         size = fs.statSync(out).size
@@ -186,6 +210,14 @@ export async function decodeRegion(
       await sleep(poll)
     }
     offEnd()
+    // A cancelled decode returns nothing.
+    //
+    // The draft broke out of the wait loop on cancel and then went on to parse
+    // whatever was on disk and return it, so pressing Cancel produced a
+    // fingerprint from a partial decode of one file and a full decode of the
+    // other -- which is worse than either finishing or stopping, because the
+    // proposal that came out looked exactly like a real one.
+    if (cancelled) return null
 
     let bytes: Uint8Array
     try {

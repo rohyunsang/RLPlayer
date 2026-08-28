@@ -1,4 +1,5 @@
 import type { Chapter } from '@shared/types'
+import { installSkip, type SkipInstallation } from './skip-intro.ts'
 import type { FeatureContext, FeatureModule, MenuNode } from '@shared/feature-api'
 
 /**
@@ -13,6 +14,7 @@ import type { FeatureContext, FeatureModule, MenuNode } from '@shared/feature-ap
  */
 
 let ctx: FeatureContext
+let skip: SkipInstallation | null = null
 
 const chapters = (): Chapter[] => ctx.mpv.peek<Chapter[]>('chapter-list') ?? []
 
@@ -42,6 +44,23 @@ const mod: FeatureModule = {
 
   setup(c): void {
     ctx = c
+
+    /**
+     * N51, the half of this row that the chapter code above cannot do.
+     *
+     * N08 (auto-skip chapters by TITLE) and N51 (skip intro/ending by TIME) are
+     * two mechanisms for one user intent, and 2.5 is explicit that they ship
+     * together because N08 "does nothing at all on the markerless Korean drama
+     * and anime rips the feature exists for -- those files have `chapters: 0`".
+     * Everything above this line reads `chapter-list`; everything installSkip
+     * touches reads `time-pos` and a JSON file, and needs no chapters at all.
+     *
+     * It is installed here rather than being its own module because 2.5 gives
+     * N51 to M25, and a module's id must equal its directory name -- a second
+     * directory would be a second row in modules.json, which is not this
+     * module's file to edit.
+     */
+    skip = installSkip(ctx)
 
     // The renderer half's chapter-tick layer sends here. It never writes an
     // mpv property itself; `chapter` is this module's (§3.7).
@@ -123,6 +142,11 @@ const mod: FeatureModule = {
       'nav-chapters.menuTitle': 'Chapters',
       'nav-chapters.none': '(no chapters)'
     })
+  },
+
+  dispose(): void {
+    skip?.dispose()
+    skip = null
   }
 }
 
