@@ -17,7 +17,12 @@ import {
   showWindows
 } from './core/window/windows'
 import { initWindowService, setPlaying } from './core/window/index.ts'
-import { broadcastKeybinds, openSettingsWindow, registerCoreIpc } from './ipc'
+import {
+  broadcastKeybinds,
+  getSettingsWindow,
+  openSettingsWindow,
+  registerCoreIpc
+} from './ipc'
 import { flushConfig, loadConfig, onConfigProblem, settingsBacking } from './services/config'
 import { createStore } from './core/settings/store.ts'
 import { registerCoreMessages, resolveLanguage, setLanguage, t } from './core/i18n/index.ts'
@@ -102,10 +107,22 @@ if (!gotLock) {
   })
 }
 
+/**
+ * Where `ctx.ipc.send(channel, payload, target)` actually goes.
+ *
+ * The `'settings'` arm used to be missing, so every push a module aimed at the
+ * settings window was silently dropped — `getSettingsWindow()` existed and
+ * nothing called it. The only way for a module to reach that window was to edit
+ * this file or `ipc.ts`, which is precisely what `ctx.ipc` exists to prevent.
+ * The settings window is created on demand, so `null` here is a normal state
+ * and not an error: a push with the window closed is a no-op.
+ */
 function windowsFor(target: 'ui' | 'settings' | 'all'): BrowserWindow[] {
   const out: BrowserWindow[] = []
   const ui = getUiWindow()
   if (ui && (target === 'ui' || target === 'all')) out.push(ui)
+  const settings = getSettingsWindow()
+  if (settings && (target === 'settings' || target === 'all')) out.push(settings)
   return out
 }
 
@@ -237,7 +254,7 @@ async function main(): Promise<void> {
     return
   }
 
-  registerCoreIpc({ legacy, menu, osd, pushState })
+  registerCoreIpc({ legacy, menu, osd, settings, pushState })
 
   showWindows(cfg.window.maximized)
   registry.fireReady()

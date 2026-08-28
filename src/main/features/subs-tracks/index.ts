@@ -1,5 +1,6 @@
 import path from 'node:path'
 import { SUB_EXTENSIONS } from '@shared/media-types'
+import { loadConfig, saveConfig } from '../../services/config.ts'
 import type { Track } from '@shared/types'
 import type { FeatureContext, FeatureModule, MenuNode } from '@shared/feature-api'
 
@@ -52,10 +53,34 @@ const mod: FeatureModule = {
   setup(c): void {
     ctx = c
 
+    // S01. Hardcoded as `#autoLoadSubs` in the shared settings.html before
+    // this — the M38 <-> M17 collision.
+    ctx.settings.define([
+      {
+        id: 'subs-tracks.autoLoad',
+        section: 'subtitles',
+        labelKey: 'subs-tracks.autoLoadLabel',
+        descriptionKey: 'subs-tracks.autoLoadDesc',
+        type: { kind: 'bool' },
+        default: true,
+        mpvOption: 'sub-auto',
+        keywords: ['자막', '자동', 'auto', 'load'],
+        order: 10
+      }
+    ])
+    const legacyAuto = loadConfig().autoLoadSubs
+    if (typeof legacyAuto === 'boolean') ctx.settings.set('subs-tracks.autoLoad', legacyAuto)
+    ctx.settings.onChange<boolean>('subs-tracks.autoLoad', (v) => {
+      saveConfig({ autoLoadSubs: v })
+      // `sub-auto` is a spawn-time decision for the CURRENT file; changing it
+      // takes effect from the next load, which is what mpv does too.
+      void ctx.mpv.set('sub-auto', v ? 'fuzzy' : 'no').catch(() => undefined)
+    })
+
     ctx.mpv.contributeArgs(10, () => [
       // Subtitle auto-loading is mpv's job: `fuzzy` matches Show.S01E02.en.srt
       // against Show.S01E02.mkv.
-      '--sub-auto=fuzzy',
+      `--sub-auto=${ctx.settings.get<boolean>('subs-tracks.autoLoad') ? 'fuzzy' : 'no'}`,
       // ';' on Windows, and ONE case per name: NTFS is case-insensitive, so
       // 'subs' and 'Subs' both match the same directory and mpv adds the file
       // twice.
@@ -202,6 +227,9 @@ const mod: FeatureModule = {
     })
 
     ctx.i18n.register('ko', {
+      'subs-tracks.autoLoadLabel': '자막 자동 불러오기',
+      'subs-tracks.autoLoadDesc':
+        '같은 폴더와 sub / subs / subtitles / 자막 하위 폴더에서 이름이 비슷한 자막을 찾습니다.',
       'subs-tracks.toggleVisibility': '자막 켜기/끄기',
       'subs-tracks.cycle': '자막 트랙 전환',
       'subs-tracks.select': '자막 트랙 선택',
@@ -216,6 +244,9 @@ const mod: FeatureModule = {
       'subs-tracks.added': '자막 추가됨: {name}'
     })
     ctx.i18n.register('en', {
+      'subs-tracks.autoLoadLabel': 'Load subtitles automatically',
+      'subs-tracks.autoLoadDesc':
+        'Looks for a similarly named subtitle beside the file and in sub / subs / subtitles / 자막.',
       'subs-tracks.toggleVisibility': 'Toggle subtitles',
       'subs-tracks.cycle': 'Cycle subtitle track',
       'subs-tracks.select': 'Select subtitle track',

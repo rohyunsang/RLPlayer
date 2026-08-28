@@ -83,7 +83,9 @@ async function playCurrent(): Promise<void> {
   if (!item) return
   currentFile = item.path
 
-  const entry = loadConfig().resumePlayback ? ctx.perFile.resumeFor(item.path) : null
+  const entry = ctx.settings.get<boolean>('playlist.resumePlayback')
+    ? ctx.perFile.resumeFor(item.path)
+    : null
   const startAt = entry?.position
 
   if (startAt && startAt > 1) {
@@ -313,6 +315,28 @@ const mod: FeatureModule = {
       flushCurrent()
     })
 
+    // L21 / the resume prompt. Hardcoded as `#resumePlayback` in the shared
+    // settings.html before this.
+    ctx.settings.define([
+      {
+        id: 'playlist.resumePlayback',
+        section: 'playback',
+        labelKey: 'playlist.resumeLabel',
+        descriptionKey: 'playlist.resumeDesc',
+        type: { kind: 'bool' },
+        default: true,
+        keywords: ['이어서', '재생', 'resume', 'continue'],
+        order: 10
+      }
+    ])
+    const legacyResume = loadConfig().resumePlayback
+    if (typeof legacyResume === 'boolean') {
+      ctx.settings.set('playlist.resumePlayback', legacyResume)
+    }
+    ctx.settings.onChange<boolean>('playlist.resumePlayback', (v) =>
+      saveConfig({ resumePlayback: v })
+    )
+
     // --- renderer channels. `playlist:*` is this module's namespace. ---
     ctx.ipc.on<number>('playlist:play', (i) => void playIndex(i))
     ctx.ipc.on<number>('playlist:remove', (i) => void removeIndex(i))
@@ -447,6 +471,8 @@ const mod: FeatureModule = {
     })
 
     ctx.i18n.register('ko', {
+      'playlist.resumeLabel': '이어서 재생',
+      'playlist.resumeDesc': '마지막으로 본 위치를 기억했다가 다음에 열 때 이어서 재생합니다.',
       'playlist.title': '재생목록',
       'playlist.shuffle': '무작위 재생',
       'playlist.repeat': '반복',
@@ -468,6 +494,8 @@ const mod: FeatureModule = {
       'playlist.menuTitle': '재생목록'
     })
     ctx.i18n.register('en', {
+      'playlist.resumeLabel': 'Resume playback',
+      'playlist.resumeDesc': 'Remember where you stopped and pick up there next time.',
       'playlist.title': 'Playlist',
       'playlist.shuffle': 'Shuffle',
       'playlist.repeat': 'Repeat',

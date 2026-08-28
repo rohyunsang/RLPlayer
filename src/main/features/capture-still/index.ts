@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { app, clipboard, ClipboardItem, shell } from 'electron'
 import type { FeatureContext, FeatureModule } from '@shared/feature-api'
-import { loadConfig } from '../../services/config.ts'
+import { loadConfig, saveConfig } from '../../services/config.ts'
 
 /**
  * M22 capture-still — screenshots. WAVE 0 SEED: the new owner of `screenshot`
@@ -23,8 +23,8 @@ import { loadConfig } from '../../services/config.ts'
 let ctx: FeatureContext
 
 function targetDir(): string {
-  const cfg = loadConfig()
-  if (cfg.screenshotDir) return cfg.screenshotDir
+  const chosen = ctx.settings.get<string>('capture-still.directory')
+  if (chosen) return chosen
   // D-10: portable mode keeps captures beside the exe, matching the
   // leave-no-trace promise (and PotPlayer's own habit).
   if (ctx.paths.isPortable()) return path.join(path.dirname(app.getPath('exe')), 'Capture')
@@ -85,6 +85,28 @@ const mod: FeatureModule = {
   setup(c): void {
     ctx = c
 
+    // C05. Hardcoded as `#screenshotDir` plus a bespoke "browse" button in the
+    // shared settings.html before this; `{ kind: 'path' }` renders both.
+    ctx.settings.define([
+      {
+        id: 'capture-still.directory',
+        section: 'general',
+        labelKey: 'capture-still.directoryLabel',
+        descriptionKey: 'capture-still.directoryDesc',
+        type: { kind: 'path', mode: 'directory' },
+        default: '',
+        mpvOption: 'screenshot-directory',
+        keywords: ['스크린샷', '캡처', 'screenshot', 'capture', 'folder'],
+        order: 30
+      }
+    ])
+    const legacyDir = loadConfig().screenshotDir
+    if (legacyDir) ctx.settings.set('capture-still.directory', legacyDir)
+    ctx.settings.onChange<string>('capture-still.directory', (v) => {
+      saveConfig({ screenshotDir: v })
+      void ctx.mpv.set('screenshot-directory', targetDir()).catch(() => undefined)
+    })
+
     ctx.mpv.contributeArgs(10, () => [
       '--screenshot-format=png',
       '--screenshot-png-compression=3',
@@ -124,11 +146,16 @@ const mod: FeatureModule = {
     })
 
     ctx.i18n.register('ko', {
+      'capture-still.directoryLabel': '스크린샷 저장 폴더',
+      'capture-still.directoryDesc': '비워 두면 사진\RLPlayer (휴대용 모드에서는 exe 옆의 Capture) 를 씁니다.',
       'capture-still.save': '스크린샷 저장',
       'capture-still.toClipboard': '스크린샷 클립보드 복사',
       'capture-still.menuTitle': '캡처'
     })
     ctx.i18n.register('en', {
+      'capture-still.directoryLabel': 'Screenshot folder',
+      'capture-still.directoryDesc':
+        'Leave empty for Pictures\RLPlayer (or Capture beside the exe in portable mode).',
       'capture-still.save': 'Save screenshot',
       'capture-still.toClipboard': 'Copy screenshot to clipboard',
       'capture-still.menuTitle': 'Capture'

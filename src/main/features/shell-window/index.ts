@@ -1,3 +1,4 @@
+import { loadConfig, saveConfig } from '../../services/config.ts'
 import type { FeatureContext, FeatureModule, OnTopMode } from '@shared/feature-api'
 
 /**
@@ -128,6 +129,37 @@ const mod: FeatureModule = {
       ctx.commands.invoke('shell-window.cycleAlwaysOnTop')
     )
 
+    // U40, and the settings window's layout control. This was
+    // `<select id="layoutMode">` plus a five-line explanation of Electron
+    // #40515 hardcoded in the shared settings.html; the select is a descriptor
+    // now and the prose is a contributed section, because prose is exactly what
+    // a descriptor cannot carry.
+    ctx.settings.define([
+      {
+        id: 'shell-window.layoutMode',
+        section: 'video',
+        labelKey: 'shell-window.layoutMode',
+        type: {
+          kind: 'enum',
+          options: [
+            { value: 'overlay', labelKey: 'shell-window.layout.overlay' },
+            { value: 'compat', labelKey: 'shell-window.layout.compat' }
+          ]
+        },
+        default: 'overlay',
+        requiresRestart: true,
+        keywords: ['화면 구성', '호환', 'layout', 'black', '검은'],
+        order: 5
+      }
+    ])
+    const legacyLayout = loadConfig().layoutMode
+    if (legacyLayout) ctx.settings.set('shell-window.layoutMode', legacyLayout)
+    ctx.settings.onChange<'overlay' | 'compat'>('shell-window.layoutMode', (v) => {
+      // Window topology is fixed at creation, so this one really does need a
+      // relaunch rather than a respawn of mpv.
+      saveConfig({ layoutMode: v })
+    })
+
     ctx.menu.contribute({
       id: 'shell-window.menu',
       labelKey: 'shell-window.menuTitle',
@@ -143,6 +175,13 @@ const mod: FeatureModule = {
     })
 
     ctx.i18n.register('ko', {
+      'shell-window.layoutMode': '화면 구성',
+      'shell-window.layout.overlay': '기본 (조작부가 영상 위에 겹침)',
+      'shell-window.layout.compat': '호환 모드 (조작부를 영상 밖에 배치)',
+      'shell-window.layoutHelp': '화면 구성 도움말',
+      'shell-window.layoutHint':
+        '화면이 검게 나오나요? 일부 그래픽 드라이버에서 투명 창이 검은색으로 렌더링되는 문제가 있습니다 (Electron #40515). 호환 모드는 투명 창을 전혀 쓰지 않고 조작부를 영상 바깥쪽에 배치하므로 이 문제를 피할 수 있습니다. 대신 전체화면에서 조작부가 자동으로 숨겨지지 않고, 영상 부분을 클릭해도 반응하지 않습니다.',
+      'shell-window.relaunch': 'RLPlayer 다시 시작',
       'shell-window.toggleFullScreen': '전체화면',
       'shell-window.exitFullScreen': '전체화면 종료',
       'shell-window.setFullScreen': '전체화면 지정',
@@ -154,6 +193,13 @@ const mod: FeatureModule = {
       'shell-window.menuTitle': '창'
     })
     ctx.i18n.register('en', {
+      'shell-window.layoutMode': 'Layout',
+      'shell-window.layout.overlay': 'Default (controls float over the video)',
+      'shell-window.layout.compat': 'Compatibility (controls sit outside the video)',
+      'shell-window.layoutHelp': 'About the layout modes',
+      'shell-window.layoutHint':
+        'Black screen? Some graphics drivers render a transparent window as solid black (Electron #40515). Compatibility mode uses no transparent window at all and puts the controls outside the video, which avoids it — at the cost of controls that never auto-hide in fullscreen and a video area that does not respond to clicks.',
+      'shell-window.relaunch': 'Restart RLPlayer',
       'shell-window.toggleFullScreen': 'Fullscreen',
       'shell-window.exitFullScreen': 'Exit fullscreen',
       'shell-window.setFullScreen': 'Set fullscreen',

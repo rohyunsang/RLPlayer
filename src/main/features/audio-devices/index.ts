@@ -32,8 +32,33 @@ const mod: FeatureModule = {
   setup(c): void {
     ctx = c
 
+    // A15/A16, and the settings window's output-device control. The list is
+    // queried from mpv at open time and changes when the user plugs in a
+    // headset, so no static `enum` can describe it — this is exactly what
+    // `{ kind: 'custom' }` plus `ctx.settingsComponent()` is for. Before this
+    // it was `<select id="audioDevice">` in the shared settings.html, which is
+    // the M38 <-> M15 collision.
+    ctx.settings.define([
+      {
+        id: 'audio-devices.device',
+        section: 'audio',
+        labelKey: 'audio-devices.device',
+        descriptionKey: 'audio-devices.deviceDesc',
+        type: { kind: 'custom', rendererComponent: 'audio-devices.picker' },
+        default: 'auto',
+        mpvOption: 'audio-device',
+        keywords: ['출력', '장치', 'device', 'output'],
+        order: 10
+      }
+    ])
+    const legacyDevice = loadConfig().audioDevice
+    if (legacyDevice) ctx.settings.set('audio-devices.device', legacyDevice)
+    ctx.settings.onChange<string>('audio-devices.device', (v) => {
+      void ctx.commands.invoke('audio-devices.select', v)
+    })
+
     ctx.mpv.contributeArgs(10, () => {
-      const device = loadConfig().audioDevice
+      const device = ctx.settings.get<string>('audio-devices.device')
       return device && device !== 'auto' ? [`--audio-device=${device}`] : []
     })
 
@@ -63,8 +88,18 @@ const mod: FeatureModule = {
       }
     ])
 
-    ctx.i18n.register('ko', { 'audio-devices.select': '오디오 장치 선택' })
-    ctx.i18n.register('en', { 'audio-devices.select': 'Select audio device' })
+    ctx.i18n.register('ko', {
+      'audio-devices.select': '오디오 장치 선택',
+      'audio-devices.device': '출력 장치',
+      'audio-devices.deviceDesc': '목록은 창을 열 때 mpv에서 가져옵니다.',
+      'audio-devices.auto': '자동'
+    })
+    ctx.i18n.register('en', {
+      'audio-devices.select': 'Select audio device',
+      'audio-devices.device': 'Output device',
+      'audio-devices.deviceDesc': 'The list is read from mpv when this window opens.',
+      'audio-devices.auto': 'Automatic'
+    })
   }
 }
 

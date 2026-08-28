@@ -15,6 +15,9 @@ import { resolveMpvPath } from './mpv/manager'
 import { setVideoRegion } from './core/window/windows'
 import { notifyVideoRegion } from './core/window/index.ts'
 import { commandRegistry, resolvedKeybinds, setBinding, setPreset } from './core/input/index.ts'
+import { messageCatalog, t } from './core/i18n/index.ts'
+import type { SettingsRegistry } from './core/settings/registry.ts'
+import type { FileFilter, SettingDescriptor, SettingSection, SettingType } from '@shared/feature-api'
 import type { LegacyBridge } from './core/legacy-bridge.ts'
 import type { MenuRegistry } from './core/menu.ts'
 import type { OsdBus } from './core/osd/index.ts'
@@ -78,7 +81,51 @@ export interface CoreIpcDeps {
   legacy: LegacyBridge
   menu: MenuRegistry
   osd: OsdBus
+  settings: SettingsRegistry
   pushState(): void
+}
+
+/**
+ * One row of the generated settings form.
+ *
+ * Labels are resolved HERE, in main, where the catalogs live — the settings
+ * window gets finished strings and never has to know which module contributed
+ * which key. `component` carries a `custom` descriptor's renderer component
+ * name so the form can look it up in `settingsComponents`.
+ */
+export interface SettingRow {
+  id: string
+  section: SettingSection
+  group?: string
+  label: string
+  description?: string
+  type: SettingType
+  value: unknown
+  default: unknown
+  mpvOption?: string
+  requiresRestart?: boolean
+  advanced?: boolean
+  order?: number
+  keywords?: readonly string[]
+}
+
+function toRow(d: SettingDescriptor, value: unknown): SettingRow {
+  const row: SettingRow = {
+    id: d.id,
+    section: d.section,
+    label: t(d.labelKey),
+    type: d.type,
+    value,
+    default: d.default
+  }
+  if (d.group !== undefined) row.group = d.group
+  if (d.descriptionKey !== undefined) row.description = t(d.descriptionKey)
+  if (d.mpvOption !== undefined) row.mpvOption = d.mpvOption
+  if (d.requiresRestart !== undefined) row.requiresRestart = d.requiresRestart
+  if (d.advanced !== undefined) row.advanced = d.advanced
+  if (d.order !== undefined) row.order = d.order
+  if (d.keywords !== undefined) row.keywords = d.keywords
+  return row
 }
 
 export function registerCoreIpc(deps: CoreIpcDeps): void {
@@ -152,6 +199,46 @@ export function registerCoreIpc(deps: CoreIpcDeps): void {
 
   ipcMain.on('settings:open', () => openSettingsWindow())
   ipcMain.on('settings:close', () => settingsWindow?.close())
+
+  // --- the generated settings form (§3.3.2) ---
+  //
+  // The settings window renders whatever `ctx.settings.define()` registered and
+  // knows nothing else. Every row below is a module's descriptor; adding a
+  // setting means adding a descriptor in your own directory, and touching
+  // neither this file nor `settings.html`.
+  ipcMain.handle('core-settings:list', () =>
+    deps.settings.snapshot().map(({ descriptor, value }) => toRow(descriptor, value))
+  )
+  ipcMain.handle('core-settings:set', (_e, msg: { id: string; value: unknown }) => {
+    if (!msg || typeof msg.id !== 'string' || !deps.settings.has(msg.id)) return null
+    deps.settings.set(msg.id, msg.value)
+    return deps.settings.get(msg.id)
+  })
+  ipcMain.handle('core-settings:reset', () => {
+    // P51 again: writing the default REMOVES the stored value, so a reset
+    // leaves an empty bag rather than a bag full of today's defaults.
+    for (const { descriptor } of deps.settings.snapshot()) {
+      deps.settings.set(descriptor.id, descriptor.default)
+    }
+    return deps.settings.snapshot().map(({ descriptor, value }) => toRow(descriptor, value))
+  })
+  ipcMain.handle(
+    'core-settings:browse',
+    async (_e, msg: { mode: 'file' | 'directory'; filters?: FileFilter[] }) => {
+      const win = getSettingsWindow() ?? getVideoWindow()
+      if (!win) return null
+      const res = await dialog.showOpenDialog(win, {
+        properties:
+          msg?.mode === 'directory' ? ['openDirectory', 'createDirectory'] : ['openFile'],
+        filters: msg?.filters ?? []
+      })
+      return res.canceled ? null : (res.filePaths[0] ?? null)
+    }
+  )
+
+  // The catalog, flattened. Both renderer windows fetch it once at boot so
+  // `ctx.t()` is synchronous by the time a module builds its DOM.
+  ipcMain.handle('core-i18n:messages', () => messageCatalog())
 
   // --- system ---
   ipcMain.on('system:openDefaultApps', () => {

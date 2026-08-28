@@ -51,7 +51,7 @@ async function setVolume(value: number): Promise<void> {
  * anywhere else is not a limiter.
  */
 function applyBoost(v: number): void {
-  const want = loadConfig().volumeBoostLimiter && v > 100
+  const want = ctx.settings.get<boolean>('audio-volume.boostLimiter') && v > 100
   if (want === boostOn) return
   boostOn = want
   if (want) {
@@ -92,6 +92,28 @@ const mod: FeatureModule = {
   setup(c): void {
     ctx = c
     const cfg = loadConfig()
+
+    // A06's soft limiter. Hardcoded as `#volumeBoostLimiter` in the shared
+    // settings.html before this — the M38 <-> M10 collision.
+    ctx.settings.define([
+      {
+        id: 'audio-volume.boostLimiter',
+        section: 'audio',
+        labelKey: 'audio-volume.boostLimiterLabel',
+        descriptionKey: 'audio-volume.boostLimiterDesc',
+        type: { kind: 'bool' },
+        default: true,
+        keywords: ['증폭', '리미터', 'boost', 'limiter', 'normalize'],
+        order: 20
+      }
+    ])
+    if (typeof cfg.volumeBoostLimiter === 'boolean') {
+      ctx.settings.set('audio-volume.boostLimiter', cfg.volumeBoostLimiter)
+    }
+    ctx.settings.onChange<boolean>('audio-volume.boostLimiter', (v) => {
+      saveConfig({ volumeBoostLimiter: v })
+      applyBoost(volume())
+    })
 
     // v0.1 shipped a 0-150 slider. A06 will move all boost into the af chain
     // and drop this to 100; until then, changing it here would be a regression
@@ -217,6 +239,9 @@ const mod: FeatureModule = {
     ])
 
     ctx.i18n.register('ko', {
+      'audio-volume.boostLimiterLabel': '볼륨 증폭 시 소프트 리미터',
+      'audio-volume.boostLimiterDesc':
+        '100%를 넘길 때 단순 증폭 대신 다이내믹 정규화와 리미터를 적용해 조용한 대사를 키우면서 피크가 찌그러지는 것을 막습니다.',
       'audio-volume.set': '볼륨 지정',
       'audio-volume.up5': '볼륨 +5%',
       'audio-volume.down5': '볼륨 -5%',
@@ -232,6 +257,9 @@ const mod: FeatureModule = {
       'audio-volume.audioDelayDown': '오디오 싱크 -0.1초'
     })
     ctx.i18n.register('en', {
+      'audio-volume.boostLimiterLabel': 'Soft limiter when boosting',
+      'audio-volume.boostLimiterDesc':
+        'Above 100%, apply dynamic normalisation and a limiter instead of plain gain, so quiet dialogue comes up without the peaks clipping.',
       'audio-volume.set': 'Set volume',
       'audio-volume.up5': 'Volume +5%',
       'audio-volume.down5': 'Volume -5%',
