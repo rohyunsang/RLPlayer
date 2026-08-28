@@ -41,6 +41,24 @@ interface Row {
 const modules: Row[] = JSON.parse(
   fs.readFileSync(path.join(repo, 'docs', 'parity', 'modules.json'), 'utf8')
 )
+const specText = fs.readFileSync(
+  path.join(repo, 'docs', 'parity', '00-parity-spec.md'),
+  'utf8'
+)
+const specLines = specText.split(String.fromCharCode(10)).map((l) => l.trimEnd())
+
+/**
+ * The feature id a spec table row is FOR, or null when the line is not one.
+ *
+ * The first cell is the id and nothing else -- `L30`, `**L47**`, `` `U06` `` --
+ * so a cell carrying prose is a header, a different table, or a continuation.
+ */
+function featureIdOf(line: string): string | null {
+  if (!line.startsWith('|')) return null
+  const cells = line.split('|').map((c) => c.trim())
+  if (cells.length < 8) return null
+  return /^\**`?([A-Z]\d{2})`?\**$/.exec(cells[1] ?? '')?.[1] ?? null
+}
 
 test('the manifest is 55 rows with unique ids', () => {
   assert.equal(modules.length, 55)
@@ -262,4 +280,109 @@ test('every renderer half belongs to the module of the same name', () => {
       `the renderer half '${d.name}' is owned by ${owner.id}, whose main half is ${owner.path}`
     )
   }
+})
+
+// ---------------------------------------------------------------------------
+// THE SPEC'S MODULE COLUMN, CROSS-CHECKED AGAINST THE MANIFEST.
+// ---------------------------------------------------------------------------
+
+/**
+ * WHAT THIS WOULD HAVE CAUGHT. §2.6 line 601 gave L30 (playlist thumbnail view
+ * mode) to M27, and M27's `features` array agreed -- while the files that row
+ * describes editing, `src/renderer/src/features/playlist/` and the queue panel,
+ * are M28's `ownedFiles`. So building L30 as written meant M27 editing M28's
+ * directory: the exact collision `check:partition` exists to prevent, written
+ * into the spec and mirrored into the manifest so the two agreed with each other
+ * and both were wrong.
+ *
+ * Two documents that agree are not two sources of truth. The check that means
+ * something is the one against the OWNERSHIP: a feature the spec assigns to a
+ * module must be claimed by that module, and `check:partition` separately proves
+ * that module owns the files it would have to edit.
+ *
+ * Twelve rows also turned out to be assigned in the spec and claimed by NOBODY
+ * (A39, A46, S41, N34, N48, N49, L45, R21, R32, P25, P59, P62) -- unowned work
+ * that would have surfaced as "whose is this?" in the middle of Wave 1.
+ */
+test('every feature the spec assigns to one module is claimed by that module', () => {
+  const claimedBy = new Map<string, Set<string>>()
+  for (const m of modules) {
+    for (const f of m.features ?? []) {
+      if (!claimedBy.has(f)) claimedBy.set(f, new Set())
+      claimedBy.get(f)?.add(m.id)
+    }
+  }
+
+  const problems: string[] = []
+  let checked = 0
+  for (const line of specText.split(/\r?\n/)) {
+    if (!line.startsWith('|')) continue
+    const cells = line.split('|').map((c) => c.trim())
+    if (cells.length < 8) continue
+    // The first cell is the feature id and nothing else: `L30`, `**L47**`,
+    // `` `U06` ``. A cell carrying prose is a header or a different table.
+    const id = /^\**`?([A-Z]\d{2})`?\**$/.exec(cells[1] ?? '')?.[1]
+    if (!id) continue
+    // The Module column. Rows naming several modules ("**core/osd** + M31",
+    // "M01-M09") are shared by design and are not a single-owner claim.
+    const named = [...new Set([...(cells[6] ?? '').matchAll(/\bM(\d{2})\b/g)].map((m) => `M${m[1]}`))]
+    if (named.length !== 1) continue
+    checked++
+    const owners = claimedBy.get(id)
+    if (!owners) {
+      problems.push(`${id}: the spec gives it to ${named[0]}; no row in modules.json claims it`)
+    } else if (!owners.has(named[0] as string)) {
+      problems.push(
+        `${id}: the spec gives it to ${named[0]}; modules.json gives it to ${[...owners].join(', ')}`
+      )
+    }
+  }
+
+  assert.ok(checked > 300, `only ${checked} rows parsed; the extraction is broken, not the manifest`)
+  assert.deepEqual(
+    problems,
+    [],
+    `the spec and the manifest disagree about who builds what:\n  ${problems.join('\n  ')}\n` +
+      `Fix whichever is wrong -- and check the winner actually OWNS the files that feature ` +
+      `edits, because L30 was assigned to a module that did not.`
+  )
+})
+
+/**
+ * The half of the L30 bug the row-vs-row check above cannot see: the spec and
+ * the manifest can AGREE with each other and still name a module that has no
+ * right to the files. For L30 they did -- line 601 said M27 and M27's `features`
+ * array said M27 -- so two documents agreeing proved nothing.
+ *
+ * LIMIT, stated plainly. This catches a row that spells out another module's
+ * owned DIRECTORY, which is precise and has no false positives. It did NOT catch
+ * L30, whose row said "playlist rows" in prose. Matching prose against directory
+ * basenames was tried and produces 7 hits of which 4 are legitimate
+ * cross-module design (R03 "Recent-URL history" is not M30's history; R27's
+ * "playlist selection" is a Blu-ray playlist), so it would be noise people learn
+ * to suppress. L30 was found by a human reading the row against `ownedFiles`,
+ * and that is still the only thing that finds this class -- which is worth
+ * knowing when the next Wave-1 row is written.
+ */
+test('a feature assigned to one module is not owned by a directory another module owns', () => {
+  const dirOwner = new Map<string, string>()
+  for (const m of modules) {
+    for (const f of m.ownedFiles ?? []) if (f.endsWith('/')) dirOwner.set(f, m.id)
+  }
+  const problems: string[] = []
+  for (const m of modules) {
+    for (const f of m.features ?? []) {
+      // A feature whose row names another module's DIRECTORY in its mpv-mapping
+      // cell is being built in a place its owner may not touch.
+      const line = specLines.find((l) => featureIdOf(l) === f)
+      if (!line) continue
+      for (const [dir, owner] of dirOwner) {
+        if (owner === m.id || !dir.includes('/features/')) continue
+        if (line.includes(dir)) {
+          problems.push(`${f} is ${m.id}'s, but its row names ${dir} (${owner}'s)`)
+        }
+      }
+    }
+  }
+  assert.deepEqual(problems, [], problems.join('\n  '))
 })

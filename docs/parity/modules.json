@@ -1843,6 +1843,7 @@
       "src/renderer/src/features/subs-sync/"
     ],
     "features": [
+      "N34",
       "S27",
       "S28",
       "S29",
@@ -1894,6 +1895,7 @@
       "src/renderer/src/features/subs-browser/"
     ],
     "features": [
+      "R32",
       "S35",
       "S36",
       "S37",
@@ -1960,7 +1962,8 @@
       "C21",
       "C22",
       "C23",
-      "C24"
+      "C24",
+      "P59"
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
@@ -2009,6 +2012,7 @@
       "src/renderer/src/features/capture-encode/"
     ],
     "features": [
+      "A46",
       "C09",
       "C10",
       "C11",
@@ -2020,6 +2024,7 @@
       "C17",
       "C18",
       "C19",
+      "R21",
       "S43"
     ],
     "mustNotTouch": [
@@ -2209,7 +2214,8 @@
       "N21",
       "N22",
       "N23",
-      "N50"
+      "N50",
+      "S41"
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
@@ -2245,7 +2251,9 @@
     "ownedCommands": [],
     "requestsProperties": [],
     "arbitrates": [],
-    "mediates": {},
+    "mediates": {
+      "nav-thumbnails.getThumb": []
+    },
     "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
@@ -2253,7 +2261,6 @@
       "src/renderer/src/features/nav-thumbnails/"
     ],
     "features": [
-      "L30",
       "N14",
       "N36",
       "N37",
@@ -2315,7 +2322,8 @@
       "playlist.seriesPrefix": []
     },
     "usesMediators": [
-      "nav-seek.seek"
+      "nav-seek.seek",
+      "nav-thumbnails.getThumb"
     ],
     "ownedFilterLabels": [],
     "ownedFiles": [
@@ -2346,6 +2354,7 @@
       "L18",
       "L19",
       "L20",
+      "L30",
       "L31",
       "L32",
       "L33",
@@ -2362,7 +2371,9 @@
       "L49",
       "L50",
       "N46",
-      "N47"
+      "N47",
+      "N48",
+      "N49"
     ],
     "mustNotTouch": [
       "src/shared/types.ts",
@@ -2428,6 +2439,7 @@
       "L40",
       "L43",
       "L44",
+      "L45",
       "N26",
       "R34",
       "U06",
@@ -2531,6 +2543,7 @@
       "src/renderer/src/features/shell-window/"
     ],
     "features": [
+      "P25",
       "P58",
       "P63",
       "U01",
@@ -2655,10 +2668,12 @@
       "src/renderer/src/features/shell-system/"
     ],
     "features": [
+      "A39",
       "A51",
       "N53",
       "P56",
       "P57",
+      "P62",
       "U21",
       "U22",
       "U23",
