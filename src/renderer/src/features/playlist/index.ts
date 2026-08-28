@@ -57,6 +57,30 @@ const mod: RendererFeatureModule = {
     }
     let dragFrom = -1
 
+    /**
+     * The transport bar's playlist toggle, contributed rather than hard-coded.
+     *
+     * It used to be `<button id="playlistBtn">` in `src/renderer/index.html`
+     * with its click handler and its `aria-pressed` rendering in
+     * `src/renderer/src/main.ts` — two core files that appear in the
+     * `mustNotTouch` list of 40 of the 55 module rows, carrying one module's
+     * control. Same shape as the `#playlist` panel host that `ctx.panel()`
+     * replaced, one row of the chrome further down.
+     */
+    ctx.transportButton({
+      id: 'playlist.toggle',
+      order: 20,
+      labelKey: 'playlist.togglePanel',
+      mount(el, api): () => void {
+        el.appendChild(svg('M2 4h9M2 8h9M2 12h6M13 8v6l3-3z'))
+        api.pressed(false)
+        return ctx.ipc.on<PlaylistState>('playlist:state', (p) => api.pressed(p.open))
+      },
+      onClick(): void {
+        ctx.ipc.send('playlist:togglePanel')
+      }
+    })
+
     ctx.panel({
       id: 'playlist',
       side: 'right',

@@ -1,11 +1,5 @@
 import './styles.css'
-import type {
-  OsdPayload,
-  PlayerState,
-  PlaylistState,
-  ResolvedKeybinds,
-  ToastPayload
-} from '@shared/types'
+import type { OsdPayload, PlayerState, ResolvedKeybinds, ToastPayload } from '@shared/types'
 import { accelFromEvent } from '@shared/input/accel'
 import { clamp, displayName, el, formatTime } from './util'
 import {
@@ -13,6 +7,7 @@ import {
   attachSeekbar,
   initPanelHost,
   initStatsHost,
+  initTransportHost,
   loadRendererFeatures,
   publishState,
   fetchMessages,
@@ -45,8 +40,6 @@ const volume = $<HTMLInputElement>('volume')
 const volReadout = $('volReadout')
 const muteBtn = $<HTMLButtonElement>('muteBtn')
 const speedBtn = $<HTMLButtonElement>('speedBtn')
-const subBtn = $<HTMLButtonElement>('subBtn')
-const playlistBtn = $<HTMLButtonElement>('playlistBtn')
 const fsBtn = $<HTMLButtonElement>('fsBtn')
 const maxBtn = $<HTMLButtonElement>('maxBtn')
 const osd = $('osd')
@@ -55,11 +48,15 @@ const dropzone = $('dropzone')
 const shortcutModal = $('shortcutModal')
 const shortcutList = $('shortcutList')
 const videoRegion = $('videoRegion')
-// The two contribution hosts. Everything inside them is a module's, never the
+// The three contribution hosts. Everything inside them is a module's, never the
 // overlay's: `panelRoot` docks whatever `ctx.panel()` registered, `stats` shows
 // whatever `ctx.statsSection()` registered.
 const panelRoot = $('panelRoot')
 const statsPanel = $('stats')
+// The third contribution host: the transport bar's own button row. M17's
+// subtitle toggle and M28's playlist toggle used to be markup in index.html
+// with their handlers here; both are `ctx.transportButton()` now.
+const transportExtras = $('transportExtras')
 
 // --- local view state -----------------------------------------------------
 
@@ -193,19 +190,8 @@ function render(s: PlayerState): void {
   muteBtn.setAttribute('aria-label', s.muted ? '음소거 해제' : '음소거')
 
   speedBtn.textContent = `${s.speed.toFixed(2)}×`
-  subBtn.setAttribute('aria-pressed', String(s.sid !== false))
   fsBtn.setAttribute('aria-label', s.fullscreen ? '전체화면 종료' : '전체화면')
   maxBtn.setAttribute('aria-label', s.maximized ? '이전 크기로' : '최대화')
-}
-
-/**
- * The playlist PANEL is M28's, contributed through `ctx.panel()` and living
- * entirely in `src/renderer/src/features/playlist/`. What is left here is the
- * transport bar's own toggle button, which the overlay owns: it needs to know
- * whether the panel is open so it can show a pressed state.
- */
-function renderPlaylistButton(p: PlaylistState): void {
-  playlistBtn.setAttribute('aria-pressed', String(p.open))
 }
 
 // --- OSD ------------------------------------------------------------------
@@ -382,8 +368,6 @@ $('prevBtn').addEventListener('click', () => api.runBinding('previous'))
 $('nextBtn').addEventListener('click', () => api.runBinding('next'))
 muteBtn.addEventListener('click', () => api.action({ type: 'toggleMute' }))
 fsBtn.addEventListener('click', () => api.window.toggleFullscreen())
-playlistBtn.addEventListener('click', () => api.playlist.togglePanel())
-subBtn.addEventListener('click', () => api.action({ type: 'toggleSubs' }))
 speedBtn.addEventListener('click', (e) => {
   // Left click steps up, right click steps down, both wrap within 0.25-4x.
   api.action({ type: 'speedBy', delta: e.shiftKey ? -0.25 : 0.25 })
@@ -499,7 +483,6 @@ $('shortcutClose').addEventListener('click', () => {
 // --- wiring ---------------------------------------------------------------
 
 api.onState(render)
-api.onPlaylist(renderPlaylistButton)
 api.onToast(showToast)
 api.onOsd(showOsd)
 api.onKeybinds((k) => {
@@ -534,6 +517,7 @@ async function boot(): Promise<void> {
   // but usable; it must never stop the overlay from coming up.
   await fetchMessages((ch) => window.rl.invoke(ch))
   initPanelHost(panelRoot)
+  initTransportHost(transportExtras)
   initStatsHost(
     statsPanel,
     () =>

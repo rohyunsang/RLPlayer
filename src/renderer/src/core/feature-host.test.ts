@@ -10,6 +10,7 @@ import {
   settingsComponents,
   settingsSections,
   statsSections,
+  transportButtons,
   type DiscoveredRendererModule,
   type RendererBridge
 } from './feature-host.ts'
@@ -242,10 +243,18 @@ test('every contribution point lands in a registry a host can read', () => {
         mount: () => () => {}
       })
       ctx.settingsComponent('playlist.picker', () => () => {})
+      ctx.transportButton({
+        id: 'playlist.toggle',
+        order: 20,
+        labelKey: 'playlist.togglePanel',
+        mount: () => () => {},
+        onClick: () => {}
+      })
     }
   }
   load([mod])
   assert.deepEqual(panels.map((p) => p.id), ['playlist'])
+  assert.deepEqual(transportButtons.map((b) => b.id), ['playlist.toggle'])
   assert.deepEqual(statsSections.map((s) => s.id), ['playlist.stats'])
   assert.deepEqual(settingsSections.map((s) => s.id), ['playlist.section'])
   assert.equal(settingsComponents.has('playlist.picker'), true)
@@ -284,4 +293,53 @@ test('a layer registered before the bar exists is queued, not dropped', () => {
   const registered: string[] = []
   setSeekbarHost({ register: (l) => registered.push(l.id) })
   assert.deepEqual(registered, ['nav-chapters.ticks'])
+})
+
+// --- ctx.transportButton() -------------------------------------------------
+
+/**
+ * The button row is the THIRD place a module's UI ended up in a core file, after
+ * `#playlist` (fixed by ctx.panel) and `.seek-chapter-tick` (fixed by the
+ * seek-bar layer host). `#subBtn` and `#playlistBtn` were markup in
+ * `src/renderer/index.html` with their handlers in `src/renderer/src/main.ts` —
+ * two files in the `mustNotTouch` list of 40 of the 55 rows.
+ */
+test('transport buttons are kept in order, whatever order the modules loaded in', () => {
+  const mk = (id: string, order: number): RendererFeatureModule => ({
+    id,
+    setup: (ctx) =>
+      ctx.transportButton({
+        id: `${id}.btn`,
+        order,
+        labelKey: id,
+        mount: () => () => {},
+        onClick: () => {}
+      })
+  })
+  load([mk('capture-still', 40), mk('subs-tracks', 10), mk('playlist', 20)])
+  assert.deepEqual(
+    transportButtons.map((b) => b.id),
+    ['subs-tracks.btn', 'playlist.btn', 'capture-still.btn']
+  )
+})
+
+test('two modules cannot claim the same transport button id', () => {
+  // Silent last-one-wins is how the CSS collisions went unnoticed for a release.
+  const mk = (id: string): RendererFeatureModule => ({
+    id,
+    setup: (ctx) =>
+      ctx.transportButton({
+        id: 'contested',
+        order: 10,
+        labelKey: id,
+        mount: () => () => {},
+        onClick: () => {}
+      })
+  })
+  const { errors } = countingErrors(() => load([mk('playlist'), mk('subs-tracks')]))
+  assert.equal(transportButtons.length, 1, 'the second registration must not silently replace')
+  assert.ok(
+    errors.some((e) => /duplicate transport button id/.test(e)),
+    `the collision was not reported: ${errors.join(' | ')}`
+  )
 })

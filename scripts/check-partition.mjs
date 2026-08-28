@@ -122,29 +122,58 @@ for (const { owner, entry } of claims) {
   }
 }
 
-// --- 4. CSS is checked by SELECTOR, not by file ----------------------------
+// --- 4. CONTENT is checked by SYMBOL, not by file -------------------------
 //
-// File-granular checking is what let the next collision through. Every file was
+// File-granular checking is what let the last collision through. Every file was
 // owned by exactly one row and the check passed — while
 // `src/renderer/src/styles.css`, owned by `core-renderer` and listed in the
 // `mustNotTouch` of 40 of the 55 rows, carried `.seek-chapter-tick` and
 // `.seek-tip-chapter`: M25 nav-chapters' private styles, referenced by nothing
 // except `src/renderer/src/features/nav-chapters/index.ts`.
 //
-// That is the `#playlist` failure again, moved from the panel path to the
-// seek-bar path. §6.3 requires the seek bar to carry chapter ticks, bookmark
-// pins and the A-B region at the same time, so M20, M26 and M27 were each about
-// to follow M25's committed precedent into the same file. M28's playlist
-// already shows the right shape: a module imports its own stylesheet and Vite
-// bundles it.
+// The selector rule that replaced it had three holes of its own, and all three
+// were found by planting the violation and watching the check report "clean":
 //
-// The rule below is mechanical: a selector defined in a CORE stylesheet must be
-// used by at least one core file. If the only code that mentions it lives in one
-// feature's directory, it is that feature's private style in a shared file.
+//   HOLE 1 — it gated on `featureUsers.length === 1`, so a selector used by TWO
+//     feature modules passed. That is exactly the case the rule exists for:
+//     §6.3 requires chapter ticks (M25), bookmark pins (M26) and thumbnails
+//     (M27) on ONE seek bar at once, so the shared-selector collision is a
+//     three-way one by design. Planted `.plantedB` in core `styles.css`,
+//     referenced from both nav-chapters and playlist: reported clean.
+//
+//   HOLE 2 — a use was any substring hit anywhere in any core `.ts`/`.html`,
+//     comments included. Planted `.plantedC` used only by nav-chapters, plus
+//     the bare word `plantedC` in a COMMENT in core-owned `util.ts`: reported
+//     clean. One word of prose whitelisted a real violation.
+//
+//   HOLE 3 — only `.css` files were scanned at all
+//     (`cssFiles = tracked.filter(f => f.endsWith('.css'))`). There was no
+//     content check for HTML or TS of any kind.
+//
+// So the unit is a SYMBOL now, not a file and not only a CSS selector:
+//
+//   - class and id selectors DEFINED by a stylesheet (leftmost, see below), and
+//   - element ids DECLARED by an HTML file (`id="…"`).
+//
+// and a USE is the symbol appearing inside a STRING LITERAL of a code file —
+// `el.className = 'seek-layer'`, `querySelector('.pl-row')`, `class="icon-btn"`.
+// Comments are blanked by `scripts/lib/lex.mjs` before anything is matched, so
+// prose can no longer whitelist a symbol.
+//
+// WHAT THIS STILL CANNOT SEE, stated plainly because a check whose limits are
+// undocumented gets trusted past them: it cannot tell that `#playlistBtn` in
+// core's `index.html` is a FEATURE's control, because core's `main.ts` genuinely
+// referenced it — the symbol had a legitimate core user, so no ownership rule
+// could fire. That one is fixed by moving the control to `ctx.transportButton()`
+// rather than by detecting it; what the rule below guarantees is that it cannot
+// come back as a feature-only symbol in a core file.
 
-const cssFiles = tracked.filter((f) => f.endsWith('.css'))
-const codeFiles = tracked.filter((f) => /\.(ts|js|html)$/.test(f))
+import { lex } from './lib/lex.mjs'
+
 const read = (f) => fs.readFileSync(path.join(repo, f), 'utf8')
+const cssFiles = tracked.filter((f) => f.endsWith('.css'))
+const htmlFiles = tracked.filter((f) => f.endsWith('.html'))
+const codeFiles = tracked.filter((f) => /\.(ts|js|html)$/.test(f))
 
 /**
  * The selectors a stylesheet DEFINES — the LEFTMOST class or id of each comma-
@@ -172,66 +201,161 @@ function selectorsIn(file) {
   return names
 }
 
+/** The element ids an HTML file DECLARES. Comments blanked first. */
+function idsIn(file) {
+  const html = lex(read(file)).code
+  const names = new Set()
+  for (const m of html.matchAll(/\sid\s*=\s*["']([A-Za-z][A-Za-z0-9_-]*)["']/g)) names.add(m[1])
+  return names
+}
+
 /** Which owner each file belongs to, and whether that owner is a feature. */
 const featureOf = (file) => /\/features\/([a-z0-9-]+)\//.exec(file)?.[1] ?? null
 
-const definedBy = new Map() // selector -> Set(file)
-for (const file of cssFiles) {
-  for (const name of selectorsIn(file)) {
-    if (!definedBy.has(name)) definedBy.set(name, new Set())
-    definedBy.get(name).add(file)
-  }
+/**
+ * Every symbol, with where it is defined and what KIND it is, so the failure
+ * message can name the right fix.
+ */
+// KEYED BY KIND AND NAME, not by name. `.seek` (core's slider class) and
+// `#seek` (the element it is on) are two different symbols that happen to share
+// a word, and collapsing them made whichever one was scanned first shadow the
+// other -- silently, and in the direction that reports fewer problems.
+const definedBy = new Map() // 'kind:name' -> { kind, name, files: Set(file) }
+const define = (name, kind, file) => {
+  const key = `${kind}:${name}`
+  let e = definedBy.get(key)
+  if (!e) definedBy.set(key, (e = { kind, name, files: new Set() }))
+  e.files.add(file)
+}
+for (const file of cssFiles) for (const name of selectorsIn(file)) define(name, 'selector', file)
+for (const file of htmlFiles) for (const name of idsIn(file)) define(name, 'id', file)
+
+/**
+ * STRING LITERALS ONLY, comments blanked.
+ *
+ * `lex()` returns a view of each file in which everything outside a string is
+ * blanked, so `// plantedC` in a core file's comment is no longer a "use" and
+ * cannot whitelist a feature's private symbol sitting in a core file. HTML
+ * attribute values (`class="icon-btn"`, `id="seek"`) are string literals under
+ * the same lexer, which is what extends this rule to HTML for the first time.
+ */
+/**
+ * An `id="x"` attribute DECLARES the id; it is not a USE of it.
+ *
+ * Without this, every id in `index.html` had a "core user" — the declaration
+ * itself — so rule 4a could never fire on an HTML id at all and the whole HTML
+ * half of the check was decorative. Measured: a planted `<div id="plantedD">`
+ * referenced only from `nav-chapters/index.ts` was reported clean. The
+ * declarations are stripped before the file is lexed, so `for="x"`,
+ * `aria-labelledby="x"` and `href="#x"` still count as the real references they
+ * are.
+ */
+const usesTextOf = (f) => {
+  const src = read(f)
+  return f.endsWith('.html') ? src.replace(/(\sid\s*=\s*["'])[^"']*(["'])/g, '$1$2') : src
 }
 
-// Where each selector is USED, by owner.
-const usedBy = new Map() // selector -> Set(feature id | 'core')
-const codeText = codeFiles.map((f) => ({ file: f, text: read(f), feature: featureOf(f) }))
-for (const [name] of definedBy) {
+const codeText = codeFiles.map((f) => ({
+  file: f,
+  strings: lex(usesTextOf(f)).strings,
+  feature: featureOf(f)
+}))
+
+const usedBy = new Map() // 'kind:name' -> Set(feature id | 'core')
+for (const [key, { name }] of definedBy) {
   const owners = new Set()
   const needle = new RegExp(`(^|[^A-Za-z0-9_-])${name}([^A-Za-z0-9_-]|$)`)
   for (const c of codeText) {
-    if (!needle.test(c.text)) continue
+    if (!needle.test(c.strings)) continue
     owners.add(c.feature ?? 'core')
   }
-  usedBy.set(name, owners)
+  usedBy.set(key, owners)
 }
 
-for (const [name, files] of definedBy) {
+const sigil = (kind) => (kind === 'id' ? '#' : '.')
+
+for (const [key, { kind, name, files }] of definedBy) {
   const inCore = [...files].filter((f) => featureOf(f) === null)
   const inFeatures = [...files].filter((f) => featureOf(f) !== null)
+  const where = kind === 'id' ? 'a core-owned HTML file' : 'a core stylesheet'
 
-  // 4a. A core stylesheet must not carry a selector only one feature uses.
+  // 4a. A core file must not carry a symbol only FEATURES use.
+  //
+  //     `=== 1` was the bug. §6.3 puts M25's ticks, M26's pins and M27's
+  //     thumbnails on the same seek bar, so the collision this rule exists to
+  //     catch is a two- and three-module one — and those were precisely the
+  //     cases that passed. Any number of feature users with no core user is a
+  //     private symbol in a shared file.
   if (inCore.length > 0) {
-    const users = [...(usedBy.get(name) ?? [])]
+    const users = [...(usedBy.get(key) ?? [])]
     const featureUsers = users.filter((u) => u !== 'core')
-    if (users.length > 0 && featureUsers.length === 1 && !users.includes('core')) {
+    if (featureUsers.length > 0 && !users.includes('core')) {
+      const list =
+        featureUsers.length === 1
+          ? `'${featureUsers[0]}'`
+          : `${featureUsers.length} modules: ${featureUsers.sort().join(', ')}`
       failures.push(
-        `.${name}\n    is defined in ${inCore.join(', ')} (core-owned) but is used ONLY by\n` +
-          `    '${featureUsers[0]}'. That is a feature's private style living in a file 40 of the\n` +
-          `    55 rows are told not to touch, so the next module that wants the same host edits\n` +
-          `    it too. Move it to src/renderer/src/features/${featureUsers[0]}/, import the\n` +
-          `    stylesheet from that module's index.ts the way M28's playlist does, and leave\n` +
-          `    only the HOST rules in core.`
+        `${sigil(kind)}${name}\n    is defined in ${inCore.join(', ')} (core-owned, ${where}) but is\n` +
+          `    used ONLY by ${list}. That is a feature's private ${kind} living in a file 40 of\n` +
+          `    the 55 rows are told not to touch, so the next module that wants the same host\n` +
+          `    edits it too — and when there is more than one user already, the merge conflict\n` +
+          `    is not hypothetical, it is scheduled. Move it into\n` +
+          `    src/renderer/src/features/<module>/ and contribute it: a stylesheet imported from\n` +
+          `    that module's index.ts (the way M28's playlist does), a panel through ctx.panel(),\n` +
+          `    a seek-bar layer through ctx.seekbarLayer(), a control through ctx.transportButton().`
       )
     }
   }
 
-  // 4b. Two features must never define the same selector: that is the same
+  // 4b. Two features must never define the same symbol: that is the same
   //     collision one level down, and it is silent because CSS just cascades.
   const owners = [...new Set(inFeatures.map(featureOf))]
   if (owners.length > 1) {
     failures.push(
-      `.${name}\n    is defined by ${owners.length} different modules: ${owners.join(', ')}.\n` +
+      `${sigil(kind)}${name}\n    is defined by ${owners.length} different modules: ${owners.join(', ')}.\n` +
         `    CSS has no ownership check of its own -- it simply cascades, so the last one\n` +
         `    bundled wins and nothing reports it. Namespace it per module.`
     )
   }
 
-  // 4c. A feature must not redefine a selector core also defines.
+  // 4c. A feature must not redefine a symbol core also defines.
   if (inCore.length > 0 && inFeatures.length > 0) {
     failures.push(
-      `.${name}\n    is defined in core (${inCore.join(', ')}) AND in ${inFeatures.join(', ')}.\n` +
-        `    A module overriding a core selector is a merge conflict with a delay on it.`
+      `${sigil(kind)}${name}\n    is defined in core (${inCore.join(', ')}) AND in ${inFeatures.join(', ')}.\n` +
+        `    A module overriding a core ${kind} is a merge conflict with a delay on it.`
+    )
+  }
+}
+
+// --- 5. the rule has to be able to see itself ------------------------------
+//
+// A content check that silently stops matching passes everything, which is how
+// hole 2 above survived: the whitelist path was exercised by prose and nobody
+// noticed the real path had stopped running. So assert the extraction still
+// finds symbols it is known to define and use, before believing a clean result.
+{
+  const knownSelectors = ['seek-layer', 'icon-btn', 'seek-chapter-tick']
+  const missing = knownSelectors.filter((n) => !definedBy.has(`selector:${n}`))
+  if (missing.length > 0) {
+    failures.push(
+      `the selector extraction stopped finding ${missing.join(', ')}.\n` +
+        `    Every assertion above is built on it, so a rule that matches nothing reports\n` +
+        `    'clean' for every violation at once. Fix selectorsIn()/idsIn() first.`
+    )
+  }
+  if (!definedBy.has('id:seek')) {
+    failures.push(
+      `the HTML id extraction stopped finding #seek.\n` +
+        `    There was no content check for HTML at all until this rule existed; a broken\n` +
+        `    one is the same thing wearing a passing test.`
+    )
+  }
+  const seekLayerUsers = usedBy.get('selector:seek-layer') ?? new Set()
+  if (!seekLayerUsers.has('core')) {
+    failures.push(
+      `the string-literal USE extraction stopped finding core's own 'seek-layer'.\n` +
+        `    If uses stop being found, every core-defined symbol looks feature-only and the\n` +
+        `    check turns into noise; if they are found too eagerly, nothing is ever reported.`
     )
   }
 }

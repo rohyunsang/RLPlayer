@@ -40,6 +40,13 @@
  *   `bare`  — comments AND string contents blanked. Identifier rules run here,
  *             so `'the default-apps fetch'` and `"npm run fetch:mpv"` are prose
  *             rather than violations.
+ *   `strings` — the inverse of `bare`: everything OUTSIDE a string literal is
+ *             blanked. `check-partition.mjs` asks "is this CSS selector or this
+ *             element id actually referenced", and a reference is a string:
+ *             `el.className = 'seek-layer'`, `querySelector('.pl-row')`,
+ *             `class="icon-btn"`. Matching the bare token anywhere in the file
+ *             is what let a selector be whitelisted by the word appearing once,
+ *             in a comment, in an unrelated core file.
  */
 
 const NL = '\n'
@@ -64,24 +71,29 @@ function regexAllowedBefore(text, i) {
 
 /**
  * @param {string} text
- * @returns {{ code: string, bare: string, lineAt: (i: number) => number }}
+ * @returns {{ code: string, bare: string, strings: string, lineAt: (i: number) => number }}
  */
 export function lex(text) {
   const code = new Array(text.length)
   const bare = new Array(text.length)
+  const strings = new Array(text.length)
   const keep = (i) => {
     code[i] = text[i]
     bare[i] = text[i]
+    strings[i] = text[i] === NL ? NL : ' '
   }
   /** Blank a character, but never a newline: line numbers must survive. */
   const blankBoth = (i) => {
     const c = text[i] === NL ? NL : ' '
     code[i] = c
     bare[i] = c
+    strings[i] = c
   }
+  /** Inside a string literal: kept in `code`, blanked in `bare`, kept in `strings`. */
   const blankBareOnly = (i) => {
     code[i] = text[i]
     bare[i] = text[i] === NL ? NL : ' '
+    strings[i] = text[i]
   }
 
   let i = 0
@@ -170,5 +182,5 @@ export function lex(text) {
     return lo + 1
   }
 
-  return { code: code.join(''), bare: bare.join(''), lineAt }
+  return { code: code.join(''), bare: bare.join(''), strings: strings.join(''), lineAt }
 }

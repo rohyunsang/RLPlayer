@@ -859,3 +859,15 @@ kbd {
    names. They live in src/renderer/src/features/nav-chapters/ now, and
    `check:partition` fails if a selector only one feature uses reappears in a
    core stylesheet. */
+
+/*
+ * The host for `ctx.transportButton()`. A CONTAINER rule, the same shape as
+ * `.panel-root` and `.seek-layers`: core owns the box and the spacing, each
+ * module owns what is inside its own button. Nothing here is any one feature's,
+ * which is the property `check:partition` rule 4a checks for.
+ */
+.transport-extras {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}

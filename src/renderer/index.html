@@ -111,15 +111,11 @@
           <button type="button" id="speedBtn" class="text-btn" aria-label="재생 속도" title="재생 속도 ([ / ])">
             1.00×
           </button>
-          <button type="button" id="subBtn" class="icon-btn" aria-label="자막" title="자막 켜기/끄기 (V)">
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <rect x="1.5" y="3.5" width="13" height="9" rx="1.5" />
-              <path d="M4 9.5h3M9 9.5h3" />
-            </svg>
-          </button>
-          <button type="button" id="playlistBtn" class="icon-btn" aria-label="재생목록" title="재생목록 (L)" aria-pressed="false">
-            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h9M2 8h9M2 12h6M13 8v6l3-3z" /></svg>
-          </button>
+          <!-- Contributed transport controls (`ctx.transportButton()`): the
+               subtitle toggle is M17's, the playlist toggle is M28's, and the
+               next four (M22 capture, M26 bookmarks, M27 thumbnails, M35 open
+               URL) arrive the same way. This file names none of them. -->
+          <div class="transport-extras" id="transportExtras"></div>
           <button type="button" id="fsBtn" class="icon-btn" aria-label="전체화면" title="전체화면 (F)">
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" /></svg>
           </button>

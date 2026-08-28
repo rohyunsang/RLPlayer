@@ -60,6 +60,40 @@ export interface SeekbarLayer {
   }): void
 }
 
+/**
+ * A control in the transport bar's own button row (§3.4).
+ *
+ * WHY THIS EXISTS. `src/renderer/index.html` hard-coded `#playlistBtn` (M28's)
+ * and `#subBtn` (M17's) — two feature-specific controls in a core file that
+ * appears in the `mustNotTouch` list of 40 of the 55 rows. That is the same
+ * shape as the `#playlist` panel host and M25's `.seek-chapter-tick`, both of
+ * which have already been fixed by giving the thing a contribution point; and
+ * the next four modules that want a button in that row (M22's capture, M26's
+ * bookmarks, M27's thumbnails, M35's URL box) were each one commit from editing
+ * the same file.
+ *
+ * `check:partition` cannot catch this one on its own — core's `main.ts` really
+ * did reference `#playlistBtn`, so the id had a legitimate core user and no
+ * ownership rule could fire. The fix is the host, not the detector.
+ *
+ * The module owns everything inside its button. The host owns the `<button>`,
+ * its class and its position, so a module never needs to know `icon-btn`.
+ */
+export interface TransportButton {
+  id: string
+  /** Left to right within the row's right-hand group. Core's own end at 100. */
+  order: number
+  /** Tooltip and accessible name, resolved through `ctx.t()`. */
+  labelKey: string
+  /**
+   * Paint into the button core created. Return a teardown.
+   * `pressed(on)` sets `aria-pressed`, so a toggle does not have to reach for
+   * the element to reflect its own state.
+   */
+  mount(el: HTMLButtonElement, api: { pressed(on: boolean): void }): () => void
+  onClick(e: { shift: boolean; ctrl: boolean; alt: boolean; button: number }): void
+}
+
 export interface StatsSection {
   id: string
   order: number
@@ -107,6 +141,8 @@ export interface RendererFeatureContext {
     mount(el: HTMLElement): () => void
   }): void
   seekbarLayer(l: SeekbarLayer): void
+  /** A control in the transport bar's button row. Ignored in the settings window. */
+  transportButton(b: TransportButton): void
   statsSection(s: StatsSection): void
   settingsSection(s: {
     id: string

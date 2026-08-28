@@ -118,6 +118,13 @@ const mod: FeatureModule = {
       return addSubtitle(req.file)
     })
 
+    // The transport bar's subtitle button, contributed by this module's renderer
+    // half (`src/renderer/src/features/subs-tracks/`). It used to be
+    // `#subBtn` in core's index.html calling the legacy `toggleSubs` action.
+    ctx.ipc.on('subs-tracks:toggleVisibility', () => {
+      void ctx.commands.invoke('subs-tracks.toggleVisibility')
+    })
+
     ctx.commands.register([
       {
         id: 'subs-tracks.toggleVisibility',

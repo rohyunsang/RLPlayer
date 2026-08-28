@@ -55,10 +55,12 @@ export {
   settingsSections,
   statsSections,
   t,
+  transportButtons,
   type PanelSpec,
   type SettingsComponentMount,
   type SettingsSectionSpec
 } from './feature-host.ts'
 export { initPanelHost } from './panel-host.ts'
+export { initTransportHost } from './transport-host.ts'
 export { initStatsHost, statsOnStateChange, statsVisible, toggleStats } from './stats-host.ts'
 export { SeekbarHost }

@@ -4,12 +4,13 @@ import type {
   RendererFeatureModule,
   SeekbarLayer,
   SettingBinding,
-  StatsSection
+  StatsSection,
+  TransportButton
 } from '../../../shared/renderer-api.ts'
 import type { PlayerState } from '../../../shared/types.ts'
 
 /**
- * The renderer-side registry: state fan-out, the four contribution registries,
+ * The renderer-side registry: state fan-out, the five contribution registries,
  * the per-module context and the loader.
  *
  * Deliberately free of `import.meta.glob`, of the DOM hosts and of anything
@@ -61,6 +62,8 @@ export interface SettingsSectionSpec {
 export type SettingsComponentMount = (el: HTMLElement, api: SettingBinding) => () => void
 
 export const panels: PanelSpec[] = []
+/** `ctx.transportButton()`, consumed by `transport-host.ts`. */
+export const transportButtons: TransportButton[] = []
 export const statsSections: StatsSection[] = []
 export const settingsSections: SettingsSectionSpec[] = []
 export const settingsComponents = new Map<string, SettingsComponentMount>()
@@ -226,6 +229,14 @@ export function createContext(
       if (seekbarHost) seekbarHost.register(l)
       else pendingLayers.push(l)
     },
+    transportButton(b): void {
+      if (transportButtons.some((x) => x.id === b.id)) {
+        throw new Error(`duplicate transport button id '${b.id}'`)
+      }
+      transportButtons.push(b)
+      transportButtons.sort((a, x) => a.order - x.order)
+      announce()
+    },
     statsSection(s): void {
       statsSections.push(s)
       statsSections.sort((a, b) => a.order - b.order)
@@ -298,6 +309,7 @@ export function __resetForTests(): void {
   currentState = null
   stateSubscribers.clear()
   panels.length = 0
+  transportButtons.length = 0
   statsSections.length = 0
   settingsSections.length = 0
   settingsComponents.clear()
