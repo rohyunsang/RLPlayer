@@ -3,6 +3,7 @@ import { ContributionError } from './errors.ts'
 import { t } from './i18n/index.ts'
 import type { CommandRegistry } from './input/registry.ts'
 import { getVideoWindow } from './window/windows'
+import { commandMenuGroups } from './menu-model.ts'
 import type { MenuNode, MenuService } from '@shared/feature-api'
 
 /**
@@ -82,17 +83,44 @@ export class MenuRegistry {
     const removed = new Set<string>()
     for (const s of this.sections) for (const r of s.replaces ?? []) removed.add(r)
 
-    const ordered = this.sections
-      .filter((s) => !removed.has(s.id) && !s.parent)
-      .sort((a, b) => a.order - b.order)
+    /**
+     * Two contribution mechanisms, ONE ordering space. A contributed section
+     * carries an explicit `order`; a `menuPath` group takes its root's base
+     * order from MENU_ROOTS. Merging them here rather than appending one after
+     * the other is what makes `menuPath` a first-class placement instead of a
+     * second-rate one — an `audio` command lands next to the audio section, not
+     * in a lump at the bottom.
+     */
+    const blocks: { order: number; render: () => MenuItemConstructorOptions[] }[] = []
+
+    for (const section of this.sections.filter((s) => !removed.has(s.id) && !s.parent)) {
+      blocks.push({
+        order: section.order,
+        render: () => {
+          const children = this.sections
+            .filter((s) => s.parent === section.id && !removed.has(s.id))
+            .sort((a, b) => a.order - b.order)
+          const items = [...section.items, ...children.flatMap((c) => c.items)]
+          return items.flatMap((n) => this.node(n))
+        }
+      })
+    }
+
+    for (const group of commandMenuGroups(this.commands.all())) {
+      blocks.push({
+        order: group.order,
+        render: () =>
+          group.items
+            .map((i) => ({ commandId: i.commandId }) as MenuNode)
+            .flatMap((n) => this.node(n))
+      })
+    }
+
+    blocks.sort((a, b) => a.order - b.order)
 
     const out: MenuItemConstructorOptions[] = []
-    for (const section of ordered) {
-      const children = this.sections
-        .filter((s) => s.parent === section.id && !removed.has(s.id))
-        .sort((a, b) => a.order - b.order)
-      const items = [...section.items, ...children.flatMap((c) => c.items)]
-      const rendered = items.flatMap((n) => this.node(n))
+    for (const block of blocks) {
+      const rendered = block.render()
       if (rendered.length === 0) continue
       if (out.length > 0) out.push({ type: 'separator' })
       out.push(...rendered)
