@@ -2207,7 +2207,8 @@
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/nav-bookmarks/",
-      "src/renderer/src/features/nav-bookmarks/"
+      "src/renderer/src/features/nav-bookmarks/",
+      "src/shared/features/nav-bookmarks/"
     ],
     "features": [
       "N10",

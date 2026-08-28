@@ -1,5 +1,13 @@
 import './nav-bookmarks.css'
 import type { RendererFeatureModule } from '../../../../shared/renderer-api.ts'
+/**
+ * ONE definition of each wire type, checked at BOTH ends. `Bookmark` and
+ * `BookmarkPanelState` were declared here and twice more on the main side.
+ */
+import type {
+  Bookmark,
+  BookmarkPanelState
+} from '../../../../shared/features/nav-bookmarks/wire.ts'
 
 /**
  * M26 nav-bookmarks, renderer half.
@@ -28,27 +36,6 @@ import type { RendererFeatureModule } from '../../../../shared/renderer-api.ts'
 /** Mirrors the main half's record. It cannot be imported: `src/shared` is
  *  core's, and `tsconfig.web.json` does not include `src/main`, so the two
  *  halves of a module have no shared compilation unit to put a type in. */
-interface Bookmark {
-  id: string
-  t: number
-  b?: number
-  title: string
-  createdAt: number
-}
-
-interface BookmarkPanelState {
-  open: boolean
-  duration: number
-  bookmarks: Bookmark[]
-  loop: {
-    a: number | null
-    b: number | null
-    soft: boolean
-    count: number
-    remaining: number | null
-  }
-}
-
 const EMPTY: BookmarkPanelState = {
   open: false,
   duration: 0,

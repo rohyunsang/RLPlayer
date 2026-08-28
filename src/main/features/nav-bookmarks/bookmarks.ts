@@ -24,18 +24,15 @@ export const MAX_BOOKMARKS = 200
 /** N12's dead zone, in seconds. */
 export const STEP_EPSILON = 0.25
 
-export interface Bookmark {
-  /** Stable for the life of the entry. Every IPC verb addresses a bookmark by
-   *  id, never by index: the panel filters and re-sorts, and an index into a
-   *  filtered list is the classic "deleted the wrong row" bug. */
-  id: string
-  /** The point, in seconds on the file's (possibly ordered-chapter) timeline. */
-  t: number
-  /** N22: a bookmark WITH a `b` field IS a saved A-B section. One store. */
-  b?: number
-  title: string
-  createdAt: number
-}
+/**
+ * `Bookmark` is DECLARED ONCE, in `src/shared/features/nav-bookmarks/wire.ts`,
+ * and re-exported here so the module's own pure half keeps its single import
+ * point. It used to be declared here, again in this module's main `index.ts` and
+ * again in its renderer half -- three copies of one payload, because a module's
+ * two halves share no compilation unit and nothing compared them.
+ */
+import type { Bookmark } from '@shared/features/nav-bookmarks/wire'
+export type { Bookmark }
 
 /** What the module keeps mirrored from `ab-loop-a` / `ab-loop-b`. */
 export interface AbLoop {

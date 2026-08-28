@@ -24,6 +24,7 @@ import {
   type Bookmark
 } from './bookmarks.ts'
 import type { FeatureContext, FeatureModule, MenuNode, Unsubscribe } from '@shared/feature-api'
+import type { BookmarkPanelState } from '@shared/features/nav-bookmarks/wire'
 
 /**
  * M26 nav-bookmarks — named bookmarks, the bookmark manager, seek-bar pins and
@@ -59,21 +60,6 @@ const NUDGE_SECONDS = 0.1
 
 /** What the renderer half needs, and nothing more. `PlayerState` carries no
  *  A-B fields, so this is pushed on our own channel. */
-interface BookmarkPanelState {
-  open: boolean
-  duration: number
-  bookmarks: Bookmark[]
-  loop: {
-    a: number | null
-    b: number | null
-    /** N23: B is held here and never written to mpv, so the UI has to be told
-     *  which mode drew the region it is looking at. */
-    soft: boolean
-    count: number
-    remaining: number | null
-  }
-}
-
 /** The per-file record. `bookmarks` is OPTIONAL so an empty list writes no key
  *  at all: the store deletes a file's whole bucket when every slice reports
  *  nothing, and a `bookmarks: []` for every file ever opened would grow the
