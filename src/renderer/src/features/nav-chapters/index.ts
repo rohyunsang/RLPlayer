@@ -25,12 +25,13 @@ const mod: RendererFeatureModule = {
     const host = document.createElement('div')
     host.className = 'seek-layer seek-chapters'
 
-    ctx.state.subscribe((s) => {
-      chapters = s.chapters
-      duration = s.duration
-      paint()
-    })
-
+    // `ctx.state.subscribe` REPLAYS the last state synchronously (renderer-core
+    // fires immediately when it already has one), so everything paint() closes
+    // over has to exist before the subscribe, not after it. Declaring `ticks`
+    // below the subscribe made the very first replayed paint() a TDZ
+    // ReferenceError, which killed the rest of setup() — including the
+    // seekbarLayer() registration — and left a permanently throwing subscriber
+    // behind. Order is load-bearing here.
     let ticks: HTMLElement[] = []
 
     function paint(): void {
@@ -46,6 +47,12 @@ const mod: RendererFeatureModule = {
         ticks.push(tick)
       }
     }
+
+    ctx.state.subscribe((s) => {
+      chapters = s.chapters
+      duration = s.duration
+      paint()
+    })
 
     ctx.seekbarLayer({
       id: 'nav-chapters.ticks',

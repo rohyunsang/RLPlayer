@@ -1,0 +1,145 @@
+/*
+ * M28 playlist, renderer half. Owned by this module, imported by its index.ts,
+ * and bundled into the overlay by Vite.
+ *
+ * These rules used to live in `src/renderer/src/styles.css`, which every module
+ * with a panel would have had to edit — the verified M28 / M21 collision. A
+ * panel's look is the panel's business; only the dock is core's.
+ */
+
+.pl-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 8px 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex: none;
+}
+
+.pl-head h2 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.pl-count {
+  color: var(--text-dim);
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+.pl-tools {
+  display: flex;
+  gap: 2px;
+}
+
+.pl-tools .icon-btn {
+  position: relative;
+}
+
+.pl-badge {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  font-size: 9px;
+  font-weight: 700;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 6px;
+  padding: 0 3px;
+  line-height: 11px;
+}
+
+.pl-items {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  counter-reset: pl;
+}
+
+.pl-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--text-dim);
+  counter-increment: pl;
+}
+
+.pl-item::before {
+  content: counter(pl);
+  flex: none;
+  width: 22px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  opacity: 0.55;
+}
+
+.pl-item:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.pl-item.current {
+  background: rgba(91, 157, 255, 0.16);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.pl-item.current::before {
+  color: var(--accent);
+  opacity: 1;
+}
+
+.pl-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pl-item.drag-over {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.pl-item.dragging {
+  opacity: 0.4;
+}
+
+.pl-remove {
+  flex: none;
+  opacity: 0;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+}
+
+.pl-remove svg {
+  width: 11px;
+  height: 11px;
+}
+
+.pl-item:hover .pl-remove {
+  opacity: 0.7;
+}
+
+.pl-remove:hover {
+  opacity: 1 !important;
+  background: var(--danger);
+  color: #fff;
+}

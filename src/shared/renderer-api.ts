@@ -80,6 +80,15 @@ export interface SettingBinding {
 
 export interface RendererFeatureContext {
   readonly id: FeatureId
+  /**
+   * Which window this half is being set up in. The overlay and the settings
+   * window run the SAME glob, so `setup()` is called once per surface; branch
+   * on this rather than assuming there is only one renderer. `panel()` and
+   * `seekbarLayer()` are ignored in the settings window, `settingsSection()`
+   * and `settingsComponent()` are ignored in the player, so a module that just
+   * registers everything is still correct — this exists for the expensive work.
+   */
+  readonly surface: 'player' | 'settings'
   readonly ipc: {
     invoke<Req, Res>(ch: IpcChannel, r?: Req): Promise<Res>
     send<Req>(ch: IpcChannel, r?: Req): void

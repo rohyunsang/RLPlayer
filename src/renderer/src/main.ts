@@ -8,7 +8,18 @@ import type {
 } from '@shared/types'
 import { accelFromEvent } from '@shared/input/accel'
 import { clamp, displayName, el, formatTime } from './util'
-import { SeekbarHost, attachSeekbar, loadRendererFeatures, publishState, setOsdSink } from './core'
+import {
+  SeekbarHost,
+  attachSeekbar,
+  initPanelHost,
+  initStatsHost,
+  loadRendererFeatures,
+  publishState,
+  registerRendererMessages,
+  setOsdSink,
+  statsOnStateChange,
+  toggleStats
+} from './core'
 
 const api = window.rlplayer
 
@@ -41,20 +52,18 @@ const maxBtn = $<HTMLButtonElement>('maxBtn')
 const osd = $('osd')
 const toasts = $('toasts')
 const dropzone = $('dropzone')
-const playlistPanel = $('playlist')
-const plItems = $<HTMLOListElement>('plItems')
-const plCount = $('plCount')
-const shuffleBtn = $<HTMLButtonElement>('shuffleBtn')
-const repeatBtn = $<HTMLButtonElement>('repeatBtn')
-const repeatBadge = $('repeatBadge')
 const shortcutModal = $('shortcutModal')
 const shortcutList = $('shortcutList')
 const videoRegion = $('videoRegion')
+// The two contribution hosts. Everything inside them is a module's, never the
+// overlay's: `panelRoot` docks whatever `ctx.panel()` registered, `stats` shows
+// whatever `ctx.statsSection()` registered.
+const panelRoot = $('panelRoot')
+const statsPanel = $('stats')
 
 // --- local view state -----------------------------------------------------
 
 let state: PlayerState | null = null
-let playlist: PlaylistState = { items: [], index: -1, open: false, repeat: 'off', shuffle: false }
 let keybinds: ResolvedKeybinds = {}
 /** While the user drags the seek bar we must ignore incoming time-pos. */
 let scrubbing = false
@@ -123,6 +132,7 @@ function render(s: PlayerState): void {
   const layoutChanged = state?.layoutMode !== s.layoutMode
   state = s
   publishState(s)
+  statsOnStateChange()
   seekbar.render()
   document.body.classList.toggle('idle', s.idle || !s.path)
   document.body.classList.toggle('fullscreen', s.fullscreen)
@@ -178,51 +188,14 @@ function render(s: PlayerState): void {
   maxBtn.setAttribute('aria-label', s.maximized ? '이전 크기로' : '최대화')
 }
 
-function renderPlaylist(p: PlaylistState): void {
-  playlist = p
-  document.body.classList.toggle('playlist-open', p.open)
-  playlistPanel.hidden = !p.open
+/**
+ * The playlist PANEL is M28's, contributed through `ctx.panel()` and living
+ * entirely in `src/renderer/src/features/playlist/`. What is left here is the
+ * transport bar's own toggle button, which the overlay owns: it needs to know
+ * whether the panel is open so it can show a pressed state.
+ */
+function renderPlaylistButton(p: PlaylistState): void {
   playlistBtn.setAttribute('aria-pressed', String(p.open))
-  shuffleBtn.setAttribute('aria-pressed', String(p.shuffle))
-  repeatBtn.setAttribute('aria-pressed', String(p.repeat !== 'off'))
-  repeatBadge.hidden = p.repeat !== 'one'
-  plCount.textContent = p.items.length ? `${p.index + 1}/${p.items.length}` : ''
-
-  plItems.textContent = ''
-  p.items.forEach((item, i) => {
-    const li = el('li', 'pl-item' + (i === p.index ? ' current' : ''))
-    li.tabIndex = 0
-    li.draggable = true
-    li.dataset.index = String(i)
-    li.setAttribute('role', 'button')
-    // textContent, never innerHTML: this string comes from a filesystem path.
-    const name = el('span', 'pl-name', item.name)
-    name.title = item.name
-    li.appendChild(name)
-
-    const rm = el('button', 'pl-remove')
-    rm.type = 'button'
-    rm.setAttribute('aria-label', `${item.name} 제거`)
-    rm.innerHTML = '<svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg>'
-    rm.addEventListener('click', (e) => {
-      e.stopPropagation()
-      api.playlist.remove(i)
-    })
-    li.appendChild(rm)
-
-    li.addEventListener('dblclick', () => api.playlist.play(i))
-    li.addEventListener('click', () => api.playlist.play(i))
-    li.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault()
-        api.playlist.play(i)
-      }
-    })
-    plItems.appendChild(li)
-  })
-
-  const current = plItems.children[p.index]
-  current?.scrollIntoView({ block: 'nearest' })
 }
 
 // --- OSD ------------------------------------------------------------------
@@ -400,15 +373,7 @@ $('nextBtn').addEventListener('click', () => api.runBinding('next'))
 muteBtn.addEventListener('click', () => api.action({ type: 'toggleMute' }))
 fsBtn.addEventListener('click', () => api.window.toggleFullscreen())
 playlistBtn.addEventListener('click', () => api.playlist.togglePanel())
-$('plCloseBtn').addEventListener('click', () => api.playlist.togglePanel())
 subBtn.addEventListener('click', () => api.action({ type: 'toggleSubs' }))
-shuffleBtn.addEventListener('click', () => api.playlist.setShuffle(!playlist.shuffle))
-repeatBtn.addEventListener('click', () => {
-  const order = ['off', 'one', 'all'] as const
-  const next = order[(order.indexOf(playlist.repeat) + 1) % order.length]!
-  api.playlist.setRepeat(next)
-  showOsd({ kind: 'info', text: { off: '반복 없음', one: '한 파일 반복', all: '전체 반복' }[next] })
-})
 speedBtn.addEventListener('click', (e) => {
   // Left click steps up, right click steps down, both wrap within 0.25-4x.
   api.action({ type: 'speedBy', delta: e.shiftKey ? -0.25 : 0.25 })
@@ -447,42 +412,6 @@ for (const handle of document.querySelectorAll<HTMLElement>('.rz')) {
   handle.addEventListener('pointerup', () => api.window.endDrag())
   handle.addEventListener('pointercancel', () => api.window.endDrag())
 }
-
-// --- playlist drag reorder ------------------------------------------------
-
-let dragFrom = -1
-
-plItems.addEventListener('dragstart', (e) => {
-  const li = (e.target as HTMLElement).closest<HTMLElement>('.pl-item')
-  if (!li) return
-  dragFrom = Number(li.dataset.index)
-  li.classList.add('dragging')
-  e.dataTransfer?.setData('text/plain', String(dragFrom))
-  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
-})
-
-plItems.addEventListener('dragover', (e) => {
-  e.preventDefault()
-  const li = (e.target as HTMLElement).closest<HTMLElement>('.pl-item')
-  for (const n of plItems.querySelectorAll('.drag-over')) n.classList.remove('drag-over')
-  li?.classList.add('drag-over')
-})
-
-plItems.addEventListener('drop', (e) => {
-  e.preventDefault()
-  e.stopPropagation()
-  const li = (e.target as HTMLElement).closest<HTMLElement>('.pl-item')
-  for (const n of plItems.querySelectorAll('.drag-over')) n.classList.remove('drag-over')
-  if (!li || dragFrom < 0) return
-  const to = Number(li.dataset.index)
-  if (to !== dragFrom) api.playlist.reorder(dragFrom, to)
-  dragFrom = -1
-})
-
-plItems.addEventListener('dragend', () => {
-  for (const n of plItems.querySelectorAll('.dragging')) n.classList.remove('dragging')
-  dragFrom = -1
-})
 
 // --- file drop ------------------------------------------------------------
 
@@ -532,11 +461,6 @@ window.addEventListener('keydown', (e) => {
 
   e.preventDefault()
   wakeChrome()
-
-// Renderer feature modules, discovered by the same directory glob main uses.
-setOsdSink((m) => showOsd({ kind: m.kind, text: m.text, value: m.value }))
-loadRendererFeatures()
-seekbar.render()
   // The OSD is main's job now: the module that changes the value is the one
   // that knows what to say about it.
   api.invokeCommand(entry.commandId)
@@ -565,7 +489,7 @@ $('shortcutClose').addEventListener('click', () => {
 // --- wiring ---------------------------------------------------------------
 
 api.onState(render)
-api.onPlaylist(renderPlaylist)
+api.onPlaylist(renderPlaylistButton)
 api.onToast(showToast)
 api.onOsd(showOsd)
 api.onKeybinds((k) => {
@@ -578,11 +502,37 @@ api.onUiCommand((name) => {
     shortcutModal.hidden = false
     $('shortcutClose').focus()
   }
+  // The stats overlay is core's host; every row in it is a module's
+  // `ctx.statsSection()`.
+  if (name === 'toggleStats') toggleStats('full')
 })
 
 wakeChrome()
 
-// Renderer feature modules, discovered by the same directory glob main uses.
-setOsdSink((m) => showOsd({ kind: m.kind, text: m.text, value: m.value }))
-loadRendererFeatures()
-seekbar.render()
+/**
+ * Boot, once.
+ *
+ * The catalog is fetched BEFORE the modules are set up, because a module's
+ * `mount()` calls `ctx.t()` while it builds its DOM and a label resolved after
+ * the fact would need every panel to re-render. This runs exactly once: an
+ * accidental second call used to re-enter every module's `setup()`, and the
+ * loader now refuses it outright.
+ */
+async function boot(): Promise<void> {
+  setOsdSink((m) => showOsd({ kind: m.kind, text: m.text, value: m.value }))
+  try {
+    const messages = (await window.rl.invoke('core-i18n:messages')) as Record<string, string>
+    registerRendererMessages(messages)
+  } catch (e) {
+    // A missing catalog means keys render as their ids, which is ugly but
+    // usable. It must never stop the overlay from coming up.
+    console.warn('[overlay] message catalog unavailable:', e)
+  }
+  initPanelHost(panelRoot)
+  initStatsHost(statsPanel)
+  // Renderer feature modules, discovered by the same directory glob main uses.
+  loadRendererFeatures('player')
+  seekbar.render()
+}
+
+void boot()

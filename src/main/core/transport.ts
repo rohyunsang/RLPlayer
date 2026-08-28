@@ -88,6 +88,17 @@ export function registerCoreCommands(deps: TransportDeps): void {
       }
     },
     {
+      id: 'core.toggleStats',
+      labelKey: 'core.toggleStats',
+      category: 'app',
+      // mpv's own `i` panel, rebuilt as an overlay host so every module can add
+      // a row to it through ctx.statsSection() instead of editing main.ts.
+      defaults: { default: ['KeyI'], potplayer: ['Ctrl+F1'], mpv: ['KeyI'] },
+      run: () => {
+        getUiWindow()?.webContents.send('ui:command', 'toggleStats')
+      }
+    },
+    {
       id: 'core.openReleases',
       labelKey: 'core.openReleases',
       category: 'app',

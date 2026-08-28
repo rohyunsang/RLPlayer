@@ -127,25 +127,14 @@
       </footer>
     </div>
 
-    <!-- Playlist side panel -->
-    <aside class="playlist" id="playlist" hidden aria-label="재생목록">
-      <div class="playlist-head">
-        <h2>재생목록 <span class="count" id="plCount"></span></h2>
-        <div class="playlist-tools">
-          <button type="button" id="shuffleBtn" class="icon-btn small" aria-label="무작위 재생" aria-pressed="false" title="무작위 재생">
-            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h3l6 8h3M2 12h3l6-8h3M12 2l2 2-2 2M12 10l2 2-2 2" /></svg>
-          </button>
-          <button type="button" id="repeatBtn" class="icon-btn small" aria-label="반복" title="반복">
-            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 6a3 3 0 013-3h7M13 10a3 3 0 01-3 3H3M11 1l2 2-2 2M5 11l-2 2 2 2" /></svg>
-            <span class="badge" id="repeatBadge" hidden>1</span>
-          </button>
-          <button type="button" id="plCloseBtn" class="icon-btn small" aria-label="재생목록 닫기">
-            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
-          </button>
-        </div>
-      </div>
-      <ol class="playlist-items" id="plItems"></ol>
-    </aside>
+    <!-- Contributed panels (`ctx.panel()`): the playlist, the subtitle
+         browser, bookmarks, thumbnails, media info, history. This file names
+         none of them. The host docks each one by `side` and `order`, which is
+         what stops six modules editing this file to add six <aside>s. -->
+    <div class="panel-root" id="panelRoot"></div>
+
+    <!-- Contributed stats sections (`ctx.statsSection()`). -->
+    <div class="stats" id="stats" hidden role="status" aria-label="재생 정보"></div>
 
     <!-- Centre OSD for volume / seek / speed feedback -->
     <div class="osd" id="osd" role="status" aria-live="polite"></div>
