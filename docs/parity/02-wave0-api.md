@@ -39,7 +39,8 @@
 > `styles.css`. They render now (§10, §7), and `ctx.transportButton()` joins
 > them so the transport bar's button row stops being a shared file too.
 >
-> Last updated: 2026-08-28 (third repair round)
+> Last updated: 2026-08-28 (fourth repair round -- the first one driven by what
+> four real modules hit, rather than by an audit of core alone)
 
 ---
 
@@ -117,7 +118,7 @@ one was completing a download to Google.
 | Field | Meaning |
 |---|---|
 | `id` | kebab-case, equals the directory name. Boot error naming both if not. |
-| `dependsOn?` | Other module ids that must be set up first. A cycle is a boot error **naming the cycle**. |
+| `dependsOn?` | Other module ids that must be set up first. A cycle is a boot error **naming the cycle**. **Copy your `modules.json` row verbatim** -- it is the same namespace now (see below). |
 | `ownsProperties?` | Every mpv property you may **write**. §2 below. |
 | `ownsCommands?` | Every mpv **command** only you may issue. Same syntax, same duplicate check, same runtime guard. §2.1. |
 | `requestsProperties?` | Properties you reach through `ctx.mpv.requestSet()`. Declared so the dependency is visible in review, and it now also decides which fix-hint an OwnershipError gives you. |
@@ -129,6 +130,24 @@ one was completing a download to Google.
 `ownsCommands` is not optional in spirit any more: if your module issues an mpv
 command that mutates state, it has to be listed, and §2.2's side-effect table
 plus `npm run test:command-ownership` will tell you if it is not.
+
+**`dependsOn` is ONE namespace, and your manifest row is the answer.** It used to
+be two: `modules.json` rows said `"dependsOn": ["core-af-chain"]` and
+`["core-mpv-bus", "M18"]`, code `dependsOn` took feature-module directory ids and
+nothing else, and nothing compared the two files -- so mirroring the row written
+*for you* was a boot failure on the first line of your own module. Copy the row.
+Four cases:
+
+| What you name | What happens |
+|---|---|
+| a loaded module id (`audio-tracks`) | a real edge; you are set up after it |
+| a core piece id (`core-af-chain`) | satisfied by construction -- core is fully up before the first feature `setup()`. The entry is documentation, and it is spell-checked |
+| a module the manifest reserves but this build has not implemented (`subs-formats`) | **deferred, not an error.** Logged once at boot. Your `setup()` has to cope with the helper being absent -- that is what §3.6 means when it says N51 falls back to "this folder" if `playlist.seriesPrefix` is not there |
+| anything else | a boot error naming the namespace you reached into: a row id (`M07`) is told to look up that row's `path`; anything else gets the nearest real id within two edits |
+
+The manifest's sixteen feature dependencies are spelled with module ids now, and
+`npm test` compares the two graphs for every implemented module in both
+directions.
 
 **Isolation, and its deliberate asymmetry.** A *collision* — duplicate property,
 duplicate command id, duplicate IPC channel, a namespace violation, a spawn-arg
@@ -537,7 +556,10 @@ Declare `usesVideoFilters` / `usesAudioFilters` and `ownsFilterLabels`, then:
 ctx.vf.set('rl-sharpen', 'lavfi=[cas=strength=0.4]')   // spec WITHOUT the label
 ctx.vf.toggle('rl-sharpen', false)                      // disables IN PLACE
 ctx.vf.remove('rl-sharpen')
-const { path } = await ctx.vf.command('rl-sharpen', 'strength', '0.55', 'cas')
+// The sixth argument is REQUIRED: the spec the filter now has, label excluded.
+const { path } = await ctx.vf.command(
+  'rl-sharpen', 'strength', '0.55', 'cas', 'lavfi=[cas=strength=0.55]'
+)
 ```
 
 - **You never issue a raw `vf`/`af` command.** The ownership map refuses it for
@@ -555,6 +577,29 @@ const { path } = await ctx.vf.command('rl-sharpen', 'strength', '0.55', 'cas')
   `['vf-command', label, option, value, lavfiFilterName]` — the last argument is
   the libavfilter **filter name**, not the label and not `'all'`. The
   three-argument form fails on both sides.
+- **...and `command()` takes the post-change spec as a REQUIRED sixth argument,**
+  because the chain has to go on believing what mpv believes. This is the defect
+  that cost M03 a 201-line `chain-sync.ts` (plus 247 lines of test) which M01,
+  M09, M13 and M14 would each have copied. Measured against the chain, before:
+
+  ```
+  command('rl-sharpen','strength','0.55','cas')
+      -> serialise() still returned @rl-sharpen:lavfi=[cas=strength=0.4],
+         so the next foreign set() pushed 0.4 back to mpv and REVERTED the
+         value the user had just dragged to
+  command(...,'luma_amount','1.2','unsharp')       (V08, M03's own row)
+      -> unsharp refuses vf-command, so the rebuild path ran and re-serialised
+         the spec the slot ALREADY held: mpv received unsharp=5:5:1.0
+  af.command('rleq','change','0|f=500|w=100|g=9','anequalizer')
+      -> the chain still held g=0
+  ```
+
+  An optional `spec?` was tried first and had **zero production adopters**, which
+  is why it is required: the compiler now refuses a call that cannot keep the slot
+  honest, and no spelling of `command()` is left that silently desynchronises the
+  chain. The chain also checks that the spec you pass really does mention the
+  option and value you say you set. Every chain test asserts the resulting chain
+  STATE and the exact string mpv holds, not merely that a command was emitted.
 - **The refuser table lives in the chain, not in your module.** `unsharp`
   refuses `vf-command`; `superequalizer`, `pan` and `loudnorm` refuse
   `af-command`. `command()` transparently rebuilds for those and reports
@@ -620,6 +665,36 @@ the namespace using **mpv's own names**: `MBTN_LEFT`, `MBTN_RIGHT_DBL`,
 argument, so `seek +5` and `seek +60` are two commands (`nav-seek.forward5`,
 `nav-seek.forward60`). That is what lets the mpv preset put `ArrowUp` on ±60s
 while Default puts it on volume.
+
+**`menuPath` + `menuOrder` put the command in the context menu** -- and until this
+round nothing read either field. Three modules declared a menu location; two of
+them (M12's equaliser toggle, M10's mute) were simply absent from the menu while
+their source said otherwise. The rules, every one a boot error naming your
+command:
+
+```ts
+menuPath: 'audio',      // EXACTLY one of the eight fixed roots
+menuOrder: 30           // REQUIRED with a menuPath, and unique within that root
+```
+
+- The roots are `playback video audio subtitles navigate capture window tools`.
+  Fixed, for the reason §7 fixes the eight settings sections. **`menuPath` does
+  not nest:** a submenu needs a title, the title needs an i18n key, and you may
+  only register keys under your own id -- so `'audio/devices'` could only ever
+  render as the raw key `core.menu.audio.devices`. Use `ctx.menu.contribute()`
+  for a submenu; it carries its own `labelKey`.
+- `menuOrder` is **required** with a `menuPath`, and a duplicate `(path, order)`
+  is rejected naming both commands. Without it, item order falls to module
+  discovery order -- alphabetical directory order, which nobody chose and nothing
+  documents. Same rule as a seek-bar layer's `order` and a menu section's
+  `order`; all three ordering namespaces now reject a tie.
+- `menuOrder` without `menuPath`, and `menuPath` on an `internal: true` mediator,
+  are contribution errors rather than silent no-ops.
+- The label is your command's `labelKey` and the accelerator is your command's own
+  binding, so there is nothing to keep in sync -- that is what P13 means by
+  "keymap and menu a single source of truth". The two mechanisms share ONE
+  ordering space, so an `audio` command lands beside the audio section rather
+  than in a lump at the end.
 
 **`internal: true`** hides a command from the keybind editor and the cheat sheet.
 Use it for mediators and for the arg-driven entry points the legacy bridge and
@@ -798,9 +873,36 @@ ctx.perFile.slice({
   finished, so a stale position is never offered back; `history.json` **keeps**
   it with `finished: true` so the history panel can show a checkmark.
 
+- **The slice store is capped at 1000 files**, evicted oldest-first, the way
+  `resume.json` is capped at 500 and `history.json` at 2000. It was uncapped and
+  never evicted: every file ever opened kept a bucket for ever, holding the
+  payload of every module that ever registered a slice.
+
 Also on the service: `currentKey()`, `currentPath()`, `forget(file)`,
 `resumeFor(file)`, `recordPosition(file, pos, dur)`, `captureNow()`, and
 `lookupMany(paths)` for the playlist's watched badges.
+
+**Reading a file that is not the one playing** -- which you could not do at all
+before. `resumeKey()` is a one-way hash of path+size, so a module could not even
+ask about a path it *had*. That is what made N11's all-files bookmark mode and
+N16's playlist badges inexpressible, and left a module no option but to
+re-implement `per-file.json` beside it:
+
+```ts
+ctx.perFile.sliceFor(file, 'nav-bookmarks')   // that file's slice, or null
+ctx.perFile.slicesFor(file)                    // all of its slices, or null
+ctx.perFile.storedFiles()                      // [{key, path, updatedAt, sliceKeys}],
+                                               //   newest first -- the enumeration
+```
+
+`slicesFor` returns `null` rather than `{}` when nothing is stored, so "nothing
+stored" stays distinguishable from "stored empty".
+
+**`persistNow()` -- capture AND fsync.** `captureNow()` only reaches the store,
+whose write is debounced 300 ms and whose flush otherwise waits for quit, so a
+module that captured a bookmark and then lost the process lost the bookmark. Use
+`persistNow()` for anything that must survive a crash rather than a clean quit,
+and `captureNow()` when you are merely about to switch files.
 
 ---
 
@@ -841,6 +943,27 @@ registers everything is still correct — branch on it to skip expensive work.
 
 **Import your own CSS.** Vite bundles it. `styles.css` is core's and is on the
 forbidden list; a panel's look is the panel's business.
+
+**Your two halves DO have a file they both compile: `src/shared/features/<your
+id>/`.** Declare every payload that crosses your own IPC there, once.
+
+```
+src/shared/features/nav-thumbnails/wire.ts     owned by YOUR row in modules.json
+```
+
+`tsconfig.web.json` excludes `src/main` and `tsconfig.node.json` excludes
+`src/renderer`, so a type declared in one half and used in the other has to be
+written twice — and nothing compares the two, so adding a field on one side is a
+silent `undefined` on the wire rather than a type error. Measured across the four
+pilots, **five** wire types were hand-duplicated (`ThumbStatus`; `Bookmark` and
+`BookmarkPanelState`; `EqState` and `PresetWire`), and core had made the same
+mistake with `SettingRow`. `src/shared/**` is in both tsconfigs, the directory is
+listed in your row's `ownedFiles`, and it is yours rather than core's.
+
+It may export **values**, not only types — M12's verified band table lives there.
+That took a fix of its own: `npm test` could not resolve `@shared/…` or an
+extensionless relative import, so a value import from a wire file gave a green
+typecheck, a green build and a test file that would not load (§13).
 
 > **A trap that cost us a live bug, and it is about YOUR code, not core's.**
 > `ctx.state.subscribe(cb)` **replays the last state synchronously**, so `cb`
@@ -1280,9 +1403,30 @@ wrong on real disks:
   its two directories, so anything inside them is already covered.
 - Node runs TypeScript by **stripping** it. That means: no `enum`, no
   `namespace`, no **parameter properties** (`constructor(private x: T)`) — declare
-  the field and assign it. Type-only imports must be written `import type`, and
-  runtime imports inside tested files must be **relative with a `.ts`
-  extension**, because Node knows nothing about the `@shared` alias.
+  the field and assign it. Type-only imports must be written `import type`.
+- **`@shared/…` and extensionless relative imports resolve under `npm test` now,
+  and until this round they did not — which made a third of `src/main` untestable
+  by construction.** Both shapes are legal under `moduleResolution: bundler` and
+  are what electron-vite builds from; Node's own ESM resolver rejects both. So
+  `npm test` was green with 395 tests while this was true:
+
+  ```
+  $ node --test src/main/core/input/zz-probe.test.ts   # body: import('./index.ts')
+  Error [ERR_MODULE_NOT_FOUND]: Cannot find module '…\src\main\mpv\manager'
+      imported from '…\src\main\core\paths.ts'
+  ```
+
+  Every test that existed happened to sit on a file whose whole import graph
+  spells relative imports with an explicit `.ts`. `core/menu.ts`,
+  `core/input/index.ts`, `core/registry.ts` and `src/main/ipc.ts` could not be
+  loaded by any test at all, which is a large part of why this round found two
+  untested defects in the last two of those. `scripts/lib/ts-resolve.mjs` is a
+  resolve hook installed by every `node --test` script; it does what the bundler
+  does and nothing more, and it never invents a module — an unresolvable
+  specifier is handed back to Node so a typo still fails as a typo. Its own test
+  runs the same fixture with and without the hook and requires the first to fail.
+  Relative `.ts` extensions are still the house style; the hook is what makes a
+  wire file able to export a value.
 - Keep the logic you want to test free of Electron imports. Every core piece
   that has a test does this, which is why the suites exercise the real
   implementation rather than a copy of it.
@@ -1389,6 +1533,33 @@ Two smaller notes:
   *property* is M07's.** The two-window `--wid` embedding depends on the spawn
   values. Changing the VO is restart-scoped: write the setting, then
   `ctx.mpv.requestRestart()`.
+
+---
+
+### What the FOURTH round changed — and this one was driven by four real modules
+
+The first four feature modules landed. **The API held for the module authors:**
+27 files, all additions, every one inside their own `ownedFiles`, zero shared-file
+edits. Then the integrator needed 8 shared-file edits across 6 core rows to work
+around 5 API defects, and an audit found two of those "fixes" were not fixes.
+Everything below is a defect the pilots exposed, fixed ONCE in core so the
+remaining 34 modules meet a fixed API instead of each writing the workaround.
+
+| # | Was | Is |
+|---|---|---|
+| 52 | `FilterChainService.command()` took an **optional** `spec?` with **zero production adopters**, so in the shipped app the chain's model diverged from mpv on every live filter update: `command('rl-sharpen','strength','0.55','cas')` left `serialise()` returning `strength=0.4`, and the next foreign `set()` reverted the user's value. On the rebuild path (V08's `unsharp`, M03's own row) mpv received `unsharp=5:5:1.0` — the documented "transparently rebuilds" was a literal no-op | `spec` is **required**; the slot is updated before either path runs; the chain asserts the spec really mentions the option and value claimed. All four production call sites pass it. **`chain-sync.ts` (201 lines + 247 of test) is deleted** — M01/M09/M13/M14 would each have copied it. Every chain test asserts chain STATE and the string mpv holds |
+| 53 | `mustNotTouch` was enforced **nowhere**: the only hit in the tree checked that the listed paths were not stale. Appending three lines to `src/renderer/src/main.ts` — named in 40 of the 55 rows' `mustNotTouch` — gave `check:partition` exit 0 and `check:forbidden` exit 0, which is correct behaviour for both: they ask who OWNS a file, never who changed it | `scripts/check-ownership.mjs` attributes every changed file to a row. RULE A (cross-attribution) needs nothing declared; RULE B uses an actor from `--as`, `$RL_MODULE`, a `Module:` commit trailer or the branch name. In `npm run verify` and in CI twice. On that exact 3-line edit: partition 0, forbidden 0, **ownership 1**, naming the `mustNotTouch` entry and the contribution point that exists instead |
+| 54 | `seekbar-host.ts` passed `handle = ''` to every layer that did **not** claim the hit, and M25 did `chapters[Number(e.handle)]`. `Number('') === 0`, so the chapter caption rendered at every position, always as chapter 0: **24/24** sampled positions printed "Intro", and 22 of them contradicted M27's caption inside the same `#seekHover` box. `e2e-overlay.mjs` failed only if `tipFragments < 2`, and the buggy fragment was present at every x — so the assertion passed **vacuously** | the event is a discriminated union: `claimed: false` carries `handle?: undefined`, so "no handle" is unrepresentable as a valid index. Consumer and M27's de-duplication fixed. The e2e assertion is **positional**: it samples 24 x-positions and checks that M25 prints only where its own `hitTest` claimed, that one box never carries two chapter captions, that the caption names the right chapter, and that it **changes** across the bar |
+| 55 | duplicate layer `order` was unguarded and had already collided at n=4: `nav-chapters` and `nav-thumbnails` both registered at `order: 10`, and paint order, hit order and `z-index` all fell to registration order. Duplicate `id` was rejected; duplicate `order` was not | rejected at registration in **all three** cross-module ordering namespaces — seek-bar layers, menu sections (also already colliding, at 45), and now command `menuOrder` within a menu root. The two modules have distinct orders |
+| 56 | `profile-cleanup.ts`'s `norm()` filtered `'.'` and not `'..'`, so `appOwnedConflict('session/..')` returned null and `path.join(root,'session','..') === root` → `fs.rmSync(root, {recursive:true, force:true})`. The test titled "no recursive delete of the root" grepped for `/rmSync\(\s*dataRoot/`, a spelling this file has never contained | two independent guards, one of them one line from the `rmSync`, and behavioural tests: eight spellings of the escape refused, ten real targets still accepted, the profile still standing after an end-to-end run |
+| 57 | the invariant "the cleanup marker must never name the leaked host" had **no test**: adding `host:"redirector.gvt1.com"` to `cleanup.json` passed all 12 cleanup tests and all 395 | the test greps the **whole** post-cleanup profile — the user's own grep does not know which file it is reading — for the host, its path, the file, the `mip=` address and any hostname-shaped string, and then asserts the marker still says enough to be understood, so "contains no host" cannot be satisfied by an empty file |
+| 58 | `artCacheDir()` existed and §12 promised it to modules, and it was in neither `PathService` nor the `pathService` object, so `ctx.paths.artCacheDir()` was `undefined` | exposed, and `paths.test.ts` compares the **three** lists that have to agree — what §12 promises, what the interface declares, what the object carries — in both directions, each with a minimum-count guard so a rotted regex fails instead of reporting clean |
+| 59 | `audio-eq/index.ts` byte 1527 was a raw **NUL** (`const CUSTOM = '\0custom'`). With no `.gitattributes`, git classified a 326-line TypeScript file as binary: `git diff` said `Bin 0 -> 11349 bytes` and `git grep` answered "binary file matches" with no line numbers. **326 lines landed unreviewable** | sentinel replaced, `.gitattributes` with the **boolean** `diff` attribute (measured: `diff=typescript` does *not* work — git still autodetects binary), and `npm run check:control-chars` fails on any control character in tracked source |
+| 60 | `visibleWhen` landed in two shared files with **zero tests** against a 395-test suite; the only evidence was one hand-driven "35 rows → 24" | evaluated in main, shipped as a boolean per row, re-fetched only when the visibility vector moves — and tested, including a predicate that throws and the live-value case |
+| 61 | `CommandDescriptor.menuPath`/`menuOrder` had **no consumers**. Three modules declared a menu location; two were absent from the menu while their source said otherwise | the menu reads them (§6). Eight fixed roots, no nesting (a submenu's title would need a `core.*` i18n key a module may not register), `menuOrder` required and slot-unique. `core/menu-model.ts` is the pure half, so it is testable at all — `menu.ts` imports electron, which is why none of this had a test |
+| 62 | `modules.json.dependsOn` and code `dependsOn` were **different namespaces**: 16 rows spelled feature dependencies as row ids (`M07`) that no code can resolve, and mirroring your own row was a boot failure. No test compared them | one namespace, module ids on both sides, four documented outcomes (§1), and a cross-check in both directions. **That cross-check lied on its first run** — written against the old row-id spelling, its translation matched nothing and every expected list came out empty — so it now counts what it compared and fails at zero |
+| 63 | `PerFileService` could read and enumerate **nothing but the current file**, which makes N11's all-files mode and N16 inexpressible; the slice store was **uncapped and never evicted** while resume is capped at 500 and history at 2000; and there was no "persist my slice now" for data that must survive a crash | `slicesFor` / `sliceFor` / `storedFiles`, a 1000-entry cap evicted oldest-first, and `persistNow()` (§9). The first eviction was **exactly backwards** — `Date.now()` ties inside a millisecond and `bound()`'s stable sort then keeps the OLDEST; measured, the five entries dropped from 1005 were the five newest. All three stores are monotonically stamped |
+| 64 | **`npm test` could not load a third of `src/main`.** `@shared/…` and extensionless relative imports are legal under `moduleResolution: bundler` and rejected by Node's resolver, so `core/menu.ts`, `core/input/index.ts`, `core/registry.ts` and `src/main/ipc.ts` were untestable by construction — and a module wire file could carry types but never a value | a resolve hook in every `node --test` script (§13), with the alias asserted against both tsconfigs and all three vite targets, and a test that runs one fixture with and without the hook and requires the first to fail. **Its harness lied first too:** the child inherited `NODE_TEST_CONTEXT`, ran zero tests, printed nothing and exited 0, so "must fail without the hook" was satisfied by a process that did nothing |
 
 ---
 
