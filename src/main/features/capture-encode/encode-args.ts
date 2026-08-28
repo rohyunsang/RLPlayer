@@ -22,21 +22,75 @@
  * belongs to. They are the whole reason this is a table of literals and not a
  * template somebody tidies later:
  *
- *  1. `--ovcopts` / `--oacopts` / `--ofopts` are **COMMA**-separated.
- *     `lossless=0:quality=75` fails with "Invalid chars" (C11).
+ *  1. `--ovcopts` / `--oacopts` / `--ofopts` are **COMMA**-separated — and the
+ *     colon form is WORSE than the row says. C11 records `lossless=0:quality=75`
+ *     as failing with "Invalid chars"; on the pinned binary it does not fail at
+ *     all, it silently drops every option after the first:
+ *
+ *     ```
+ *     --ovcopts=lossless=0,quality=75 -> 37,688 bytes    (quality applied)
+ *     --ovcopts=lossless=0,quality=10 -> 14,124 bytes    (quality applied)
+ *     --ovcopts=lossless=0:quality=75 -> 37,688 bytes    end-file eof, no error
+ *     --ovcopts=lossless=0:quality=10 -> 37,688 bytes    IDENTICAL: q ignored
+ *     ```
+ *
+ *     So mpv is not the check. A test that runs a job and asserts "no error"
+ *     passes on a command line whose quality setting went nowhere; the only
+ *     honest check is on the generated STRING, which is what
+ *     `encode-args.test.ts` asserts for every builder.
  *  2. `pix_fmt` is **not** an AVOption. The pixel format is a `format=` node in
  *     the filter graph, never an `--ovcopts` key (C11).
  *  3. `qscale` is **not** a libavcodec AVOption — mpv prints "AVOption 'qscale'
  *     not found". MJPEG quality is `global_quality=<q*118>,flags=+qscale` (C09).
- *  4. A single-pass GIF **must** use `stats_mode=single`. `stats_mode=diff`
- *     produced no output and no error, because `palettegen` only emits at EOF
- *     and deadlocks a one-shot graph; `paletteuse=new=1` is required (C14).
+ *  4. A single-pass GIF uses `stats_mode=single` and `paletteuse=new=1` (C14).
+ *     C14 says `stats_mode=diff` "produced no output and no error"; on the
+ *     pinned binary it **did** produce output — an 856,011-byte GIF for
+ *     `single` against a 437,060-byte one for `diff`, both `end-file eof`. The
+ *     row's conclusion is kept because `single` is the form that was verified
+ *     end to end and is a palette per segment rather than one accumulated at
+ *     EOF, but the stated reason no longer reproduces, so nothing here relies on
+ *     `diff` failing loudly.
  *  5. **A Windows absolute path cannot appear inside a lavfi option.** `C\:/…`
  *     and `C\\:/…` both fail graph parsing (§7.7 trap 8, C10). Only a bare
  *     relative filename with the child's cwd set has ever worked — and
  *     `SecondaryEngineOptions` has no `cwd`, which is why `sheetArgs()` below
  *     ships without timestamps and `timestampedSheetArgs()` is quarantined
  *     behind `SHEET_TIMESTAMPS_NEED_CWD`.
+ *
+ * ...and one MEASURED CORRECTION to the row that this file used to follow, made
+ * against the pinned binary (mpv v0.41.0-923-g7b8915bc1, FFmpeg N-126125) over
+ * JSON IPC exactly the way `ctx.engine.spawn()` spawns:
+ *
+ *  6. **No builder here emits the source file, and none of them override
+ *     `--idle`.** The first draft of this module did both — it appended
+ *     `['--', file]` and put `--idle=no` in `ENCODE_OVERRIDES` so mpv would
+ *     encode on startup and exit by itself. That cannot work through
+ *     `ctx.engine.spawn()`, and the failure is not subtle once measured:
+ *
+ *     ```
+ *     2 s clip, --idle=no, file on the command line:
+ *       [161ms]   mpv exited, exit code 0, b.mp4 = 15269 bytes (a VALID file)
+ *       [15016ms] core's client.connect() gave up:  "connect timeout"
+ *                 -> ctx.engine.spawn() THREW for a job that had succeeded,
+ *                    15 s after it finished, with no progress reported at all
+ *     ```
+ *
+ *     `client.connect()` retries a vanished pipe for a fixed 15 s
+ *     (`src/main/mpv/client.ts:36`), so every job shorter than the connect
+ *     handshake reports failure late instead of success early. The same run in
+ *     the shape this file emits now — core's `--idle=yes` left alone, encode
+ *     options only, the source arriving by `loadfile` over IPC — connected at
+ *     145 ms, delivered 3150 `time-pos` samples on a 60 s job, and ended with
+ *     `end-file{reason:'eof'}`. Range options still apply: `--start=2 --end=4`
+ *     given on the command line produced a 2 s output from a 6 s source loaded
+ *     afterwards (26,733 bytes against the 6 s control's 67,357).
+ *
+ *     The other half of that measurement is why `runner.ts` waits for the
+ *     PROCESS and not for the file: **the output is not valid until mpv exits.**
+ *     At `end-file` the WebP was 0 bytes, the MP3 0, the M4A 44 and the GIF
+ *     786,432; after `quit` they were 42,742 / 72,768 / 69,603 / 856,011. A
+ *     size-greater-than-zero check run at EOF would have announced a truncated
+ *     container as a success.
  */
 
 // ---------------------------------------------------------------------------
@@ -66,39 +120,86 @@ export const ENGINE_APPLIED_OPTIONS: readonly string[] = [
 ]
 
 /**
- * The three core defaults an ENCODE job must override, and why each one.
+ * The core defaults an encode job overrides, and — as important — the one it
+ * deliberately does NOT.
  *
  * mpv applies command-line options left to right and the last occurrence wins;
- * `ctx.engine.spawn()` puts `opts.args` after its own, so these three take
- * effect. They are stated in one place because getting any of them wrong
- * produces a file that exists and does not play.
+ * `ctx.engine.spawn()` puts `opts.args` after its own
+ * (`src/main/core/mpv/engine.ts`: `[pipe, ...ENGINE_BASE_ARGS, ...opts.args]`),
+ * so anything here takes effect.
  *
- *  - `--idle=no`: core applies `--idle=yes`, which is right for M27's
- *    thumbnailer (a pinned process answering hover requests) and wrong for an
- *    encode. Encode mode finalises the container — the MP4 `moov` atom, the
- *    Matroska cues — when the encoder is torn down, so a job that reaches EOF
- *    and then sits idle has written a file whose trailer is missing. Letting mpv
- *    exit by itself is the only path that finalises without depending on
- *    `close()`'s fixed 800 ms kill escalation.
+ *  - **`--idle` is NOT overridden.** Core's `--idle=yes` is what keeps the IPC
+ *    pipe alive long enough to connect to, observe progress on, and cancel. See
+ *    fact 6 in the file header for the measurement that settled it: with
+ *    `--idle=no` a 2 s job finished in 161 ms and `spawn()` then threw 15 s
+ *    later for a job that had already written a valid file. The job is started
+ *    by `loadfile` over IPC instead, and finalised by `quit` — which is
+ *    `engine.close()`, and which the runner awaits before it believes the
+ *    output.
  *  - `--keep-open=no`: `keep-open=yes` pauses at the last frame instead of
- *    ending the file, which with `--idle=no` would hang the job for ever.
+ *    ending the file, so `end-file` — the runner's completion signal and its
+ *    only failure channel — would never arrive.
  *  - `--terminal=yes --msg-level=all=error`: core sets `--terminal=no
  *    --msg-level=all=no`, so an encoder that refuses to initialise (C19's whole
  *    subject) fails silently. This is the exact pair the playing mpv already
  *    runs with in `src/main/index.ts`, and `ctx.engine.spawn()` pipes the
- *    child's stderr into the log, so a failure becomes readable.
+ *    child's stderr into the log, so a failure becomes readable in a bug report.
+ *    (It is readable in the LOG only: the engine gives the module no access to
+ *    the child's stderr and no exit code, which is why `end-file`'s `file_error`
+ *    is what the runner reports to the user. Measured on this machine:
+ *    `h264_nvenc`, `h264_qsv` and `h264_amf` all answer
+ *    `end-file{reason:'error', file_error:'video output initialization failed'}`
+ *    while `libx264`, `libx265`, `libvpx-vp9`, `libsvtav1` and `h264_mf` answer
+ *    `eof`. That is C19's probe, and it needs no exit code.)
  */
 export const ENCODE_OVERRIDES: readonly string[] = [
-  '--idle=no',
   '--keep-open=no',
   '--terminal=yes',
   '--msg-level=all=error'
 ]
 
+/**
+ * C19's probe source, `av://lavfi:testsrc=duration=0.2` verbatim from the row.
+ *
+ * It is a `loadfile` argument, not a command-line one, for the same reason as
+ * every other source here.
+ */
+export const PROBE_SOURCE = 'av://lavfi:testsrc=duration=0.2'
+
 /** True when `args` re-states an option `ctx.engine.spawn()` already applies. */
 export function conflictsWithEngineArgs(args: readonly string[]): string[] {
   const names = args.filter((a) => a.startsWith('--')).map((a) => a.split('=')[0] as string)
   return names.filter((n) => ENGINE_APPLIED_OPTIONS.includes(n))
+}
+
+/**
+ * The two of core's options an encode job is ALLOWED to re-state, and why only
+ * these two.
+ *
+ * `--terminal` and `--msg-level` are diagnostics: core silences the child and an
+ * encode needs its errors in the log, and re-stating them changes nothing about
+ * the process's identity or lifecycle. The other five are load-bearing:
+ * `--idle=yes` is what keeps the pipe alive to connect, observe and cancel on
+ * (measured: with `--idle=no` a 2 s job exited at 161 ms and `spawn()` threw at
+ * 15,016 ms); `--no-config` keeps a `vf` in the user's mpv.conf out of every
+ * export; `--load-scripts=no` and `--ytdl=no` are the zero-network-at-rest
+ * promise applied to every process this app starts; and `--input-ipc-server` is
+ * the random pipe name that keeps mpv's "explicitly insecure" IPC — which
+ * exposes `run` — off a guessable path.
+ */
+export const ENGINE_OVERRIDABLE: readonly string[] = ['--terminal', '--msg-level']
+
+/**
+ * The options a job must never re-state. Returns the offenders so the message
+ * can name them.
+ *
+ * This is called at run time rather than only asserted in a test, because the
+ * failure it prevents is silent in the direction that matters: mpv takes the
+ * last occurrence, reports success, and the job either hangs (idle), picks up
+ * the user's filter chain (no-config) or resolves a hostname (ytdl).
+ */
+export function forbiddenEngineOverrides(args: readonly string[]): string[] {
+  return conflictsWithEngineArgs(args).filter((n) => !ENGINE_OVERRIDABLE.includes(n))
 }
 
 // ---------------------------------------------------------------------------
@@ -173,8 +274,6 @@ export function lavfi(graph: string, what: string): string {
 // ---------------------------------------------------------------------------
 
 export interface SourceRange {
-  /** Absolute path or URL of the source. Passed positionally after `--`. */
-  readonly file: string
   readonly startSec: number
   readonly endSec: number
 }
@@ -445,7 +544,7 @@ export function clipArgs(input: ClipInput): string[] {
   args.push(`--oac=${p.acodec}`)
   if (p.aopts.length > 0) args.push(`--oacopts=${optList(p.aopts)}`)
   if (typeof input.aid === 'number' && input.aid > 0) args.push(`--aid=${input.aid}`)
-  args.push(`--o=${input.outputFile}`, '--', input.file)
+  args.push(`--o=${input.outputFile}`)
   return args
 }
 
@@ -502,7 +601,7 @@ export function audioArgs(input: AudioInput): string[] {
   ]
   if (input.format.opts.length > 0) args.push(`--oacopts=${optList(input.format.opts)}`)
   if (typeof input.aid === 'number' && input.aid > 0) args.push(`--aid=${input.aid}`)
-  args.push(`--o=${input.outputFile}`, '--', input.file)
+  args.push(`--o=${input.outputFile}`)
   return args
 }
 
@@ -555,9 +654,7 @@ export function gifArgs(input: GifInput): string[] {
     '--of=gif',
     '--ovc=gif',
     '--ofopts=loop=0',
-    `--o=${input.outputFile}`,
-    '--',
-    input.file
+    `--o=${input.outputFile}`
   ]
 }
 
@@ -604,9 +701,7 @@ export function webpArgs(input: WebpInput): string[] {
       ['lossless', input.lossless ? '1' : '0'],
       ['quality', String(clamp(Math.round(input.quality), 0, 100))]
     ])}`,
-    `--o=${input.outputFile}`,
-    '--',
-    input.file
+    `--o=${input.outputFile}`
   ]
 }
 
@@ -626,6 +721,27 @@ export interface BurstInput extends SourceRange {
   readonly jpegQscale: number
   /** Drop `--sid=no` to burn subtitles into the frames (C09's own note). */
   readonly burnSubs: boolean
+}
+
+/**
+ * How many files C09 is about to write, and the ceiling on it.
+ *
+ * The range for a burst defaults to the WHOLE FILE, because that is what
+ * "consecutive capture, offline batch" means when no A-B loop is set — and at
+ * the default 5 s interval a two-hour film is 1440 PNGs, several hundred
+ * megabytes, in a folder the user has to clean up by hand. Encode mode runs
+ * faster than realtime, so there is no natural pause in which to notice.
+ *
+ * The cap is therefore a refusal with an actionable message rather than a
+ * progress bar that fills a disk. It is a pure function so the message can carry
+ * the real number.
+ */
+export const BURST_MAX_FRAMES = 2000
+
+export function burstFrameCount(startSec: number, endSec: number, intervalSec: number): number {
+  const span = Math.max(0, endSec - startSec)
+  const interval = Math.max(0.05, intervalSec)
+  return Math.max(1, Math.floor(span / interval) + 1)
 }
 
 export function burstArgs(input: BurstInput): string[] {
@@ -649,7 +765,7 @@ export function burstArgs(input: BurstInput): string[] {
     // Fact 3: `qscale` is not an AVOption.
     args.push('--ovc=mjpeg', `--ovcopts=${mjpegQualityOpts(input.jpegQscale)}`)
   }
-  args.push(`--o=${input.outputPattern}`, '--', input.file)
+  args.push(`--o=${input.outputPattern}`)
   return args
 }
 
@@ -658,7 +774,6 @@ export function burstArgs(input: BurstInput): string[] {
 // ---------------------------------------------------------------------------
 
 export interface SheetInput {
-  readonly file: string
   readonly outputFile: string
   readonly durationSec: number
   readonly cols: number
@@ -716,9 +831,7 @@ export function sheetArgs(input: SheetInput): string[] {
     // waiting for the frame count to be off by one.
     '--ofopts=update=1',
     '--ovc=png',
-    `--o=${input.outputFile}`,
-    '--',
-    input.file
+    `--o=${input.outputFile}`
   )
   return args
 }
@@ -772,9 +885,7 @@ export function timestampedSheetArgs(
     '--of=image2',
     '--ofopts=update=1',
     '--ovc=png',
-    `--o=${input.outputFile}`,
-    '--',
-    input.file
+    `--o=${input.outputFile}`
   )
   return args
 }
@@ -789,27 +900,24 @@ export function timestampedSheetArgs(
  * on the GPU and the driver, so every hardware preset is probe-then-fall-back and
  * never a default.
  *
- * `--idle=yes` is left alone here — that is core's default and this call does NOT
- * add `ENCODE_OVERRIDES`. A 0.2 s encode with `--idle=no` can finish before
- * `ctx.engine.spawn()`'s IPC connect lands, and a spawn that fails to connect
- * retries for 15 s and then throws, which would make a working encoder look
- * broken. The probe therefore stays idle-resident, reports through `end-file`,
- * and is closed by the caller.
+ * There is no "exit code" to cache: `SecondaryEngine` exposes none. The signal
+ * is `end-file`, and it is a good one — measured on this machine, `h264_nvenc`,
+ * `h264_qsv` and `h264_amf` each answered
+ * `{reason:'error', file_error:'video output initialization failed'}` and wrote
+ * nothing, while `h264_mf` (Media Foundation, the vendor-agnostic row) answered
+ * `{reason:'eof'}` and wrote 16,371 bytes. So on a box with no discrete GPU the
+ * probe correctly rejects three encoders and accepts one.
+ *
+ * These args carry `ENCODE_OVERRIDES` like every other job — `--keep-open=no` is
+ * what makes `end-file` arrive at all — and, like every other job, no source:
+ * the probe is started with `loadfile PROBE_SOURCE`.
  */
 export function hardwareProbeArgs(preset: ClipPreset, outputFile: string): string[] {
-  const args = [
-    '--terminal=yes',
-    '--msg-level=all=error',
-    '--no-audio',
-    '--of=mp4',
-    `--ovc=${preset.vcodec}`
-  ]
+  const args = [...ENCODE_OVERRIDES, '--no-audio', '--of=mp4', `--ovc=${preset.vcodec}`]
   if (preset.vopts.length > 0) args.push(`--ovcopts=${optList(preset.vopts)}`)
   args.push(
     lavfi('format=yuv420p', 'encoder probe'),
-    `--o=${outputFile}`,
-    '--',
-    'av://lavfi:testsrc=duration=0.2'
+    `--o=${outputFile}`
   )
   return args
 }
