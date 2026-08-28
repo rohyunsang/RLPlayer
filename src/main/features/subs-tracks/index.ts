@@ -53,7 +53,15 @@ const mod: FeatureModule = {
   // call ctx.mpv.command(['sub-reload']) and blow away M17's track selection.
   // It is owned properly now, together with the two commands that add and
   // remove the external tracks M17 tracks in `sid`.
-  ownsCommands: ['sub-reload', 'sub-add', 'sub-remove'],
+  ownsCommands: ['sub-reload', 'sub-add', 'sub-remove', 'rescan-external-files'],
+  /**
+   * `rescan-external-files` rescans for external AUDIO files too, so it writes
+   * `aid` — M11's property — as a side effect. `commands.test.ts` catches
+   * exactly that: a module owning a command whose side effect lands in a third
+   * module's property. Declaring it here is the visible half; M11's arbiter
+   * answers the request.
+   */
+  requestsProperties: ['aid', 'subs-with-matching-audio'],
 
   setup(c): void {
     ctx = c

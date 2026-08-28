@@ -5,6 +5,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   CORE_OWNERSHIP,
+  isBannedCommand,
+  propertiesWrittenBy,
   OwnerMap,
   isChainCommand,
   propertyWrittenBy
@@ -110,13 +112,66 @@ test('requestsProperties gates the mediated path', () => {
   assert.equal(map.mayRequest('audio-eq', 'aid'), false)
 })
 
-test('property-writing commands are recognised, seeks are not', () => {
+test('property-writing commands are recognised, by name AND by side effect', () => {
   assert.equal(propertyWrittenBy(['set_property', 'aid', 2]), 'aid')
   assert.equal(propertyWrittenBy(['cycle', 'sid']), 'sid')
   assert.equal(propertyWrittenBy(['add', 'chapter', 1]), 'chapter')
   assert.equal(propertyWrittenBy(['change-list', 'glsl-shaders', 'append', 'x']), 'glsl-shaders')
-  assert.equal(propertyWrittenBy(['seek', 5, 'exact']), null)
   assert.equal(propertyWrittenBy(['loadfile', 'x.mkv', 'replace']), null)
+})
+
+/**
+ * THIS TEST IS THE ONE THAT WAS MISSING, and its previous shape actively
+ * asserted the bug: it said `propertyWrittenBy(['seek', 5, 'exact'])` must be
+ * `null`, i.e. that a seek writes nothing. Running as an unrelated module,
+ * `['frame-step']` and `['frame-back-step']` therefore flipped core-owned
+ * `pause` (measured false -> true), `['ab-loop']` set M26's `ab-loop-a`
+ * ("no" -> 2.466667) and `['apply-profile','fast']` rewrote M06's `scale`
+ * (lanczos -> bilinear). No throw, no refusal counted, nothing logged.
+ */
+test('commands that write a property WITHOUT naming it are caught', () => {
+  assert.deepEqual(propertiesWrittenBy(['frame-step']), ['pause', 'time-pos'])
+  assert.deepEqual(propertiesWrittenBy(['frame-back-step']), ['pause', 'time-pos'])
+  assert.deepEqual(propertiesWrittenBy(['ab-loop']), ['ab-loop-a', 'ab-loop-b'])
+  assert.deepEqual(propertiesWrittenBy(['seek', 5, 'exact']), ['time-pos'])
+  assert.deepEqual(propertiesWrittenBy(['sub-seek', 1]), ['time-pos'])
+  assert.deepEqual(propertiesWrittenBy(['ao-reload']), ['audio-device'])
+  // The prefix forms have to reach the table too, or the guard is one word away
+  // from being bypassed.
+  assert.deepEqual(propertiesWrittenBy(['no-osd', 'frame-step']), ['pause', 'time-pos'])
+  assert.deepEqual(propertiesWrittenBy(['async', 'no-osd', 'ab-loop']), ['ab-loop-a', 'ab-loop-b'])
+  // Underscore spelling, which mpv accepts.
+  assert.deepEqual(propertiesWrittenBy(['frame_step']), ['pause', 'time-pos'])
+})
+
+test('apply-profile is banned outright: its side effects are unbounded', () => {
+  // Measured: ['apply-profile','fast'] rewrote `scale` lanczos -> bilinear from
+  // a module that owns nothing. There is no way to police the set of properties
+  // a profile touches, so nobody may issue it.
+  assert.equal(isBannedCommand(['apply-profile', 'fast']), true)
+  assert.equal(isBannedCommand(['no-osd', 'apply-profile', 'fast']), true)
+  assert.equal(isBannedCommand(['screenshot-raw']), true)
+})
+
+test('a command that writes a property is refused when the module owns neither', () => {
+  const map = new OwnerMap([
+    ...CORE_OWNERSHIP,
+    { id: 'nav-seek', ownsCommands: ['seek', 'frame-step', 'frame-back-step', 'revert-seek'] },
+    { id: 'nav-chapters', ownsProperties: ['chapter'] }
+  ])
+  const refused: string[] = []
+  // M25 seeks "through M24's command"; issuing it itself is refused by name.
+  assert.equal(
+    map.assertCommand('nav-chapters', 'frame-step', false, (m) => refused.push(m)),
+    false
+  )
+  assert.match(refused.join(''), /nav-seek/)
+  // And the side effect is caught even for a module M24 would allow the command
+  // to: `pause` is core's, so M24 has to mediate rather than write it.
+  assert.equal(
+    map.assertWrite('nav-seek', 'pause', false, () => {}),
+    false
+  )
 })
 
 test('raw vf/af commands are recognised so only the chains may issue them', () => {
@@ -148,15 +203,17 @@ function manifest(): ManifestModule[] {
 /** Declared names, read out of the module source rather than imported —
  *  importing a module would drag Electron in. */
 function declaredList(dir: string, field: 'ownsProperties' | 'ownsCommands'): string[] {
-  const src = fs.readFileSync(path.join(repo, 'src', 'main', 'features', dir, 'index.ts'), 'utf8')
+  const raw = fs.readFileSync(path.join(repo, 'src', 'main', 'features', dir, 'index.ts'), 'utf8')
+  // Comments are stripped from the WHOLE FILE before the field is located, not
+  // from the matched body afterwards. Stripping afterwards looks equivalent and
+  // is not: a doc comment above the field that quotes it -- "`ownsCommands: []`
+  // meant assertCommand returned true" is a real one in nav-seek -- matches
+  // first, captures nothing, and the test then cheerfully reports that the
+  // module declares no commands. It found `[]` in a comment and believed it.
+  const src = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
   const m = new RegExp(`${field}:\\s*\\[([\\s\\S]*?)\\]`).exec(src)
   if (!m) return []
-  // Comments FIRST. These arrays are exactly where a module author explains why
-  // it owns something, and an English apostrophe ("loadfile's options map")
-  // reads as a quoted string to a naive scraper -- which is a test that fails
-  // on a comment, i.e. the most annoying kind of false positive there is.
-  const body = (m[1] ?? '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
-  return [...body.matchAll(/'([^']+)'/g)].map((x) => x[1] as string)
+  return [...(m[1] ?? '').matchAll(/'([^']+)'/g)].map((x) => x[1] as string)
 }
 
 const declaredProperties = (dir: string): string[] => declaredList(dir, 'ownsProperties')

@@ -50,10 +50,20 @@ interface Claim {
  * `propertiesWrittenBy` — completely unguarded. `['no-osd','vf','set',...]`
  * walked past the chain guard the same way.
  *
- * Measured detail worth keeping: mpv accepts exactly ONE prefix over JSON IPC.
- * `['async','no-osd','set',...]` is `invalid parameter`. We strip a RUN of them
- * anyway — over-stripping can only make the guard stricter, and a command mpv
- * would reject is not worth a hole.
+ * CORRECTION, re-measured against the same pinned binary because the previous
+ * revision of this comment was simply wrong. It claimed mpv accepts exactly ONE
+ * prefix and that `['async','no-osd','set',...]` is `invalid parameter`. It is
+ * not. All four of these returned `error: success` AND wrote the property:
+ *
+ *   ['async','no-osd','set','speed','1.5']    -> success, speed 1 -> 1.5
+ *   ['no-osd','async','set','speed','1.75']   -> success, speed 1 -> 1.75
+ *   ['osd-msg','raw','set','speed','2.0']     -> success, speed 1 -> 2
+ *   ['async','async','set','speed','2.25']    -> success, speed 1 -> 2.25
+ *
+ * The guard below already strips a RUN of prefixes, so it was correct while the
+ * comment was not — which is the dangerous shape: the next person to "simplify"
+ * the loop to a single strip would have had a comment telling them it was safe.
+ * Stripping a run is the required behaviour, not belt and braces.
  */
 export const MPV_COMMAND_PREFIXES: readonly string[] = [
   'osd-auto',
@@ -104,7 +114,89 @@ export const CHAIN_COMMANDS = new Set(['vf', 'af', 'vf-command', 'af-command'])
  * megabyte of base64 the pipe reader does not survive. It has no owner because
  * there is no correct use of it here.
  */
-export const BANNED_COMMANDS = new Set(['screenshot-raw'])
+export const BANNED_COMMANDS = new Set([
+  'screenshot-raw',
+  /**
+   * `apply-profile` writes an UNBOUNDED set of properties in one call, and it
+   * was measured doing exactly that from an unrelated module:
+   * `['apply-profile','fast']` rewrote `scale` from `lanczos` to `bilinear` —
+   * M06's property — with no throw and no refusal counted, because the owner map
+   * only ever looked at commands whose second argument NAMES a property.
+   *
+   * There is no way to police it: the set of properties a profile touches lives
+   * inside mpv, and we run with `--no-config` so the only profiles available are
+   * mpv's built-ins, every one of which stomps somebody's owned property. A
+   * module that wants a preset applies its own properties.
+   */
+  'apply-profile'
+])
+
+/**
+ * COMMANDS THAT WRITE PROPERTIES WITHOUT NAMING THEM.
+ *
+ * This table is the fix for the widest remaining ownership hole. `assertCommand`
+ * only guarded commands that had an OWNER, and `propertiesWrittenBy` only
+ * understood commands whose second element is a property name — so from an
+ * unrelated module, every one of these landed silently:
+ *
+ *   ['frame-step']       -> flipped core-owned `pause` (measured: false -> true)
+ *   ['frame-back-step']  -> same
+ *   ['ab-loop']          -> set M26's `ab-loop-a` (measured: "no" -> 2.466667)
+ *   ['sub-seek', 1]      -> seeks, and M24 owns seeking
+ *
+ * No throw, no refusal counted, nothing in the log.
+ *
+ * The command NAMES are checked against the pinned binary's own
+ * `--input-cmdlist` by `commands.test.ts` (via docs/parity/mpv-commands.json),
+ * so a typo or a command mpv renamed fails CI rather than silently guarding
+ * nothing. The side EFFECTS have to be hand-written — `--input-cmdlist` prints
+ * argument signatures, not what they mutate — and each line below was verified
+ * over JSON IPC by reading the property before and after.
+ */
+export const COMMAND_SIDE_EFFECTS: Readonly<Record<string, readonly string[]>> = {
+  // Seeking. §3.6's M25 row says N51 "seeks through M24's command, it does not
+  // own seeking"; that sentence is enforced by M24 owning these four.
+  seek: ['time-pos'],
+  'revert-seek': ['time-pos'],
+  'frame-step': ['pause', 'time-pos'],
+  'frame-back-step': ['pause', 'time-pos'],
+  // §1.5: `sub-step` shifts subtitle TIMING, `sub-seek` seeks VIDEO. Both are
+  // M20's, and keeping the confusable pair with one owner is the point.
+  'sub-seek': ['time-pos'],
+  'sub-step': ['sub-delay'],
+  // A-B loop. M26 owns the properties, so it owns the command that sets them.
+  'ab-loop': ['ab-loop-a', 'ab-loop-b'],
+  // Track lists. M11 owns aid/vid, M17 owns sid.
+  'sub-add': ['sid'],
+  'sub-remove': ['sid'],
+  'sub-reload': ['sid'],
+  'audio-add': ['aid'],
+  'audio-remove': ['aid'],
+  'audio-reload': ['aid'],
+  'video-add': ['vid'],
+  'video-remove': ['vid'],
+  'video-reload': ['vid'],
+  'rescan-external-files': ['sid', 'aid'],
+  // The queue. M28 already owns `playlist-*` as a glob; the effects are listed
+  // so the table is the single place to read "what does this touch".
+  'playlist-next': ['playlist-pos'],
+  'playlist-prev': ['playlist-pos'],
+  'playlist-next-playlist': ['playlist-pos'],
+  'playlist-prev-playlist': ['playlist-pos'],
+  'playlist-play-index': ['playlist-pos'],
+  'playlist-shuffle': ['playlist-pos'],
+  'playlist-unshuffle': ['playlist-pos'],
+  'playlist-remove': ['playlist-pos'],
+  'playlist-move': ['playlist-pos'],
+  'playlist-clear': ['playlist-pos'],
+  stop: ['path', 'playlist-pos'],
+  // The audio output reinit round-trip, which §3.6 gives to M15 outright.
+  'ao-reload': ['audio-device'],
+  // mpv's own resume file. Ours is core/state/per-file; mpv writing a second one
+  // behind it is how two resume positions disagree.
+  'write-watch-later-config': ['path'],
+  'delete-watch-later-config': ['path']
+}
 
 /**
  * The core pieces are owners too (§3.7's first four rows). Seeding them means
@@ -134,7 +226,16 @@ export const CORE_OWNERSHIP: readonly OwnershipDeclaration[] = [
       'keydown',
       'keyup',
       'run',
-      'subprocess'
+      'subprocess',
+      // The OSD is `ctx.osd`. A module issuing show-text directly bypasses the
+      // per-kind enable flags the user set in preferences.
+      'show-text',
+      'show-progress',
+      'print-text',
+      // mpv's own resume file. Ours is core/state/per-file; a module writing
+      // mpv's as well is how two resume positions come to disagree.
+      'write-watch-later-config',
+      'delete-watch-later-config'
     ]
   },
   { id: 'core/vf-chain', ownsProperties: ['vf'] },
@@ -149,6 +250,26 @@ export class OwnerMap {
   private readonly requests = new Map<string, Set<string>>()
   /** Production drops rather than throws; `refusals()` surfaces the count. */
   private readonly refusals = new Map<string, number>()
+  /**
+   * Whether an arbiter is actually REGISTERED for a property.
+   *
+   * The owner map cannot know this on its own — arbiters live on the bus — and
+   * not knowing it is what made `writeHint` lie. It promised "video-decode's
+   * arbiter will answer" to anyone who had declared the property in
+   * `requestsProperties`, without checking that one existed; in that exact case
+   * `requestSet` returned `{ ok: false, reason: 'no-arbiter' }` and the
+   * developer had followed the error message into a dead end.
+   */
+  private hasArbiter: (property: string) => boolean = () => false
+
+  /** Wired once by core/mpv/bus, which is where the arbiters actually live. */
+  setArbiterProbe(fn: (property: string) => boolean): void {
+    this.hasArbiter = fn
+  }
+
+  arbiterRegistered(property: string): boolean {
+    return this.hasArbiter(property)
+  }
 
   constructor(decls: readonly OwnershipDeclaration[]) {
     this.fold(
@@ -335,9 +456,21 @@ function writeHint(map: OwnerMap, moduleId: string, property: string): string {
   const owner = map.ownerOf(property)
   if (!owner) return 'Reads are unrestricted; only writes are owned.'
   if (map.mayRequest(moduleId, property)) {
+    // The hint MUST NOT promise an arbiter that is not registered. It used to,
+    // and `requestSet` then answered 'no-arbiter' — the error message sent you
+    // to a call that could not succeed.
+    if (map.arbiterRegistered(property)) {
+      return (
+        `Use ctx.mpv.requestSet('${property}', value, reason) — you declared it in ` +
+        `requestsProperties and ${owner} has registered an arbiter, so it will answer ` +
+        `(a refusal is a normal outcome; handle it).`
+      )
+    }
     return (
-      `Use ctx.mpv.requestSet('${property}', value, reason) — you declared it in ` +
-      `requestsProperties, so ${owner}'s arbiter will answer (a refusal is a normal outcome).`
+      `You declared '${property}' in requestsProperties, but ${owner} has NOT registered an ` +
+      `arbiter for it, so ctx.mpv.requestSet('${property}', …) would answer 'no-arbiter'. ` +
+      `Call ${owner}'s mediator command, or open a one-line PR against ${owner} adding ` +
+      `ctx.mpv.arbitrate('${property}', …) in its setup().`
     )
   }
   return (
@@ -409,6 +542,12 @@ export function propertiesWrittenBy(args: readonly unknown[]): string[] {
     const name = args[found.at + 1]
     return typeof name === 'string' ? [name] : []
   }
+
+  // Commands that write a property without naming it. This is the table that
+  // did not exist, and its absence is why ['frame-step'] could flip core's
+  // `pause` from an unrelated module without a refusal being counted.
+  const implied = COMMAND_SIDE_EFFECTS[verb]
+  if (implied) return [...implied]
 
   if (verb === 'loadfile' || verb === 'loadlist') {
     // loadfile url [flags [index [options]]] — options is the 5th element.

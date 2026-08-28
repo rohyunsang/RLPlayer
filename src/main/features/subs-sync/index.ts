@@ -17,6 +17,9 @@ async function setDelay(value: number): Promise<void> {
 
 const mod: FeatureModule = {
   id: 'subs-sync',
+  // §1.5: `sub-step` shifts subtitle TIMING and `sub-seek` seeks VIDEO. The
+  // confusable pair has one owner on purpose — that is what stops the bug.
+  ownsCommands: ['sub-seek', 'sub-step'],
   ownsProperties: [
     'sub-delay',
     'secondary-sub-delay',

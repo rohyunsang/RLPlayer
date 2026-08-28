@@ -70,7 +70,10 @@ test('a word that merely looks like a prefix is left alone', () => {
   // Stripping too eagerly would make ordinary commands look like writes.
   assert.equal(propertyWrittenBy(['bogus-prefix', 'set', 'speed', 1]), null)
   assert.equal(propertyWrittenBy(['osd', 'set', 'speed', 1]), null)
-  assert.equal(propertyWrittenBy(['seek', 5, 'exact']), null)
+  // `seek` DOES write a property -- `time-pos` -- through COMMAND_SIDE_EFFECTS.
+  // This line used to assert `null`, which is the bug written down as a test:
+  // it is why `assertCommand('nav-chapters','seek')` was never reached.
+  assert.equal(propertyWrittenBy(['seek', 5, 'exact']), 'time-pos')
   assert.equal(commandNameOf(['seek', 5, 'exact']), 'seek')
   assert.equal(commandNameOf(['no-osd', 'seek', 5]), 'seek')
 })
@@ -210,9 +213,19 @@ test('the hint tells an undeclared caller to declare, not to call a dead path', 
     () => map.assertWrite('audio-eq', 'aid', true, noop),
     /Add 'aid' to your requestsProperties/
   )
+  // NO arbiter is registered for `aid` in this fixture, and the hint must say
+  // so. It used to promise "audio-tracks's arbiter will answer" regardless,
+  // while `requestSet` answered 'no-arbiter' -- the error message walked the
+  // developer into the one call that could not succeed.
   assert.throws(
     () => map.assertWrite('video-hdr', 'aid', true, noop),
-    /you declared it in requestsProperties/
+    /has NOT registered an arbiter/
+  )
+  // With one registered, the hint flips to the mediated call.
+  map.setArbiterProbe((p) => p === 'aid')
+  assert.throws(
+    () => map.assertWrite('video-hdr', 'aid', true, noop),
+    /has registered an arbiter/
   )
   assert.throws(
     () => map.assertWrite('audio-eq', 'nobody-owns-this', true, noop),

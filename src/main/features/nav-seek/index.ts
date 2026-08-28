@@ -45,6 +45,19 @@ function format(sec: number): string {
 const mod: FeatureModule = {
   id: 'nav-seek',
   ownsProperties: [],
+  /**
+   * M24 OWNS SEEKING, and until now nothing said so in a form the guard could
+   * read. `ownsCommands: []` meant `assertCommand('nav-chapters','seek')`
+   * returned true — §3.6's "N51 seeks through M24's command, it does not own
+   * seeking" was prose, exactly like the `sub-reload` bug that was fixed one
+   * round earlier with a mechanism that was then not used.
+   *
+   * `frame-step`/`frame-back-step` are here rather than with core because they
+   * ARE seeking; they also write core's `pause` as a side effect, which
+   * COMMAND_SIDE_EFFECTS declares, so M24 has to mediate that with core rather
+   * than the write landing silently.
+   */
+  ownsCommands: ['seek', 'revert-seek', 'frame-step', 'frame-back-step'],
 
   setup(c): void {
     ctx = c

@@ -14,6 +14,7 @@
     "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
+      "src/main/core/no-network.test.ts",
       "src/main/core/no-network.ts",
       "src/main/core/paths.ts"
     ],
@@ -170,6 +171,7 @@
     ],
     "ownedCommands": [
       "define-section",
+      "delete-watch-later-config",
       "disable-section",
       "enable-section",
       "keybind",
@@ -179,10 +181,14 @@
       "load-config-file",
       "load-input-conf",
       "load-script",
+      "print-text",
       "quit",
       "quit-watch-later",
       "run",
-      "subprocess"
+      "show-progress",
+      "show-text",
+      "subprocess",
+      "write-watch-later-config"
     ],
     "requestsProperties": [],
     "arbitrates": [],
@@ -192,6 +198,7 @@
     "ownedFiles": [
       "src/main/core/mpv/arg-owner.test.ts",
       "src/main/core/mpv/bus.ts",
+      "src/main/core/mpv/capability.test.ts",
       "src/main/core/mpv/reserved.test.ts",
       "src/main/core/mpv/reserved.ts",
       "src/main/core/transport.ts",
@@ -222,6 +229,7 @@
     "usesMediators": [],
     "ownedFilterLabels": [],
     "ownedFiles": [
+      "src/main/core/mpv/commands.test.ts",
       "src/main/core/mpv/guards.test.ts",
       "src/main/core/mpv/ownership.test.ts",
       "src/main/core/mpv/ownership.ts"
@@ -1193,7 +1201,14 @@
       "track-auto-selection",
       "vid"
     ],
-    "ownedCommands": [],
+    "ownedCommands": [
+      "audio-add",
+      "audio-reload",
+      "audio-remove",
+      "video-add",
+      "video-reload",
+      "video-remove"
+    ],
     "requestsProperties": [],
     "arbitrates": [
       "aid"
@@ -1440,7 +1455,9 @@
       "audio-wait-open",
       "wasapi-exclusive-buffer"
     ],
-    "ownedCommands": [],
+    "ownedCommands": [
+      "ao-reload"
+    ],
     "requestsProperties": [
       "aid"
     ],
@@ -1564,11 +1581,13 @@
       "subs-match-os-language"
     ],
     "ownedCommands": [
+      "rescan-external-files",
       "sub-add",
       "sub-reload",
       "sub-remove"
     ],
     "requestsProperties": [
+      "aid",
       "subs-with-matching-audio"
     ],
     "arbitrates": [],
@@ -1802,7 +1821,10 @@
       "sub-speed",
       "sub-stretch-durations"
     ],
-    "ownedCommands": [],
+    "ownedCommands": [
+      "sub-seek",
+      "sub-step"
+    ],
     "requestsProperties": [],
     "arbitrates": [],
     "mediates": {},
@@ -1965,7 +1987,10 @@
     "ownedProperties": [
       "stream-record"
     ],
-    "ownedCommands": [],
+    "ownedCommands": [
+      "ab-loop-dump-cache",
+      "dump-cache"
+    ],
     "requestsProperties": [],
     "arbitrates": [],
     "mediates": {},
@@ -2020,7 +2045,12 @@
       "core-mpv-bus"
     ],
     "ownedProperties": [],
-    "ownedCommands": [],
+    "ownedCommands": [
+      "frame-back-step",
+      "frame-step",
+      "revert-seek",
+      "seek"
+    ],
     "requestsProperties": [],
     "arbitrates": [],
     "mediates": {},
@@ -2141,7 +2171,10 @@
       "ab-loop-b",
       "ab-loop-count"
     ],
-    "ownedCommands": [],
+    "ownedCommands": [
+      "ab-loop",
+      "ab-loop-align-cache"
+    ],
     "requestsProperties": [],
     "arbitrates": [],
     "mediates": {},

@@ -44,6 +44,16 @@ async function select(id: number | false): Promise<void> {
 
 const mod: FeatureModule = {
   id: 'audio-tracks',
+  // §3.6: M11 "owns `aid` and `vid` outright", so it owns the commands that
+  // rewrite the track lists those two index into.
+  ownsCommands: [
+    'audio-add',
+    'audio-remove',
+    'audio-reload',
+    'video-add',
+    'video-remove',
+    'video-reload'
+  ],
   ownsProperties: [
     'aid',
     'vid',
