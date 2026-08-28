@@ -1,0 +1,253 @@
+/*
+ * M26 nav-bookmarks, renderer half. Owned by this module, imported by its
+ * index.ts, bundled into the overlay by Vite.
+ *
+ * These rules would have gone into `src/renderer/src/styles.css` — a
+ * `core-renderer` file that appears in the `mustNotTouch` list of 40 of the 55
+ * rows — because before `layerEl()` existed a seek-bar layer had to build its
+ * own container and therefore had to know core's `.seek-layer` class. M25's
+ * `.seek-chapter-tick` went in for exactly that reason and §6.3 puts chapter
+ * ticks, bookmark pins and the A-B region on the SAME bar, so this module was
+ * one commit from following it in. The container is core's; everything inside
+ * it is ours, and every selector below is namespaced `bm-` so no other module
+ * can define the same symbol.
+ */
+
+/* --- seek bar: bookmark pins (N13) --------------------------------------- */
+
+/*
+ * A different SHAPE from M25's chapter tick, not merely a different colour:
+ * chapters are a thin tick INSIDE the bar, a bookmark is a pin hanging BELOW
+ * it. Colour alone fails WCAG 1.4.1 and is also just harder to read.
+ */
+.bm-pin {
+  position: absolute;
+  top: 50%;
+  width: 0;
+  height: 0;
+  margin-left: -4px;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 7px solid #ffcc45;
+  transform: translateY(6px);
+  pointer-events: none;
+}
+
+/* N22: a bookmark with a `b` field is a saved A-B section, and it says so. */
+.bm-pin-section {
+  margin-left: -6px;
+  border-left-width: 6px;
+  border-right-width: 6px;
+  border-top-color: #7fd1ff;
+}
+
+/*
+ * Rule 4's visible half. The host tells the layer which of ITS handles has
+ * keyboard focus; drawing the ring is the layer's job, because only the layer
+ * knows what its handles look like. A handle you can Tab to but cannot see is
+ * worse than one you cannot reach.
+ */
+.bm-pin-focused {
+  border-top-width: 10px;
+  filter: drop-shadow(0 0 3px rgba(80, 160, 255, 0.95));
+}
+
+/* --- seek bar: the A-B region and its grips (N19) ------------------------- */
+
+.bm-region {
+  position: absolute;
+  top: 50%;
+  height: 12px;
+  transform: translateY(-50%);
+  background: rgba(255, 204, 69, 0.28);
+  border-left: 1px solid rgba(255, 204, 69, 0.9);
+  border-right: 1px solid rgba(255, 204, 69, 0.9);
+  pointer-events: none;
+}
+
+/* N23's mode: mpv is not looping this region, RLPlayer is. The dashes say the
+ * end point is ours and not mpv's, which matters when the two disagree. */
+.bm-region-soft {
+  background: repeating-linear-gradient(
+    135deg,
+    rgba(255, 204, 69, 0.3) 0 6px,
+    rgba(255, 204, 69, 0.1) 6px 12px
+  );
+}
+
+.bm-handle {
+  position: absolute;
+  top: 50%;
+  width: 3px;
+  height: 18px;
+  margin-left: -1px;
+  transform: translateY(-50%);
+  background: #ffcc45;
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+.bm-handle-b {
+  background: #ffb020;
+}
+
+.bm-handle-focused {
+  height: 22px;
+  box-shadow: 0 0 0 2px rgba(80, 160, 255, 0.9);
+}
+
+/* --- the shared tooltip's fragments --------------------------------------- */
+
+/*
+ * These are FRAGMENTS, merged into core's one tooltip by `order` (core's
+ * timecode is 0, M25's chapter title is 20). They are not a floating box of
+ * their own, which is the whole reason the host composes rather than each
+ * layer positioning its own.
+ */
+.bm-tip {
+  display: block;
+  font-size: 11px;
+  color: #ffcc45;
+  opacity: 0.95;
+}
+
+.bm-tip-loop {
+  color: #ffb020;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- the manager panel (N11) ---------------------------------------------- */
+
+.bm-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px 6px;
+}
+
+.bm-head h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.bm-count {
+  font-size: 11px;
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+
+.bm-tools {
+  display: flex;
+  gap: 2px;
+}
+
+.bm-filter {
+  margin: 0 12px 8px;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 12px;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+}
+
+.bm-filter:focus-visible {
+  outline: 2px solid rgba(80, 160, 255, 0.9);
+  outline-offset: -1px;
+}
+
+.bm-items {
+  flex: 1;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0 6px 10px;
+  list-style: none;
+}
+
+.bm-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 4px;
+}
+
+.bm-item:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.bm-time {
+  flex: none;
+  min-width: 46px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: #ffcc45;
+  cursor: pointer;
+}
+
+.bm-name {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 4px;
+  font: inherit;
+  font-size: 12px;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+}
+
+.bm-name:hover,
+.bm-name:focus {
+  background: rgba(0, 0, 0, 0.35);
+  border-color: rgba(255, 255, 255, 0.18);
+  outline: none;
+}
+
+.bm-badge {
+  flex: none;
+  padding: 0 5px;
+  font-size: 10px;
+  line-height: 15px;
+  border-radius: 8px;
+  background: rgba(127, 209, 255, 0.22);
+  color: #7fd1ff;
+}
+
+.bm-remove {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 2px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  opacity: 0.45;
+  cursor: pointer;
+}
+
+.bm-remove:hover {
+  opacity: 1;
+  background: rgba(255, 90, 90, 0.25);
+}
+
+.bm-remove svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+
+.bm-empty {
+  margin: 12px;
+  font-size: 12px;
+  opacity: 0.55;
+}
