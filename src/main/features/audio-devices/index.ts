@@ -15,6 +15,7 @@ let ctx: FeatureContext
 
 const mod: FeatureModule = {
   id: 'audio-devices',
+  dependsOn: ['core-af-chain', 'audio-tracks'],
   // §3.6: M15 "owns every AO-reinit round-trip; nothing else may re-set
   // `audio-device`". `ao-reload` is that round-trip in one command.
   ownsCommands: ['ao-reload'],
