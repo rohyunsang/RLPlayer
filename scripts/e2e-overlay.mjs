@@ -42,6 +42,14 @@ const sample = ['samples/bbb_long.mp4', 'samples/bbb.mp4']
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 /**
+ * The app's own shutdown budget. Its internal watchdog is QUIT_WATCHDOG_MS =
+ * 6000 in src/main/index.ts, past which it exits with the hooks unfinished and
+ * prints no clean-exit marker; measured quits are 73-144 ms, so 3 s is generous
+ * and still far short of "the user thinks it hung".
+ */
+const QUIT_BUDGET_MS = 3000
+
+/**
  * `countMpv()` IS GONE, and the reason is worth keeping.
  *
  * It was `tasklist /FI "IMAGENAME eq mpv.exe"` -- a machine-wide count with no
@@ -475,9 +483,33 @@ async function main() {
     // The pids THIS app spawned, recorded while it is still running to be an
     // ancestor of them. Anything else on the machine is somebody else's.
     ourMpv = child.pid === undefined ? [] : snapshot(child.pid)
+    /**
+     * DO NOT AWAIT THIS CALL, and the reason is a number this script printed for
+     * several rounds without anyone reading it.
+     *
+     * `window.close()` destroys the page, so the CDP reply to the very call that
+     * closes it can never arrive. It was `await s.send(...).catch(() => {})`, and
+     * `Session.send` rejects on a 10 000 ms timeout — so `t0` was taken, the
+     * await sat there for TEN SECONDS, and only then did the poll loop start.
+     * Measured on consecutive runs of an app that quits in 75 ms:
+     *
+     *     quit : 10012 ms          (the send timed out; the app was long gone)
+     *     quit :   531 ms          (the reply happened to win the race)
+     *
+     * So the line labelled `quit` was not measuring the app's quit at all, and
+     * the two things it could report differed by a factor of twenty depending on
+     * a race. Worse, the ten seconds were spent BEFORE the ten-second grace
+     * period, so a genuinely hung app got up to twenty seconds and was reported
+     * as a plausible-looking number rather than FORCE-KILLED.
+     *
+     * `check-network.mjs` had it right and this file did not: it asserts on the
+     * app's OWN `[quit] clean exit in N ms` marker, which is printed by the code
+     * path that actually ran the shutdown hooks. This does both now — wall time
+     * from the process object, cross-checked against what the app says.
+     */
     const t0 = Date.now()
-    await s.send('Runtime.evaluate', { expression: 'window.rlplayer.window.close()' }).catch(() => {})
-    for (let i = 0; i < 40 && child.exitCode === null; i++) await sleep(250)
+    void s.send('Runtime.evaluate', { expression: 'window.rlplayer.window.close()' }).catch(() => {})
+    for (let i = 0; i < 200 && child.exitCode === null; i++) await sleep(50)
     /**
      * THIS IS THE LINE THAT USED TO LIE.
      *
@@ -515,8 +547,13 @@ async function main() {
   console.log(`  generated from descriptors: ${(settings.ids ?? []).join(', ')}`)
   console.log(`  custom components mounted : ${settings.custom}`)
   console.log(`  contributed sections      : ${settings.contributed}`)
+  // The app's own view. Only the shutdown path that ran the hooks prints it, so
+  // its ABSENCE is as much a failure as a slow quit.
+  const ownQuit = /\[quit\] clean exit in (\d+) ms/.exec(mainLog.join(''))
   console.log(
-    `quit                        : ${hadToKill ? 'FORCE-KILLED by the harness' : `${quitMs} ms`}`
+    `quit                        : ${
+      hadToKill ? 'FORCE-KILLED by the harness' : `${quitMs} ms wall`
+    }${ownQuit ? `, ${ownQuit[1]} ms in the app's own shutdown` : ', NO [quit] MARKER'}`
   )
   console.log(
     `mpv spawned / orphaned      : ${ourMpv.length} / ${orphans.length}` +
@@ -550,6 +587,37 @@ async function main() {
         'measured after a kill, so it proves nothing — which is exactly how this used to ' +
         'report "clean". The settings window being open is the known cause.'
     )
+  }
+
+  /**
+   * A GRACEFUL QUIT HAS TO BE PROMPT, AND IT HAS TO BE THE REAL ONE.
+   *
+   * Both of these were printed and neither was asserted, which is how a `quit`
+   * line reading 10012 ms sat in a run reported as clean. Two independent
+   * conditions, because either one alone can be satisfied by the wrong thing:
+   *
+   *   - the marker must be there. It is printed only by the shutdown path that
+   *     ran the hooks and reaped mpv, so its absence means the process left by
+   *     some other route and every number below it was measured after that.
+   *   - the app's own shutdown must finish well inside its 6 s watchdog. At the
+   *     watchdog the app calls app.exit(0) with the hooks unfinished, and the
+   *     marker is NOT printed then — so this bound is what keeps "prompt" from
+   *     meaning "eventually".
+   */
+  if (!hadToKill) {
+    if (!ownQuit) {
+      failures.push(
+        'the app exited without printing `[quit] clean exit in N ms`. That line comes only ' +
+          'from the shutdown path that ran the hooks and reaped mpv, so the process left by ' +
+          'another route and the orphan count above was measured after it.'
+      )
+    } else if (Number(ownQuit[1]) > QUIT_BUDGET_MS) {
+      failures.push(
+        `the app's own shutdown took ${ownQuit[1]} ms, over the ${QUIT_BUDGET_MS} ms budget ` +
+          `(its internal watchdog is 6000 ms, at which point it exits with the hooks ` +
+          `unfinished). A quit a user would call "hung" must not pass as clean.`
+      )
+    }
   }
   if (orphans.length > 0) {
     failures.push(
