@@ -41,10 +41,19 @@
  *      `[ready]` line the app prints AFTER its windows are shown, and the
  *      `[quit]` line only the graceful shutdown path prints.
  *
- *   B. IT NEVER OPENED THE SETTINGS WINDOW. That is the app's only page with
- *      text inputs, and it is the exact surface the gvt1.com spellchecker leak
- *      lived on -- so the check written to prevent that defect never exercised
- *      the page that caused it. Every launch opens it now.
+ *   B. IT NEVER OPENED THE SETTINGS WINDOW -- and then, having been made to
+ *      open it, IT CERTIFIED A SURFACE IT NEVER ACTUALLY RENDERED. The gate was
+ *      `/\[e2e\] settings window opened/`, and `src/main/index.ts` printed that
+ *      synchronously after `openSettingsWindow()`, which does
+ *      `void settingsWindow.loadFile(...)` and returns before the page loads.
+ *      Measured: the packaged app with and without RLPLAYER_E2E_OPEN_SETTINGS
+ *      produced 11 netlog events and 53,435 bytes in BOTH cases -- delta 0 -- so
+ *      that console.log was the only evidence, it was printed before the page
+ *      existed, and nothing in the netlog corroborated it. Exactly the "printed
+ *      before the thing happened" defect this round removed from `[no-network]`.
+ *      The marker now fires on `did-finish-load`, carries the ROW and SECTION
+ *      counts out of the rendered DOM, and the app dispatches real key events at
+ *      a focused text field first. The check asserts on the counts.
  *
  *   C. ITS ORPHAN COUNT WAS MACHINE-WIDE. `mpvCount()` was
  *      `tasklist /FI "IMAGENAME eq mpv.exe"` with no attribution, so
@@ -67,6 +76,7 @@
  */
 import { execFileSync, spawn } from 'node:child_process'
 import { listProcesses, machineWideMpvCount, orphansAfterQuit, snapshot } from './lib/mpv-procs.mjs'
+import { sessionProof, violationsIn } from './lib/netlog.mjs'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -117,37 +127,6 @@ function packagedExe() {
 // events array open, and "the app had to be killed" is exactly the run whose
 // evidence matters most — so the parser never depends on the closing bracket.
 
-/**
- * WHAT A REAL SESSION LEAVES IN THE NETLOG, measured rather than assumed.
- *
- * A clean launch of the packaged build -- overlay up, sample playing, settings
- * window opened, graceful quit -- writes exactly 11 events, and the same seven
- * types every time. It is a small number because everything this app loads is
- * `file:` and never touches the network stack; that is the product working. The
- * header-only files this check used to PASS had zero.
- *
- * So the floor is 8: below every observed real run, far above every observed
- * dead one, and deliberately not tuned close to 11. Its job is to separate "a
- * session happened" from "the file has a header", not to police how many events
- * a session ought to have.
- */
-const MIN_NETLOG_EVENTS = 8
-
-/**
- * Two event types that BRACKET a real session, which is stronger than a count.
- *
- *   PROXY_CONFIG_CHANGED  -- `applySessionPolicy()` sets `{ mode: 'direct' }`,
- *     and that runs as the first statement after `app.whenReady()`. Its presence
- *     means the app got past startup, not merely that a process existed.
- *   QUIC_SESSION_POOL_CLOSE_ALL_SESSIONS -- Chromium tears the network stack
- *     down on a clean shutdown. A force-killed process never writes it.
- *
- * Both were present on every observed clean launch and on neither header-only
- * file. Requiring the pair means the netlog itself testifies that the session
- * started and ended, rather than the harness inferring it from a count.
- */
-const REQUIRED_NETLOG_EVENTS = ['PROXY_CONFIG_CHANGED', 'QUIC_SESSION_POOL_CLOSE_ALL_SESSIONS']
-
 function parseNetlog(file) {
   const text = fs.readFileSync(file, 'utf8')
   const at = text.indexOf('"events"')
@@ -184,48 +163,16 @@ function parseNetlog(file) {
 }
 
 /**
- * Local schemes and hosts. Everything else is a violation — including a
- * request that fails, and including a hostname that is only ever resolved.
- *
- * `wpad` is NOT on this list. It is a local-network DNS query rather than a
- * third-party connection, but "zero network requests" has to mean zero, and
- * Chromium's proxy auto-discovery is switched off explicitly in
- * core/no-network.ts precisely so this list can stay this short.
+ * The rules -- what is local, what is a violation, and what makes a run count as
+ * a session that happened -- live in `scripts/lib/netlog.mjs` so they can be
+ * tested without launching an app. `scripts/lib/netlog.test.mjs` runs them
+ * against the exact stdout of a run that printed the old
+ * `[e2e] settings window opened` marker, which is the shape this check used to
+ * accept as proof that the leak surface had been touched.
  */
-const LOCAL_SCHEME = /^(file|data|blob|devtools|chrome|chrome-extension|about|ws):/i
-const LOCAL_HOST = new Set(['localhost', '127.0.0.1', '::1', ''])
-
 function violations(file) {
   const { types, events } = parseNetlog(file)
-  const out = []
-  const seen = new Set()
-  const add = (kind, detail) => {
-    const key = `${kind} ${detail}`
-    if (seen.has(key)) return
-    seen.add(key)
-    out.push({ kind, detail })
-  }
-
-  for (const e of events) {
-    const type = types[e.type]
-    const p = e.params
-    if (!type || !p) continue
-
-    if (typeof p.url === 'string' && /URL_REQUEST|SOCKET_POOL_CONNECT_JOB/.test(type)) {
-      if (!LOCAL_SCHEME.test(p.url)) add('request', `${type}  ${p.url}`)
-    }
-    if (typeof p.host === 'string' && /HOST_RESOLVER/.test(type)) {
-      // `host` is sometimes "example.com:443".
-      const bare = p.host.replace(/:\d+$/, '').replace(/^\[|\]$/g, '').toLowerCase()
-      if (!LOCAL_HOST.has(bare)) add('resolve', `${type}  ${p.host}`)
-    }
-    if (typeof p.address === 'string' && /TCP_CONNECT|SOCKET_ALIVE/.test(type)) {
-      const bare = p.address.replace(/^\[?([^\]]*)\]?:\d+$/, '$1').toLowerCase()
-      if (!LOCAL_HOST.has(bare)) add('connect', `${type}  ${p.address}`)
-    }
-  }
-  const seenTypes = new Set(events.map((e) => types[e.type]).filter(Boolean))
-  return { out, eventCount: events.length, seenTypes }
+  return violationsIn(events, types)
 }
 
 // --- 3. one cold launch -----------------------------------------------------
@@ -315,43 +262,9 @@ async function oneLaunch(exe, n, dir) {
   const { out, eventCount, seenTypes } = violations(netlog)
 
   // A: a clean run has to look like a run. Each of these was false on at least
-  // one observed launch that this check reported as a pass.
-  const proof = []
-  if (eventCount < MIN_NETLOG_EVENTS) {
-    proof.push(
-      `the netlog holds ${eventCount} events (floor ${MIN_NETLOG_EVENTS}). A header-only file ` +
-        `is indistinguishable from a perfectly clean session unless the floor is checked, and ` +
-        `7 of 36 observed netlogs were header-only.`
-    )
-  }
-  for (const required of REQUIRED_NETLOG_EVENTS) {
-    if (!seenTypes.has(required)) {
-      proof.push(
-        `the netlog has no ${required}. That event is written by every clean session of this ` +
-          `app and by no dead one, so its absence means the run did not happen the way a ` +
-          `user's does -- and a run that did not happen records no violations either.`
-      )
-    }
-  }
-  if (!/\[ready\]/.test(stdout)) {
-    proof.push(
-      `the app never printed [ready], so its windows were never shown. The [no-network] line ` +
-        `above is printed at module scope, BEFORE app.whenReady(), and proves only that the ` +
-        `process started.`
-    )
-  }
-  if (!/\[e2e\] settings window opened/.test(stdout)) {
-    proof.push(
-      `the settings window never opened, so the one page in this app with text inputs -- the ` +
-        `surface the gvt1.com spellchecker leak was on -- was not exercised.`
-    )
-  }
-  if (!/\[quit\] clean exit/.test(stdout)) {
-    proof.push(
-      `the app never printed [quit], so the shutdown hooks did not run to completion. A ` +
-        `force-killed app writes no events either, which is why "0 events" alone is not a pass.`
-    )
-  }
+  // one observed launch that this check reported as a pass -- including the
+  // settings page, whose marker used to be printed before the page loaded.
+  const proof = sessionProof({ stdout, eventCount, seenTypes })
 
   const later = listProcesses()
   const orphans = orphansAfterQuit(ourMpv, later)
@@ -370,6 +283,7 @@ async function oneLaunch(exe, n, dir) {
   if (ready) console.log('    ' + ready)
   const settings = stdout.match(/\[e2e\][^\n]*/)?.[0]
   if (settings) console.log('    ' + settings)
+  else console.log('    (no [e2e] line at all: the settings window was never driven)')
   const quit = stdout.match(/\[quit\][^\n]*/)?.[0]
   if (quit) console.log('    ' + quit)
   return { violations: out, hadToForce, orphanMpv: orphans, proof, log: stdout }

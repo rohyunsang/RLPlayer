@@ -168,6 +168,29 @@ jobs:
         if: '!cancelled()'
         run: npm run check:network -- --launches=2 --seconds=10 --no-blackhole
 
+      # THE SETTINGS PAGE, ASSERTED ON WHAT IT RENDERED.
+      #
+      # `e2e-overlay.mjs` is the only check in this repo that asserts the
+      # generated settings form actually has rows (`settings.rows < 8`), and that
+      # page is where all 38 Wave-1 modules land their `ctx.settings.define()`
+      # descriptors -- and it was excluded from CI, so nothing in CI ever looked
+      # at it. `check:network` above now asserts the row count too, from the app's
+      # own marker; this one drives the page over CDP, counts the seek-bar layers,
+      # the contributed panels and transport buttons, and requires zero console
+      # errors before and after real keypresses.
+      #
+      # It needs something to play, and `samples/` is gitignored (60 MB of Big
+      # Buck Bunny). `make:sample` encodes 200 s of `av://lavfi:` with the mpv
+      # this job already downloaded: no new dependency, nothing checked in, and it
+      # leaves a real sample alone if one is there. It runs AFTER check:network so
+      # that check's launches stay byte-for-byte what they were.
+      - name: 'make:sample'
+        if: '!cancelled()'
+        run: npm run make:sample
+      - name: 'e2e:overlay (packaged)'
+        if: '!cancelled()'
+        run: npm run e2e:overlay -- --packaged --presses=30
+
   # A second, deliberately dumb job. `check:forbidden` skips comment lines so it
   # can explain what we do NOT do; this one does not, so a commented-out
   # `autoUpdater` cannot creep back in as "just documentation" and then be

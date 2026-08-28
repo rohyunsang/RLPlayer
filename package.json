@@ -28,7 +28,8 @@
     "test:command-ownership": "node --test \"src/main/core/mpv/commands.test.ts\"",
     "test:no-network": "node --test \"src/main/core/no-network.test.ts\"",
     "check:network": "node scripts/check-network.mjs",
-    "e2e:resume": "node scripts/e2e-resume.mjs"
+    "e2e:resume": "node scripts/e2e-resume.mjs",
+    "make:sample": "node scripts/make-sample.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.4.0",

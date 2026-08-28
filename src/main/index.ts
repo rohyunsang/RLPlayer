@@ -378,10 +378,20 @@ async function main(): Promise<void> {
    * command-line flag, and named for what it is, so it cannot be reached by a
    * user and shows up in a support log if it ever is. Same shape as the DNS
    * blackhole override in core/no-network.ts, and for the same reason.
+   *
+   * IT USED TO PRINT ITS MARKER BEFORE THE PAGE EXISTED. The block was
+   * `openSettingsWindow(); console.log('[e2e] settings window opened')`, and
+   * `ipc.ts` does `void settingsWindow.loadFile(...)` and returns immediately.
+   * So the line was printed synchronously after a BrowserWindow was
+   * constructed, and `check-network.mjs` accepted it as proof that the leak
+   * surface had been exercised. Measured: the packaged app with and without
+   * RLPLAYER_E2E_OPEN_SETTINGS produced 11 netlog events and 53,435 bytes in
+   * BOTH cases -- delta 0 -- so nothing in the netlog corroborated it either.
+   * That is the same "printed before the thing happened" defect this round
+   * removed from the `[no-network]` marker.
    */
   if (process.env['RLPLAYER_E2E_OPEN_SETTINGS'] === '1') {
-    openSettingsWindow()
-    console.log('[e2e] settings window opened')
+    await exerciseSettingsWindow()
   }
 
   if (portableFallback()) toast(t('core.portableFallback'), 'error')
@@ -398,6 +408,87 @@ async function main(): Promise<void> {
       console.error('[boot] opening the command-line files failed:', e.stack ?? e.message)
       toast(e.message, 'error')
     })
+  }
+}
+
+/**
+ * Drive the settings page for the network check, and report what it RENDERED.
+ *
+ * Three things this has to do that the one-line version did not:
+ *
+ *   1. WAIT FOR THE PAGE. `did-finish-load`, then poll for the generated form,
+ *      because `settings.html` is deliberately empty -- every control on it
+ *      comes from a `ctx.settings.define()` descriptor and arrives over IPC
+ *      after the load event.
+ *   2. REPORT SOMETHING ONLY A RENDERED PAGE CAN PRODUCE. The row and section
+ *      counts come out of the page's own DOM, so the marker cannot be printed
+ *      by a window that failed to load, and `check-network.mjs` asserts on the
+ *      counts rather than on the presence of a string.
+ *   3. DISPATCH REAL INPUT. The gvt1.com fetch was measured NOT to need typing
+ *      -- it happened on load -- but a spellcheck-on-focus regression would be
+ *      invisible without it, and this is the only harness that opens the page.
+ *      Today the only text field on it is capture-still's `{ kind: 'path' }`
+ *      row, which is readOnly; that is why `textFields` is in the marker and
+ *      why the check asserts it is not zero. An editable field appearing later
+ *      is exactly the change that needs this path to already exist.
+ *
+ * It never throws: a failure prints a marker the check will reject, which is
+ * more useful than an exception during boot.
+ */
+async function exerciseSettingsWindow(): Promise<void> {
+  const win = openSettingsWindow()
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('did-finish-load never fired in 20 s')), 20_000)
+      win.webContents.once('did-finish-load', () => {
+        clearTimeout(timer)
+        resolve()
+      })
+      win.webContents.once('did-fail-load', (_e, code, desc) => {
+        clearTimeout(timer)
+        reject(new Error(`did-fail-load ${code} ${desc}`))
+      })
+    })
+
+    const json = (await win.webContents.executeJavaScript(
+      `(async () => {
+        for (let i = 0; i < 100; i++) {
+          if (document.querySelectorAll('.row.setting').length > 0) break
+          await new Promise((r) => setTimeout(r, 100))
+        }
+        const fields = [...document.querySelectorAll(
+          'input[type="text"], input:not([type]), textarea, [contenteditable]'
+        )]
+        if (fields[0]) fields[0].focus()
+        return JSON.stringify({
+          rows: document.querySelectorAll('.row.setting').length,
+          sections: document.querySelectorAll('#settingsRoot section').length,
+          textFields: fields.length,
+          focused: (document.activeElement && document.activeElement.tagName || 'none').toLowerCase()
+        })
+      })()`
+    )) as string
+    const d = JSON.parse(json) as {
+      rows: number
+      sections: number
+      textFields: number
+      focused: string
+    }
+
+    // Real key events, through the same path a keyboard takes. Not a synthetic
+    // DOM event: `sendInputEvent` goes into the renderer's input pipeline.
+    for (const ch of 'spellcheck') {
+      win.webContents.sendInputEvent({ type: 'keyDown', keyCode: ch })
+      win.webContents.sendInputEvent({ type: 'char', keyCode: ch })
+      win.webContents.sendInputEvent({ type: 'keyUp', keyCode: ch })
+    }
+
+    console.log(
+      `[e2e] settings page rendered rows=${d.rows} sections=${d.sections} ` +
+        `textFields=${d.textFields} focused=${d.focused} typed=10`
+    )
+  } catch (e) {
+    console.log(`[e2e] settings page FAILED: ${(e as Error).message}`)
   }
 }
 

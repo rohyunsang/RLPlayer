@@ -959,10 +959,47 @@ watching the check print "clean":
   so one word of prose in `util.ts` whitelisted a real violation;
 * only `.css` was scanned at all. There was no content check for HTML or TS.
 
-Comments are blanked (`scripts/lib/lex.mjs`) before anything is matched, an
-`id="x"` attribute is a declaration rather than a use, and a fifth rule asserts
-the extraction still finds symbols it is known to find — because a content check
-that quietly stops matching passes everything.
+Comments are blanked (`scripts/lib/lex.mjs`) before anything is matched, and an
+`id="x"` attribute is a declaration rather than a use.
+
+**Then the same hole came back twice more, in the CSS reader itself**, and both
+were found by planting the violation and watching the check print "clean" with
+exit 0:
+
+* the prelude regex `/(^|\}|;)([^{}]+)\{/` required the prelude to follow `}`,
+  `;` or start-of-file, so **the first rule inside any at-rule block was never
+  extracted**. `.bm-pin` inside `@media (min-width: 1px) { … }` in core
+  `styles.css`, referenced only from two feature modules: clean;
+* `/[.#]([A-Za-z]…)/.exec(part)` takes the **leftmost** token only, so anything
+  after a descendant combinator was invisible. `.seek-layer .thumb-preview`,
+  same file, same two modules: clean.
+
+Instrumented against this repo's own four stylesheets, **15 selector tokens were
+already unextractable, 7 of them in core `styles.css`** (`boosted`, `close`,
+`error`, `play`, `primary`, `show`, `small`). The old self-check did not close
+it: it named three canaries by hand, and all three happened to be leftmost and
+top-level.
+
+So the CSS is **parsed**, not matched: `scripts/lib/css.mjs` walks the rules with
+postcss (which descends into every at-rule) and tokenizes each selector with a
+state machine that understands combinators, `,`, `:not(…)`, `[attr="…"]`,
+strings, escapes and selector comments. It returns two views, and the rules use
+different ones on purpose:
+
+* **`all`** — every class and id anywhere in the selector. "Does a **core** file
+  carry a name only features use?" is answered with this one, which is the half
+  that was missing.
+* **`leftmost`** — the first compound of each comma part. "Who **owns** this
+  symbol?" is answered with this one, so `.pl-tools .icon-btn` in the playlist's
+  own stylesheet stays what it is: a module styling a core component inside its
+  own subtree.
+
+The fifth rule still asserts the extraction can see itself, but it now runs over
+a fixture built from the **shapes** (a rule first inside `@media`, a class after
+a descendant combinator, an id in a compound, a hex colour in a declaration)
+rather than from names this repo happens to use today, and it fails if the `all`
+and `leftmost` views ever agree in size. `scripts/lib/css.test.mjs` carries the
+two planted violations as fixtures.
 
 ### The interactive seek-bar layer
 
@@ -1191,9 +1228,27 @@ process: a version string in a bug report, `--input-cmdlist` in a test.
 `Network Persistent State` records, and the HTTP disk cache — which held the 302
 from Google's redirector with the user's public IP in its `mip=` parameter. It is
 a literal target list, it never throws, and a locked file leaves its marker
-unwritten so the next launch retries. Nothing else in the profile is touched.
-You will not interact with it; it is here so you know why a first launch after
-upgrade prints a `[cleanup]` line and reclaims ~25 MB.
+unwritten so the next launch retries. You will not interact with it; it is here
+so you know why a first launch after upgrade prints a `[cleanup]` line.
+
+**Two things about it concern you directly**, because version 2 of it got both
+wrong on real disks:
+
+* it listed `Dictionaries` at the profile root, and `core/paths.ts` redirects
+  `sessionData` to `<root>\session` — which is where Chromium actually writes it.
+  Every other Chromium target had a `session/` twin and that one did not, so the
+  11 MB artefact the feature exists for survived, with the marker already at
+  `CLEANUP_VERSION` and therefore never retried. **A one-shot migration that
+  missed has to be able to run again: fixing the list means moving the version.**
+* it listed `Cache`, and `cacheDir()` returned `<root>/cache`. On NTFS those are
+  one directory, so it deleted `cache/thumbs`, `cache/scenes`, `cache/art` and
+  `cache/jobs` — `thumbCacheDir()`, `sceneCacheDir()`, `artCacheDir()` and
+  `tempJobDir()`, the four directories §12 hands to **you** — and logged
+  "removed Cache". Chromium's disk cache is at `<root>/httpcache` now, the
+  legacy target is narrowed to `Cache/Cache_Data` and `Cache/No_Vary_Search`,
+  and `appOwnedConflict()` refuses any target that is, contains, or sits inside
+  a path the app owns. **Nothing in `ctx.paths` can be touched by a cleanup
+  routine.**
 
 ---
 
@@ -1204,6 +1259,12 @@ upgrade prints a `[cleanup]` line and reclaims ~25 MB.
   push. The named suites are `npm run test:property-ownership`,
   `test:reserved-args` and `test:renderer-hosts`; `npm run e2e:overlay` drives
   the real app (add `--packaged --presses=300` before a tag).
+- **`e2e:overlay` is in CI now**, and it is the only check that asserts the
+  generated settings page actually rendered (`settings.rows < 8`) — the page
+  where all 38 Wave-1 modules land their descriptors. It was excluded because
+  `samples/` is gitignored; `npm run make:sample` encodes 200 s of
+  `av://lavfi:` with the mpv the job already downloaded, and leaves a real
+  sample alone if you have one.
 - **A harness is code, and it gets tests too.** Both orphan checks in this repo
   counted `mpv.exe` machine-wide with `tasklist` and no attribution, and were
   wrong in both directions: `check:network` reported "FAILED: 4 orphaned mpv.exe"
@@ -1312,6 +1373,11 @@ theoretically reachable".
 | 44 | a header-only netlog (0 events) is the same shape as a clean run, and the only liveness gate was a line printed at module scope **before** `app.whenReady()`. 7 of 36 netlogs were header-only; 2 exited reporting success | a pass needs ≥8 events, `PROXY_CONFIG_CHANGED` **and** `QUIC_SESSION_POOL_CLOSE_ALL_SESSIONS`, and three markers the app prints: `[ready]`, `[e2e]`, `[quit]` |
 | 45 | `check:network` only ever opened a sample video — never the **settings window**, the app's only page with text inputs and the exact surface the gvt1 leak lived on | every launch opens it, through an env-only hook with the same three rules as the DNS blackhole override, enforced by a test |
 | 46 | 0.1.1 told users to delete `%APPDATA%\RLPlayer\Dictionaries` **by hand**, and named none of the rest. The `Network Persistent State` records held the host, its round-trip time and the machine's public address; the HTTP disk cache held the 302 with `mip=<the user's public IPv6>` | `core/profile-cleanup` does it for them, once, before `app.whenReady()`, from a literal target list, never throwing, retrying a locked file next launch. Measured on a real profile: 5 artefacts, 25.1 MB, zero occurrences of the host left, user data byte-identical |
+| 47 | `check:partition`'s prelude regex could not see **the first rule inside any at-rule**, and its name regex took only the **leftmost** token. `.bm-pin` in `@media` and `.seek-layer .thumb-preview`, both in core `styles.css`, both used only by two feature modules: reported clean, exit 0. 15 tokens in this repo were already unextractable, 7 in core `styles.css`. The self-check named 3 canaries, all of them leftmost and top-level | the CSS is parsed (postcss + a selector tokenizer in `scripts/lib/css.mjs`), every class and id in every selector is extracted, and the self-check runs over a fixture of **shapes** and fails if the `all` and `leftmost` views ever agree in size |
+| 48 | `[e2e] settings window opened` was printed **synchronously** after `openSettingsWindow()`, and `ipc.ts` does `void settingsWindow.loadFile(…)` and returns before the page loads. With and without `RLPLAYER_E2E_OPEN_SETTINGS` the packaged app produced 11 netlog events and 53,435 bytes — **delta 0** — so the console line was the only evidence, and it was printed before the page existed. The same defect this round removed from `[no-network]` | the marker fires on `did-finish-load`, carries the row/section/text-field counts out of the rendered DOM, and the app dispatches real key events at a focused field first. `check:network` asserts on the counts (`rows >= 8`), and `scripts/lib/netlog.test.mjs` runs the gate against the old stdout |
+| 49 | `core/profile-cleanup` v2 listed `Dictionaries` at the profile root while `sessionData` is `<root>\session`, so the 11,476,456-byte `ko-3-0.bdic` survived with the marker already at `CLEANUP_VERSION` — stranded permanently. And it listed `Cache`, which on NTFS is the `cache` that `cacheDir()` returns, so it deleted `thumbs/`, `scenes/`, `art/` and `jobs/`. Two of its tests could not reach either defect: the fixture built no session `Dictionaries` and no `cache/`, and its "nothing else is touched" proof searched for the string `gvt1`, which an 11 MB `.bdic` does not contain | a `session/` twin for every root target (asserted as a rule), `CLEANUP_VERSION` bumped so cleaned profiles retry, Chromium's cache moved to `httpcache/`, the legacy target narrowed to `Cache/Cache_Data`, and `appOwnedConflict()` refusing any target that touches app-owned paths. The test asserts on a **file inventory** |
+| 50 | the test titled *"a LOCKED artefact leaves the marker unwritten"* took its handle with `fs.openSync(f, 'r+')`, which on Windows opens with `FILE_SHARE_DELETE`. The unlink always succeeded, so it always took the else branch and asserted the marker **was** written — the opposite of its title, for four rounds | a real `FileShare.None` handle held by another process. The invariant holds: EPERM, marker unwritten, retried next launch, no crash |
+| 51 | `e2e-overlay.mjs` is the only check that asserts the settings page rendered, and it was **excluded from `ci.yml`** — that page is where all 38 Wave-1 modules land their descriptors. `check-network.mjs` also whitelisted `ws:` by scheme, so `ws://remote/` was not a violation | `e2e:overlay --packaged` runs in CI, with `make:sample` generating a playable file from `av://lavfi:` using the pinned mpv. `ws:`/`wss:` are judged by host like every other remote scheme |
 
 Two smaller notes:
 

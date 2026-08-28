@@ -38,10 +38,18 @@ import { getUiWindow, getVideoWindow } from './core/window/windows'
 
 let settingsWindow: BrowserWindow | null = null
 
-export function openSettingsWindow(): void {
+/**
+ * Returns the window, because "opened" and "loaded" are not the same event and
+ * the caller has to be able to wait for the second one. `loadFile()` below is
+ * fire-and-forget: this function returns before the page exists, so anything
+ * printed after the call proves only that a BrowserWindow was constructed.
+ * `src/main/index.ts` waits for `did-finish-load` and then asks the page what it
+ * rendered.
+ */
+export function openSettingsWindow(): BrowserWindow {
   if (settingsWindow && !settingsWindow.isDestroyed()) {
     settingsWindow.focus()
-    return
+    return settingsWindow
   }
   settingsWindow = new BrowserWindow({
     width: 620,
@@ -73,6 +81,7 @@ export function openSettingsWindow(): void {
   settingsWindow.on('closed', () => {
     settingsWindow = null
   })
+  return settingsWindow
 }
 
 export function getSettingsWindow(): BrowserWindow | null {
