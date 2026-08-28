@@ -745,7 +745,8 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [
-      "rl-deint"
+      "rl-deint",
+      "rl-idet"
     ],
     "ownedFiles": [
       "src/main/features/video-deinterlace/",

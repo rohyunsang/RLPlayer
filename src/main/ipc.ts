@@ -17,7 +17,13 @@ import { notifyVideoRegion } from './core/window/index.ts'
 import { commandRegistry, resolvedKeybinds, setBinding, setPreset } from './core/input/index.ts'
 import { messageCatalog, t } from './core/i18n/index.ts'
 import type { SettingsRegistry } from './core/settings/registry.ts'
-import type { FileFilter, SettingDescriptor, SettingSection, SettingType } from '@shared/feature-api'
+import type {
+  FileFilter,
+  SettingDescriptor,
+  SettingId,
+  SettingSection,
+  SettingType
+} from '@shared/feature-api'
 import type { LegacyBridge } from './core/legacy-bridge.ts'
 import type { MenuRegistry } from './core/menu.ts'
 import type { OsdBus } from './core/osd/index.ts'
@@ -124,9 +130,34 @@ export interface SettingRow {
   advanced?: boolean
   order?: number
   keywords?: readonly string[]
+  /**
+   * `false` when the descriptor's `visibleWhen` predicate says this row does
+   * not apply right now. Evaluated HERE and shipped as a boolean because
+   * `visibleWhen` is a FUNCTION and a function cannot cross the snapshot IPC --
+   * which is why the field sat in the public API with no consumer at all while
+   * three Wave-1 modules reached for it. M03 shipped fourteen descriptors using
+   * it; every one of them rendered unconditionally.
+   */
+  visible?: boolean
 }
 
-function toRow(d: SettingDescriptor, value: unknown): SettingRow {
+/**
+ * Evaluate a descriptor's `visibleWhen` against the live settings.
+ *
+ * A predicate that throws hides nothing: one module's bad predicate must not
+ * blank a page that every other module also renders into (§3.5 rule 7).
+ */
+function rowVisible(d: SettingDescriptor, get: <V>(id: SettingId) => V): boolean {
+  if (d.visibleWhen === undefined) return true
+  try {
+    return d.visibleWhen(get) !== false
+  } catch (e) {
+    console.error(`[settings] visibleWhen for '${d.id}' threw:`, (e as Error).message)
+    return true
+  }
+}
+
+function toRow(d: SettingDescriptor, value: unknown, visible = true): SettingRow {
   const row: SettingRow = {
     id: d.id,
     section: d.section,
@@ -142,6 +173,7 @@ function toRow(d: SettingDescriptor, value: unknown): SettingRow {
   if (d.advanced !== undefined) row.advanced = d.advanced
   if (d.order !== undefined) row.order = d.order
   if (d.keywords !== undefined) row.keywords = d.keywords
+  if (!visible) row.visible = false
   return row
 }
 
@@ -223,9 +255,13 @@ export function registerCoreIpc(deps: CoreIpcDeps): void {
   // knows nothing else. Every row below is a module's descriptor; adding a
   // setting means adding a descriptor in your own directory, and touching
   // neither this file nor `settings.html`.
-  ipcMain.handle('core-settings:list', () =>
-    deps.settings.snapshot().map(({ descriptor, value }) => toRow(descriptor, value))
-  )
+  const settingsRows = (): SettingRow[] => {
+    const get = <V,>(id: SettingId): V => deps.settings.get(id) as V
+    return deps.settings
+      .snapshot()
+      .map(({ descriptor, value }) => toRow(descriptor, value, rowVisible(descriptor, get)))
+  }
+  ipcMain.handle('core-settings:list', () => settingsRows())
   ipcMain.handle('core-settings:set', (_e, msg: { id: string; value: unknown }) => {
     if (!msg || typeof msg.id !== 'string' || !deps.settings.has(msg.id)) return null
     deps.settings.set(msg.id, msg.value)
@@ -237,7 +273,7 @@ export function registerCoreIpc(deps: CoreIpcDeps): void {
     for (const { descriptor } of deps.settings.snapshot()) {
       deps.settings.set(descriptor.id, descriptor.default)
     }
-    return deps.settings.snapshot().map(({ descriptor, value }) => toRow(descriptor, value))
+    return settingsRows()
   })
   ipcMain.handle(
     'core-settings:browse',

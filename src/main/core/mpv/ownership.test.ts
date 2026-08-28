@@ -12,6 +12,7 @@ import {
   isChainCommand,
   propertyWrittenBy
 } from './ownership.ts'
+import { VF_ORDER, AF_ORDER } from './chain.ts'
 
 /**
  * test:property-ownership (§6.2).
@@ -225,6 +226,7 @@ interface ManifestModule {
   path: string
   ownedProperties: string[]
   ownedCommands: string[]
+  ownedFilterLabels?: string[]
 }
 
 function manifest(): ManifestModule[] {
@@ -235,8 +237,39 @@ function manifest(): ManifestModule[] {
 
 /** Declared names, read out of the module source rather than imported —
  *  importing a module would drag Electron in. */
-function declaredList(dir: string, field: 'ownsProperties' | 'ownsCommands'): string[] {
-  const raw = fs.readFileSync(path.join(repo, 'src', 'main', 'features', dir, 'index.ts'), 'utf8')
+/**
+ * Feature directories that have an `index.ts` to read.
+ *
+ * NOT `readdirSync(...).filter(isDirectory)`, and the difference is a check that
+ * lied for real during Wave 1's parallel build. `declaredList()` did a bare
+ * `readFileSync(<dir>/index.ts)`, so ONE directory without an index.ts -- a
+ * reserved Wave-1 slot, or another agent's module half-written at that instant
+ * -- threw ENOENT and took down all four manifest-vs-code tests before they
+ * asserted anything about anybody. Measured: `mkdir src/main/features/zz-x`
+ * turns `npm run test:property-ownership` red with an fs error, and the
+ * flagship ownership gate is then simultaneously failing for the wrong reason
+ * and blind to every module that IS there. `modules.json` reserves all forty
+ * directories, so this was going to fire thirty-four more times.
+ *
+ * A directory with no `index.ts` is not an error -- it is a reservation. A
+ * directory with an index.ts that disagrees with the manifest still is.
+ */
+function moduleDirs(): string[] {
+  const featuresDir = path.join(repo, 'src', 'main', 'features')
+  return fs
+    .readdirSync(featuresDir, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name)
+    .filter((name) => fs.existsSync(path.join(featuresDir, name, 'index.ts')))
+}
+
+function declaredList(
+  dir: string,
+  field: 'ownsProperties' | 'ownsCommands' | 'ownsFilterLabels'
+): string[] {
+  const file = path.join(repo, 'src', 'main', 'features', dir, 'index.ts')
+  if (!fs.existsSync(file)) return []
+  const raw = fs.readFileSync(file, 'utf8')
   // Comments are stripped from the WHOLE FILE before the field is located, not
   // from the matched body afterwards. Stripping afterwards looks equivalent and
   // is not: a doc comment above the field that quotes it -- "`ownsCommands: []`
@@ -251,6 +284,7 @@ function declaredList(dir: string, field: 'ownsProperties' | 'ownsCommands'): st
 
 const declaredProperties = (dir: string): string[] => declaredList(dir, 'ownsProperties')
 const declaredCommands = (dir: string): string[] => declaredList(dir, 'ownsCommands')
+const declaredLabels = (dir: string): string[] => declaredList(dir, 'ownsFilterLabels')
 
 function covers(declared: readonly string[], property: string): boolean {
   return declared.some((d) => (d.endsWith('*') ? property.startsWith(d.slice(0, -1)) : d === property))
@@ -258,11 +292,7 @@ function covers(declared: readonly string[], property: string): boolean {
 
 test('every implemented module agrees with modules.json in both directions', () => {
   const man = manifest()
-  const featuresDir = path.join(repo, 'src', 'main', 'features')
-  const dirs = fs
-    .readdirSync(featuresDir, { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .map((d) => d.name)
+  const dirs = moduleDirs()
 
   assert.ok(dirs.length > 0, 'no feature modules found')
 
@@ -304,7 +334,6 @@ test('no module claims one of mpv’s COMMANDS as a property', () => {
   // `sub-reload` is a command -- it is in --input-cmdlist, and mpv answers
   // "property not found" when you read it. Declaring it in ownsProperties
   // enforced precisely nothing while M18 and M19 could call it at will.
-  const featuresDir = path.join(repo, 'src', 'main', 'features')
   const commandNames = new Set([
     'sub-reload',
     'sub-add',
@@ -333,12 +362,11 @@ test('no module claims one of mpv’s COMMANDS as a property', () => {
     'playlist-shuffle',
     'playlist-clear'
   ])
-  for (const d of fs.readdirSync(featuresDir, { withFileTypes: true })) {
-    if (!d.isDirectory()) continue
-    for (const p of declaredProperties(d.name)) {
+  for (const dir of moduleDirs()) {
+    for (const p of declaredProperties(dir)) {
       assert.ok(
         !commandNames.has(p),
-        `${d.name} declares '${p}' in ownsProperties, but it is a COMMAND. ` +
+        `${dir} declares '${p}' in ownsProperties, but it is a COMMAND. ` +
           `Move it to ownsCommands, which is where the guard actually fires.`
       )
     }
@@ -354,12 +382,69 @@ test('the core pieces own the transport and the two filter properties', () => {
 })
 
 test('no property is owned twice across core plus every implemented module', () => {
-  const featuresDir = path.join(repo, 'src', 'main', 'features')
-  const decls = fs
-    .readdirSync(featuresDir, { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .map((d) => ({ id: d.name, ownsProperties: declaredProperties(d.name) }))
+  const decls = moduleDirs().map((d) => ({ id: d, ownsProperties: declaredProperties(d) }))
   // Constructing the map IS the assertion: it throws on any collision.
   const map = new OwnerMap([...CORE_OWNERSHIP, ...decls])
   assert.ok(map.entries().length > 100, 'expected a substantial owner map')
+})
+
+/**
+ * `ownsFilterLabels`, checked in both directions — which nothing did.
+ *
+ * A reserved vf/af label is boot-claimed exactly like a property:
+ * `chain.claim()` throws on a collision and refuses a label that is not in the
+ * §5.5 order table, so a label is every bit as much a partition of a shared
+ * namespace as `aid` is. But the manifest-vs-code test above only ever compared
+ * `ownsProperties` and `ownsCommands`, so `ownedFilterLabels` in modules.json
+ * and `ownsFilterLabels` in the module could disagree indefinitely and only a
+ * boot would say so. M12 wrote this assertion into its OWN module.test.ts,
+ * which is the wrong place: it belongs here, once, for all forty.
+ *
+ * The third direction is the one that actually bit: a label that is in the
+ * manifest but NOT in `VF_ORDER`/`AF_ORDER` is a boot error at `claim()` time
+ * for whoever gets there first. M04's `rl-idet` (spec §2 V21) was exactly that.
+ */
+test('every module agrees with modules.json on ownsFilterLabels, and the labels exist', () => {
+  const man = manifest()
+  const known = new Set([...VF_ORDER, ...AF_ORDER])
+
+  for (const dir of moduleDirs()) {
+    const entry = man.find((m) => m.path === `src/main/features/${dir}/`)
+    assert.ok(entry, `module '${dir}' has no entry in docs/parity/modules.json`)
+    const declared = declaredLabels(dir)
+    const listed = entry.ownedFilterLabels ?? []
+
+    /**
+     * ONE direction is strict, and it is deliberately not the one properties
+     * use. `ownedFilterLabels` in the manifest is a RESERVATION -- the same
+     * thing an empty Wave-1 feature directory is -- so a row may reserve
+     * `rlac3` for a feature nobody has written yet (M15 does, today) and that
+     * is the partition working, not drifting: the reservation is exactly what
+     * stops a second module taking the label first.
+     *
+     * A CLAIM without a reservation is the failure, because that is the one
+     * that can collide: `chain.claim()` would hand the label to whichever
+     * module booted first and the manifest would never have said who owns it.
+     */
+    for (const l of declared) {
+      assert.ok(
+        listed.includes(l),
+        `${entry.id} (${dir}): the module claims filter label '${l}' but modules.json does not ` +
+          `reserve it. Two modules can then claim it and only a boot will say so.`
+      )
+    }
+  }
+
+  // Every label ANY row reserves must be in the order table, or claim() throws
+  // at boot for a module that has done nothing wrong.
+  for (const m of man) {
+    for (const l of m.ownedFilterLabels ?? []) {
+      assert.ok(
+        known.has(l),
+        `modules.json reserves filter label '${l}' for ${m.id}, but it is in neither VF_ORDER ` +
+          `nor AF_ORDER in core/mpv/chain.ts, so chain.claim() will throw the moment ${m.id} ` +
+          `boots. Add it to the §5.5 order table in its policy position.`
+      )
+    }
+  }
 })

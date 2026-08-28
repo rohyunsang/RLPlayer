@@ -515,12 +515,30 @@ export interface FilterChainService {
    * Live parameter update, emitted in the VERIFIED FOUR-ARGUMENT form
    * `['vf-command', label, option, value, lavfiFilterName]`. Falls back to a
    * full rebuild for the measured refusers and reports which path it took.
+   *
+   * **Pass `spec`.** It is the whole filter spec the slot should hold AFTER
+   * this change, and without it `command()` is a slider that does not move:
+   *
+   *  - On the REBUILD path (`unsharp`, `pan`, `loudnorm`, `superequalizer` --
+   *    the four measured refusers, one of them V08's) the rebuild re-serialises
+   *    the spec the slot ALREADY holds, i.e. the pre-change value. Literally a
+   *    no-op.
+   *  - On the COMMAND path mpv changes but the slot does not, so the next
+   *    whole-chain rebuild -- another module's `set()`, an mpv respawn, the
+   *    next file -- silently reverts the value.
+   *
+   * Both were measured in Wave 1 and cost M03 a whole compensating file
+   * (`chain-sync.ts`) that every `ctx.vf`/`ctx.af` author would have had to
+   * write again. With `spec`, the slot and mpv stay in agreement on both paths
+   * and no module has to mirror core's refuser table to know which happened.
+   * It is optional only so the old three-argument calls still typecheck.
    */
   command(
     label: string,
     option: string,
     value: string,
-    lavfiFilterName: string
+    lavfiFilterName: string,
+    spec?: string
   ): Promise<{ path: 'command' | 'rebuild' }>
   readonly hasCpuFilter: boolean
 }

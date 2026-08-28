@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import { MpvClient } from '../../mpv/client'
 import { resolveMpvPath } from '../../mpv/manager'
 import { ContributionError } from '../errors.ts'
+import { assertCommandShape, commandNameOf, isBannedCommand } from './ownership.ts'
 import type { EngineService, SecondaryEngine, SecondaryEngineOptions } from '@shared/feature-api'
 
 /**
@@ -227,6 +228,32 @@ export function createEngineService(ownerId: string): EngineService {
         },
         async command<T>(args: unknown[]): Promise<T> {
           if (entry.closed) throw new Error(`${ownerId}/${purpose} engine is closed`)
+          /**
+           * A SECONDARY SKIPS OWNERSHIP, NOT SAFETY.
+           *
+           * Skipping ownership here is deliberate and documented (§5.3): a
+           * private mpv has no shared property namespace to protect, which is
+           * the whole reason to have one. But `assertCommandShape()` and the
+           * two outright bans are not ownership -- they are the guards that
+           * keep a command from killing mpv or writing an unbounded set of
+           * properties -- and they lived only in `ctx.mpv.command()`. So on a
+           * secondary, `[new String('vf'), 'set', 'hflip']` and a bare
+           * `['screenshot-raw']` went straight to the pipe, and `screenshot-raw`
+           * kills mpv over JSON IPC (§7.7 trap 5).
+           *
+           * The consequence was not confined to the module's own engine either:
+           * an engine that dies mid-probe leaves the orphan reaper to notice,
+           * and "no orphan mpv on quit" is a product guarantee. Found in Wave 1
+           * by M27, the first module to use a secondary at all.
+           */
+          assertCommandShape(args)
+          if (isBannedCommand(args)) {
+            throw new ContributionError(
+              `'${String(commandNameOf(args))}' is never allowed over JSON IPC, on a secondary ` +
+                `engine either: it kills mpv (§7.7 trap 5). A secondary skips OWNERSHIP, ` +
+                `not the shape check and not the bans.`
+            )
+          }
           touch()
           return client.command<T>(args)
         },

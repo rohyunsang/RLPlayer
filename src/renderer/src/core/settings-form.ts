@@ -59,6 +59,8 @@ interface SettingRow {
   advanced?: boolean
   order?: number
   keywords?: readonly string[]
+  /** `false` when the descriptor's `visibleWhen` predicate excludes it. */
+  visible?: boolean
 }
 
 interface SystemInfo {
@@ -85,6 +87,12 @@ const el = <K extends keyof HTMLElementTagNameMap>(
 
 let rows: SettingRow[] = []
 const listeners = new Map<string, Set<() => void>>()
+/** Set by bootSettingsWindow so a visibility change can re-render in place. */
+let formRoot: HTMLElement | null = null
+
+/** The visibility vector, used to decide whether a write changed the FORM. */
+const visKey = (list: readonly SettingRow[]): string =>
+  list.map((r) => (r.visible === false ? '0' : '1')).join('')
 
 async function writeSetting(id: string, value: unknown): Promise<void> {
   await bridge.invoke('core-settings:set', { id, value })
@@ -96,6 +104,26 @@ async function writeSetting(id: string, value: unknown): Promise<void> {
     } catch (e) {
       console.error(`[settings] listener for '${id}' threw:`, e)
     }
+  }
+  /**
+   * `visibleWhen` is a predicate over OTHER settings, so writing one row can
+   * change whether another applies -- that is the entire point of it, and the
+   * reason it cannot be evaluated here: the function lives in main. Re-fetch
+   * and re-render ONLY when the visibility vector actually moved.
+   *
+   * Not on every write, deliberately. A bounded int/float writes on each
+   * `input` event, so re-rendering unconditionally would tear the slider out
+   * from under the pointer mid-drag; comparing the vector first makes the
+   * common case free.
+   */
+  if (!formRoot) return
+  try {
+    const fresh = (await bridge.invoke('core-settings:list')) as SettingRow[]
+    if (visKey(fresh) === visKey(rows)) return
+    rows = fresh
+    await render(formRoot)
+  } catch (e) {
+    console.error('[settings] could not refresh visibility:', e)
   }
 }
 
@@ -280,7 +308,10 @@ function renderRow(row: SettingRow): HTMLElement {
 }
 
 function renderSection(section: Section, root: HTMLElement): void {
-  const mine = rows.filter((r) => r.section === section)
+  // `visible === false` means the descriptor's visibleWhen excluded it. It is
+  // dropped rather than `hidden`, so the search filter and the "no results"
+  // line below both count only rows that actually apply.
+  const mine = rows.filter((r) => r.section === section && r.visible !== false)
   const contributed = settingsSections.filter((s) => s.section === section)
   if (mine.length === 0 && contributed.length === 0 && !CORE_BLOCKS[section]) return
 
@@ -443,6 +474,7 @@ function renderFooter(): HTMLElement {
 export async function bootSettingsWindow(loadFeatures: () => void): Promise<void> {
   const root = document.getElementById('settingsRoot')
   if (!root) throw new Error('missing #settingsRoot')
+  formRoot = root
 
   await fetchMessages((ch) => bridge.invoke(ch))
 

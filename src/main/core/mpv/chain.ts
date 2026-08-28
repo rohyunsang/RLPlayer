@@ -168,14 +168,36 @@ class FilterChain {
     label: string,
     option: string,
     value: string,
-    lavfiFilterName: string
+    lavfiFilterName: string,
+    spec?: string
   ): Promise<{ path: 'command' | 'rebuild' }> {
     this.#assertOwned(ownerId, label)
-    if (!this.#slots.has(label)) {
+    const slot = this.#slots.get(label)
+    if (!slot) {
       throw new ContributionError(
         `${this.#cfg.kind}.command() on '${label}', which has no slot. Call set() first.`
       )
     }
+    /**
+     * THE SLOT IS UPDATED BEFORE EITHER PATH RUNS, and both halves of that
+     * mattered in practice.
+     *
+     * Without it the rebuild path re-serialised `slot.spec` -- the value from
+     * BEFORE this call -- so for the four measured refusers (`unsharp`, and af's
+     * `pan`/`loudnorm`/`superequalizer`) `command()` was documented as
+     * "transparently rebuilds for those" and was in fact a no-op. `unsharp` is
+     * V08, the one row the vf-chain pilot exists for.
+     *
+     * And on the success path mpv held the new value while the slot held the
+     * old one, so the next whole-chain `#apply()` -- triggered by any other
+     * module's `set()`/`toggle()`, an mpv respawn, or the next file -- reverted
+     * it. Two mirror-image bugs, one missing line.
+     *
+     * No `#schedule()` here: the rebuild path applies below, and the command
+     * path does not need one. That is what keeps a per-pixel slider from
+     * emitting a whole-chain `set` per event.
+     */
+    if (spec !== undefined) slot.spec = spec
     if (this.#cfg.refusers.includes(lavfiFilterName)) {
       await this.#apply()
       return { path: 'rebuild' }
@@ -307,8 +329,8 @@ export function createChain(cfg: ChainConfig): ChainAdmin {
         set: (label, spec) => chain.set(ownerId, label, spec),
         remove: (label) => chain.remove(ownerId, label),
         toggle: (label, enabled) => chain.toggle(ownerId, label, enabled),
-        command: (label, option, value, filter) =>
-          chain.command(ownerId, label, option, value, filter),
+        command: (label, option, value, filter, spec) =>
+          chain.command(ownerId, label, option, value, filter, spec),
         get hasCpuFilter(): boolean {
           return chain.hasCpuFilter
         }
@@ -322,6 +344,17 @@ export function createChain(cfg: ChainConfig): ChainAdmin {
 /** vf: deint → dv → 3d/360 → denoise/deblock → sharpen/soften → mblur → vsr
  *  → lut → rotate → hflip/vflip. Colour ops sit with denoise, before sharpen. */
 export const VF_ORDER: readonly string[] = [
+  /**
+   * `rl-idet` FIRST, ahead of the deinterlacer it informs.
+   *
+   * It was missing entirely, and `claim()` throws on a label that is not in
+   * this table -- so M04, which spec §2 V21 requires to install `@rl-idet:
+   * lavfi=[idet]` for interlace detection, would have failed to BOOT on the
+   * first line of its own feature, with an error naming the reserved table it
+   * was correctly following. Nothing caught it because nothing compared the
+   * manifest's reserved labels against this list; ownership.test.ts does now.
+   */
+  'rl-idet',
   'rl-deint',
   'rl-dv',
   'rl-3d',

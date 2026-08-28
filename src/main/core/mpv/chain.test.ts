@@ -47,8 +47,14 @@ function makeChain(kind: 'vf' | 'af' = 'vf'): {
     set: (owner: string, label: string, spec: string) => svc(owner).set(label, spec),
     remove: (owner: string, label: string) => svc(owner).remove(label),
     toggle: (owner: string, label: string, on: boolean) => svc(owner).toggle(label, on),
-    command: (owner: string, label: string, opt: string, value: string, filter: string) =>
-      svc(owner).command(label, opt, value, filter)
+    command: (
+      owner: string,
+      label: string,
+      opt: string,
+      value: string,
+      filter: string,
+      spec?: string
+    ) => svc(owner).command(label, opt, value, filter, spec)
   }
   // The exec is attached rather than constructed in: only core/mpv/bus can
   // hand out a raw vf/af command, and a test stands in for it here.
@@ -69,7 +75,9 @@ type Commander = (
   label: string,
   opt: string,
   value: string,
-  filter: string
+  filter: string,
+  /** The spec the slot should hold after the change; see FilterChainService. */
+  spec?: string
 ) => Promise<{ path: 'command' | 'rebuild' }>
 
 test('the chain object hands out no path back to its own state', () => {
@@ -246,4 +254,97 @@ test('hasCpuFilter reports whether any lavfi filter is live', () => {
   assert.equal(chain.hasCpuFilter, true)
   chain.toggle('video-enhance', 'rl-sharpen', false)
   assert.equal(chain.hasCpuFilter, false, 'a disabled filter costs nothing')
+})
+
+/**
+ * The two tests above assert WHICH PATH `command()` took and stop there, and
+ * that is exactly how this shipped broken: the path was right and the result
+ * was wrong on both branches. These assert the chain string mpv would receive.
+ */
+test('a rebuild carries the NEW spec, not the one the slot already held', async () => {
+  const { chain, sent } = makeChain()
+  chain.claim('video-enhance', ['rl-sharpen'])
+  chain.onFileLoaded()
+  chain.set('video-enhance', 'rl-sharpen', 'lavfi=[unsharp=5:5:1.0]')
+  await new Promise((r) => setTimeout(r, 0))
+  sent.length = 0
+
+  const res = await chain.command(
+    'video-enhance',
+    'rl-sharpen',
+    'luma_amount',
+    '1.2',
+    'unsharp',
+    'lavfi=[unsharp=5:5:1.2]'
+  )
+  assert.equal(res.path, 'rebuild')
+  assert.equal(
+    sent[0]?.[2],
+    '@rl-sharpen:lavfi=[unsharp=5:5:1.2]',
+    'unsharp is the ONE vf refuser and V08 is the one row the pilot exists for; ' +
+      'without the spec this rebuild re-sent 1.0 and the slider did nothing'
+  )
+  assert.equal(chain.serialise(), '@rl-sharpen:lavfi=[unsharp=5:5:1.2]')
+})
+
+test('after a LIVE command the slot agrees with mpv, so the next rebuild does not revert it', async () => {
+  const { chain, sent } = makeChain()
+  chain.claim('video-enhance', ['rl-sharpen'])
+  chain.claim('video-color', ['rl-levels'])
+  chain.onFileLoaded()
+  chain.set('video-enhance', 'rl-sharpen', 'lavfi=[cas=strength=0.4]')
+  await new Promise((r) => setTimeout(r, 0))
+
+  await chain.command(
+    'video-enhance',
+    'rl-sharpen',
+    'strength',
+    '0.55',
+    'cas',
+    'lavfi=[cas=strength=0.55]'
+  )
+  sent.length = 0
+
+  // ANOTHER module touching its own slot rebuilds the whole chain. That is the
+  // moment the live value used to disappear -- and nothing in the module that
+  // owns rl-sharpen is even running at the time.
+  chain.set('video-color', 'rl-levels', 'lavfi=[eq=contrast=1.1]')
+  await new Promise((r) => setTimeout(r, 0))
+  assert.match(
+    String(sent[0]?.[2]),
+    /@rl-sharpen:lavfi=\[cas=strength=0\.55\]/,
+    'a foreign module’s set() must not roll back a live vf-command'
+  )
+})
+
+test('an af refuser carries its new spec too (pan/loudnorm/superequalizer)', async () => {
+  const { chain, sent } = makeChain('af')
+  chain.claim('audio-eq', ['rleq'])
+  chain.onFileLoaded()
+  chain.set('audio-eq', 'rleq', 'lavfi=[superequalizer=1b=5]')
+  await new Promise((r) => setTimeout(r, 0))
+  sent.length = 0
+
+  const res = await chain.command(
+    'audio-eq',
+    'rleq',
+    '1b',
+    '9',
+    'superequalizer',
+    'lavfi=[superequalizer=1b=9]'
+  )
+  assert.equal(res.path, 'rebuild')
+  assert.equal(sent[0]?.[2], '@rleq:lavfi=[superequalizer=1b=9]')
+})
+
+test('omitting the spec still works, so existing three-argument callers are unbroken', async () => {
+  const { chain, sent } = makeChain()
+  chain.claim('video-enhance', ['rl-sharpen'])
+  chain.onFileLoaded()
+  chain.set('video-enhance', 'rl-sharpen', 'lavfi=[cas=strength=0.4]')
+  await new Promise((r) => setTimeout(r, 0))
+  sent.length = 0
+  const res = await chain.command('video-enhance', 'rl-sharpen', 'strength', '0.55', 'cas')
+  assert.equal(res.path, 'command')
+  assert.deepEqual(sent[0], ['vf-command', 'rl-sharpen', 'strength', '0.55', 'cas'])
 })
