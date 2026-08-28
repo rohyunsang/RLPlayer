@@ -4,6 +4,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { assertCommandShape, isBannedCommand } from './ownership.ts'
+// The repo's comment/string-aware lexer, so source rules run on code and not on prose.
+import { lex } from '../../../../scripts/lib/lex.mjs'
 
 /**
  * test:secondary-engine — the shared "spawn a second mpv" service (§5.3).
@@ -126,6 +128,39 @@ test('no feature module reaches the binary or the IPC client directly', () => {
     'CORE_PATHS no longer covers mpv/client'
   )
 
+  // THE RULE RUNS ON CODE, NOT ON PROSE — and this is a check that lied.
+  //
+  // It was `/resolveMpvPath|mpv\/manager|mpv\/client/.test(text)` against the
+  // RAW file. Three Wave-1 modules red-lighted on it and all three hits were
+  // comments citing evidence by file:line, which is the documentation discipline
+  // this repo asks for everywhere else:
+  //
+  //   capture-encode/encode-args.ts:79   ` * (\`src/main/mpv/client.ts:36\`), so every job …`
+  //   capture-still/manifest.ts:12       ` *   src/main/mpv/manager.ts:5  import { app } …`
+  //   subs-style/legacy.ts:15,21         ` *   src/main/mpv/manager.ts:5`
+  //
+  // Zero were imports. This is the same sign-flipped defect `check-partition.mjs`
+  // already fixed once ("a `// plantedC` in a comment is not a use") and that
+  // M29 hit again in its own `/(word-boundary)dialog(word-boundary)/` rule. The fix is the one the repo
+  // already owns: `scripts/lib/lex.mjs` blanks comments and keeps string
+  // CONTENTS, and an import specifier is a string — so the rule keeps every bit
+  // of its reach over real code and loses only its reach over English.
+  const reach = /resolveMpvPath|mpv\/manager|mpv\/client/
+
+  // NEGATIVE CONTROL, permanent. A detector is worth nothing unless it is shown
+  // firing. If `lex()` ever starts blanking string contents too, the rule above
+  // would match nothing, the walk would report clean, and this test would become
+  // the fifth check in this repo to pass by being blind. These two assertions
+  // fail the moment that happens.
+  assert.ok(
+    reach.test(lex("import { resolveMpvPath } from '../../mpv/manager'").code),
+    'the detector no longer fires on a real direct import — it would report clean on anything'
+  )
+  assert.ok(
+    !reach.test(lex('/* see src/main/mpv/manager.ts:5 for why */').code),
+    'the detector still fires on prose, which is what made it red-light three clean modules'
+  )
+
   const offenders: string[] = []
   const walk = (dir: string): void => {
     if (!fs.existsSync(dir)) return
@@ -134,7 +169,7 @@ test('no feature module reaches the binary or the IPC client directly', () => {
       if (e.isDirectory()) walk(full)
       else if (/\.ts$/.test(e.name)) {
         const text = fs.readFileSync(full, 'utf8')
-        if (/resolveMpvPath|mpv\/manager|mpv\/client/.test(text)) {
+        if (reach.test(lex(text).code)) {
           offenders.push(path.relative(repo, full).split(path.sep).join('/'))
         }
       }
