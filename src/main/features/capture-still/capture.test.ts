@@ -19,9 +19,15 @@ import {
   needsWindowVo,
   normalizeFormat,
   normalizeTemplate,
+  canReencode,
+  clampResizeWidth,
+  looksLikePng,
   popRecent,
   pushRecent,
   replyFilename,
+  resizeDecision,
+  RESIZE_MAX_WIDTH,
+  RESIZE_MIN_WIDTH,
   startBurst,
   tempCaptureName,
   templateSpecifiers,
@@ -92,10 +98,30 @@ test('the window-VO requirement is per FLAG, not per scope', () => {
   assert.equal(needsWindowVo('window'), true)
   assert.equal(needsWindowVo('video'), false)
   assert.equal(needsWindowVo('subtitles'), false)
-  // A substring must not count: 'subtitles' contains neither flag as a term,
-  // and a naive `flags.includes('window')` would be wrong the moment mpv grows
-  // a flag with 'window' inside it.
   assert.equal(needsWindowVo('subtitles+video'), false)
+
+  /**
+   * A SUBSTRING MUST NOT COUNT — and this is the case that actually proves it.
+   *
+   * The draft's comment here claimed a naive `flags.includes('scaled') ||
+   * flags.includes('window')` "would be wrong", but every one of its six cases
+   * passes under exactly that implementation, measured:
+   *
+   *   naive('scaled')=true  naive('scaled+subtitles')=true  naive('window')=true
+   *   naive('video')=false  naive('subtitles')=false  naive('subtitles+video')=false
+   *   -> 0 failures. The check was blind to the mistake it named.
+   *
+   * `unscaled` is the discriminator, and it is not hypothetical: mpv spells a
+   * real thing that way (`video-unscaled`, `--no-keepaspect` territory), so a
+   * future flag term containing it is a live possibility.
+   * `'unscaled'.includes('scaled')` is TRUE, so the naive form claims a
+   * window-backed VO is required and the C04 fallback fires — a capture
+   * silently taken at source resolution — where the term-split form correctly
+   * says no. If this line ever goes red, someone replaced the split with a
+   * substring test.
+   */
+  assert.equal(needsWindowVo('unscaled'), false)
+  assert.equal(needsWindowVo('subtitles+unscaled'), false)
 })
 
 test('every display plan has a source-resolution fallback, and source plans have none', () => {
@@ -146,8 +172,20 @@ test('a dropped or empty reply is a normal branch, not a crash', () => {
     assert.equal(r.ok, false, `${JSON.stringify(reply)} must not be treated as a filename`)
   }
   assert.equal((replyFilename(undefined) as { reason: string }).reason, 'no-reply')
-  // A non-string filename is a malformed reply, not a relative path.
-  assert.equal((replyFilename({ filename: 42 }) as { reason: string }).reason, 'relative')
+
+  /**
+   * A non-string filename is a MALFORMED reply, not a relative path — and the
+   * draft asserted `'relative'` right under a comment saying exactly that. The
+   * comment was right. The distinction is not cosmetic: `'relative'` makes the
+   * caller log the very specific C01 accusation "screenshot-directory was not
+   * in effect; the file is in mpv's cwd", which for `{filename: 42}` is a
+   * confident false statement about a setting that was fine, and it is the only
+   * diagnostic anybody would have to work from.
+   */
+  assert.equal((replyFilename({ filename: 42 }) as { reason: string }).reason, 'malformed')
+  assert.equal((replyFilename({ filename: {} }) as { reason: string }).reason, 'malformed')
+  // ...and the real precondition failure keeps its own, accurate reason.
+  assert.equal((replyFilename({ filename: 'mpv-shot0002.jpg' }) as { reason: string }).reason, 'relative')
 })
 
 // --- C05: the filename template ------------------------------------------
@@ -288,4 +326,60 @@ test('the clipboard temp name is unique per call and always a .png', () => {
   const b = tempCaptureName(2, 1_700_000_000_000)
   assert.notEqual(a, b)
   assert.ok(a.endsWith('.png'))
+})
+
+test('a truncated or absent clipboard PNG is caught before it reaches the clipboard (C03)', () => {
+  /**
+   * Screenshot encoding is ASYNCHRONOUS: the `screenshot-to-file` reply can land
+   * before the writer has finished, and a refused command leaves no file at all.
+   * Handing those bytes to the clipboard replaces whatever the user had copied
+   * with nothing, so the signature is checked first.
+   */
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01])
+  assert.equal(looksLikePng(png), true)
+  assert.equal(looksLikePng(new Uint8Array(0)), false, 'a zero-byte file is a real outcome')
+  assert.equal(looksLikePng(png.slice(0, 7)), false, 'a half-written header is not a PNG')
+  assert.equal(looksLikePng(undefined), false)
+  assert.equal(looksLikePng(null), false)
+  // A JPEG is not a PNG even though it is a perfectly good image: the temp file
+  // is always written as .png, so a JPEG here means mpv ignored the extension.
+  assert.equal(looksLikePng(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0])), false)
+})
+
+// --- C07: the custom capture width ---------------------------------------
+
+test('a custom width is off by default and never upscales (C07)', () => {
+  assert.equal(clampResizeWidth(0), 0)
+  assert.equal(clampResizeWidth(''), 0)
+  assert.equal(clampResizeWidth(undefined), 0)
+  assert.equal(clampResizeWidth(-100), 0)
+  assert.equal(clampResizeWidth(Number.NaN), 0)
+  assert.equal(clampResizeWidth(1), RESIZE_MIN_WIDTH)
+  assert.equal(clampResizeWidth(10 ** 6), RESIZE_MAX_WIDTH)
+  assert.equal(clampResizeWidth(640), 640)
+
+  assert.deepEqual(resizeDecision(0, 1920, 'png'), { action: 'skip', reason: 'off' })
+  assert.deepEqual(resizeDecision(640, 1920, 'png'), { action: 'resize', width: 640 })
+  // Upscaling a capture is never what "capture at 640px" means, and a re-encode
+  // of an already-small frame is pure loss.
+  assert.deepEqual(resizeDecision(640, 640, 'png'), { action: 'skip', reason: 'already-small' })
+  assert.deepEqual(resizeDecision(640, 320, 'jpg'), { action: 'skip', reason: 'already-small' })
+  // An unknown source width still resizes: mpv is authoritative about the file,
+  // not us, and a needless downscale is visible while a missed one is not.
+  assert.deepEqual(resizeDecision(640, undefined, 'png'), { action: 'resize', width: 640 })
+})
+
+test('a resize is refused for the formats the platform cannot re-encode (C07)', () => {
+  /**
+   * Electron's nativeImage exposes `toPNG()` and `toJPEG(q)` and nothing else —
+   * no WebP, no JXL, no AVIF encoder. Honouring a resize for those would mean
+   * silently writing a different container than the user chose, so it is refused
+   * and reported instead.
+   */
+  assert.equal(canReencode('png'), true)
+  assert.equal(canReencode('jpg'), true)
+  for (const f of ['webp', 'jxl', 'avif', 'bmp']) {
+    assert.equal(canReencode(f), false, `${f} has no nativeImage encoder`)
+    assert.deepEqual(resizeDecision(640, 1920, f), { action: 'skip', reason: 'not-encodable' })
+  }
 })

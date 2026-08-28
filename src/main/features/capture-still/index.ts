@@ -1,21 +1,25 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { app, clipboard, ClipboardItem, shell } from 'electron'
+import { app, clipboard, ClipboardItem, nativeImage, shell } from 'electron'
 import type {
+  CommandDescriptor,
   FeatureContext,
   FeatureModule,
   ProgressHandle,
-  SettingDescriptor,
   Unsubscribe
 } from '@shared/feature-api'
 import { loadConfig, saveConfig } from '../../services/config.ts'
 import {
-  BURST_MAX_COUNT,
-  BURST_MAX_INTERVAL_MS,
-  BURST_MIN_COUNT,
-  BURST_MIN_INTERVAL_MS,
-  CAPTURE_FORMATS,
-  DEFAULT_TEMPLATE,
+  COMMAND_VERBS,
+  EN,
+  KO,
+  MENU_ENTRIES,
+  MENU_ORDER,
+  commandId,
+  commandMeta,
+  descriptors
+} from './manifest.ts'
+import {
   burstFraction,
   burstGapMs,
   burstStep,
@@ -24,9 +28,11 @@ import {
   looksLikePng,
   normalizeFormat,
   normalizeTemplate,
+  clampResizeWidth,
   popRecent,
   pushRecent,
   replyFilename,
+  resizeDecision,
   startBurst,
   tempCaptureName,
   templateWarnings,
@@ -124,6 +130,60 @@ function template(): string {
   return normalizeTemplate(ctx.settings.get<string>('capture-still.template'))
 }
 
+function resizeWidth(): number {
+  return clampResizeWidth(ctx.settings.get<number>('capture-still.resizeWidth'))
+}
+
+function format(): string {
+  return normalizeFormat(ctx.settings.get<string>('capture-still.format'))
+}
+
+/**
+ * C07: rewrite a capture narrower, AFTER mpv wrote it.
+ *
+ * There is no mpv option for this and the spec forbids the obvious shortcut: a
+ * `scale` in the live `vf` would change what the user is watching, and this
+ * module does not hold `vf` in any case. So the file mpv chose is re-encoded in
+ * place through `nativeImage`, which is also why the format matters — there are
+ * exactly two encoders (`toPNG`, `toJPEG`), so a `webp`/`jxl`/`avif` capture is
+ * REFUSED rather than silently rewritten as a PNG under a .webp name.
+ *
+ * Returns true when the file was rewritten. A failure is never fatal: the
+ * full-size capture mpv already wrote is a perfectly good outcome, so this
+ * warns and leaves it alone.
+ */
+async function resizeInPlace(file: string): Promise<boolean> {
+  const fmt = format()
+  const img = nativeImage.createFromPath(file)
+  if (img.isEmpty()) {
+    ctx.log.warn('C07 resize: could not read back', file)
+    return false
+  }
+  const decision = resizeDecision(resizeWidth(), img.getSize().width, fmt)
+  if (decision.action === 'skip') {
+    if (decision.reason === 'not-encodable') {
+      ctx.log.warn(
+        `C07 resize skipped: '${fmt}' has no nativeImage encoder, so honouring the ` +
+          'width would mean writing a different format than the user chose'
+      )
+      ctx.osd.toast({ kind: 'error', message: t('capture-still.resizeUnsupported') })
+    }
+    return false
+  }
+  try {
+    const out = img.resize({ width: decision.width, quality: 'best' })
+    const bytes =
+      fmt === 'jpg'
+        ? out.toJPEG(Math.max(1, ctx.settings.get<number>('capture-still.jpegQuality')))
+        : out.toPNG()
+    await fs.promises.writeFile(file, bytes)
+    return true
+  } catch (e) {
+    ctx.log.warn('C07 resize failed, keeping the full-size capture:', (e as Error).message)
+    return false
+  }
+}
+
 function burstConfig(): { count: number; intervalMs: number; mode: BurstMode } {
   return clampBurst({
     count: ctx.settings.get<number>('capture-still.burstCount'),
@@ -143,11 +203,10 @@ function burstConfig(): { count: number; intervalMs: number; mode: BurstMode } {
 function spawnArgs(): string[] {
   const dir = targetDir()
   ensureDir(dir)
-  const format = normalizeFormat(ctx.settings.get<string>('capture-still.format'))
   return [
     `--screenshot-directory=${dir}`,
     `--screenshot-template=${template()}`,
-    `--screenshot-format=${format}`,
+    `--screenshot-format=${format()}`,
     `--screenshot-jpeg-quality=${ctx.settings.get<number>('capture-still.jpegQuality')}`,
     `--screenshot-png-compression=${ctx.settings.get<number>('capture-still.pngCompression')}`,
     // C06, measured: the default is `yes`, so every PNG from an 8-bit H.264
@@ -175,7 +234,7 @@ async function applyProperties(): Promise<void> {
   }
   await set('screenshot-directory', dir)
   await set('screenshot-template', template())
-  await set('screenshot-format', normalizeFormat(ctx.settings.get<string>('capture-still.format')))
+  await set('screenshot-format', format())
   await set('screenshot-jpeg-quality', ctx.settings.get<number>('capture-still.jpegQuality'))
   await set('screenshot-png-compression', ctx.settings.get<number>('capture-still.pngCompression'))
   await set('screenshot-high-bit-depth', ctx.settings.get<boolean>('capture-still.highBitDepth'))
@@ -214,13 +273,17 @@ function t(key: string, params?: Record<string, string | number>): string {
   return ctx.i18n.t(key, params)
 }
 
-function noteSaved(file: string, fellBack: boolean): void {
+function noteSaved(file: string, fellBack: boolean, resized = false): void {
   recent = pushRecent(recent, file)
+  const name = path.basename(file)
+  const message = fellBack
+    ? t('capture-still.savedFallback', { name })
+    : resized
+      ? t('capture-still.savedResized', { name, w: resizeWidth() })
+      : t('capture-still.saved', { name })
   ctx.osd.toast({
     kind: 'info',
-    message: fellBack
-      ? t('capture-still.savedFallback', { name: path.basename(file) })
-      : t('capture-still.saved', { name: path.basename(file) }),
+    message,
     actionLabel: t('capture-still.openFolder'),
     onAction: () => shell.showItemInFolder(file)
   })
@@ -275,6 +338,11 @@ async function captureFile(scope: CaptureScope, withSubs: boolean): Promise<stri
        * was not set when mpv took the shot, and the file is somewhere in mpv's
        * cwd. We deliberately do NOT hand this path to `shell` or to the C24
        * delete stack.
+       *
+       * This branch is reached ONLY for a real string that is not a path.
+       * `{filename: 42}` gets `'malformed'` instead, because accusing
+       * `screenshot-directory` there would be a confident false statement about
+       * the one setting a reader would then go and check.
        */
       ctx.log.error(
         'screenshot replied with a RELATIVE filename:',
@@ -285,12 +353,24 @@ async function captureFile(scope: CaptureScope, withSubs: boolean): Promise<stri
       ctx.osd.toast({ kind: 'error', message: t('capture-still.relativeReply') })
       return null
     }
-    ctx.log.error('screenshot produced no filename; reply was', reply)
+    if (out.reason === 'malformed') {
+      ctx.log.error(
+        'screenshot reply had a non-string filename — mpv’s reply shape is not what ' +
+          'this build expects. This is NOT the C01 screenshot-directory precondition. Reply:',
+        reply
+      )
+    } else {
+      ctx.log.error('screenshot produced no filename; reply was', reply)
+    }
     ctx.osd.toast({ kind: 'error', message: t('capture-still.failed') })
     return null
   }
 
-  noteSaved(out.filename, fellBack)
+  // C07, after the fact: mpv wrote the frame at source or display size and this
+  // narrows it. Deliberately after `replyFilename`, because the only path we may
+  // touch is the one mpv reported.
+  const resized = await resizeInPlace(out.filename)
+  noteSaved(out.filename, fellBack, resized)
   return out.filename
 }
 
@@ -334,7 +414,21 @@ async function captureClipboard(scope: CaptureScope, withSubs: boolean): Promise
     }
     const bytes = await fs.promises.readFile(tmp)
     if (!looksLikePng(bytes)) throw new Error(`mpv wrote no usable PNG (${bytes.length} bytes)`)
-    const blob = new Blob([new Uint8Array(bytes)], { type: 'image/png' })
+    /**
+     * C07 on the clipboard path too. The temp file is always a PNG whatever
+     * `screenshot-format` says, so the format argument is `'png'` and not
+     * `format()` — the encodability question is about THIS file, not about the
+     * user's archive format, and passing `format()` here would refuse the resize
+     * for a user whose saved captures are WebP while the clipboard PNG in hand
+     * is perfectly re-encodable.
+     */
+    let payload = new Uint8Array(bytes)
+    const img = nativeImage.createFromBuffer(bytes)
+    const decision = resizeDecision(resizeWidth(), img.getSize().width, 'png')
+    if (decision.action === 'resize' && !img.isEmpty()) {
+      payload = new Uint8Array(img.resize({ width: decision.width, quality: 'best' }).toPNG())
+    }
+    const blob = new Blob([payload], { type: 'image/png' })
     await clipboard.write([new ClipboardItem({ 'image/png': blob })])
     ctx.osd.toast({ kind: 'info', message: t('capture-still.copied') })
   } catch (e) {
@@ -404,9 +498,20 @@ async function burstTick(): Promise<void> {
   }
 
   const file = await captureFileQuiet(b.scope, b.subs)
-  if (file !== null) b.saved++
+  if (file !== null) {
+    b.saved++
+    await resizeInPlace(file)
+  }
   b.state.done++
   b.job?.update({ fraction: burstFraction(b.state), detail: `${b.saved}/${b.state.config.count}` })
+  /**
+   * The renderer's badge is driven by this channel and by nothing else, and the
+   * draft pushed only on start and stop — so the transport button read `0/50`
+   * for the whole of a fifty-frame burst and then vanished. The progress handle
+   * was being updated one line above, which is exactly why the gap was easy to
+   * miss: the OSD looked right.
+   */
+  pushState()
 
   if (b.state.config.mode === 'frame' && ctx.commands.has('nav-seek.frameForward')) {
     await ctx.commands.invoke('nav-seek.frameForward').catch(() => undefined)
@@ -514,157 +619,6 @@ function openCaptureFolder(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Settings (C05, C06, C21, P59)
-// ---------------------------------------------------------------------------
-
-function descriptors(): SettingDescriptor[] {
-  const formats = CAPTURE_FORMATS.map((f) => ({
-    value: f,
-    labelKey: `capture-still.format.${f}`
-  }))
-  return [
-    {
-      id: 'capture-still.directory',
-      section: 'general',
-      group: 'capture',
-      labelKey: 'capture-still.directoryLabel',
-      descriptionKey: 'capture-still.directoryDesc',
-      type: { kind: 'path', mode: 'directory' },
-      default: '',
-      mpvOption: 'screenshot-directory',
-      keywords: ['스크린샷', '캡처', 'screenshot', 'capture', 'folder', '폴더'],
-      order: 30
-    },
-    {
-      id: 'capture-still.template',
-      section: 'general',
-      group: 'capture',
-      labelKey: 'capture-still.templateLabel',
-      descriptionKey: 'capture-still.templateDesc',
-      type: { kind: 'string' },
-      default: DEFAULT_TEMPLATE,
-      mpvOption: 'screenshot-template',
-      keywords: ['파일명', '템플릿', 'template', 'filename'],
-      order: 31
-    },
-    {
-      id: 'capture-still.format',
-      section: 'general',
-      group: 'capture',
-      labelKey: 'capture-still.formatLabel',
-      // C06: mpv has no BMP writer. PNG is the lossless offer instead.
-      type: { kind: 'enum', options: formats },
-      default: 'png',
-      mpvOption: 'screenshot-format',
-      keywords: ['형식', 'format', 'png', 'jpg', 'webp'],
-      order: 32
-    },
-    {
-      id: 'capture-still.jpegQuality',
-      section: 'general',
-      group: 'capture',
-      labelKey: 'capture-still.jpegQualityLabel',
-      type: { kind: 'int', min: 0, max: 100, step: 1 },
-      default: 90,
-      mpvOption: 'screenshot-jpeg-quality',
-      keywords: ['품질', 'quality', 'jpeg'],
-      order: 33,
-      visibleWhen: (get) => get<string>('capture-still.format') === 'jpg'
-    },
-    {
-      id: 'capture-still.pngCompression',
-      section: 'general',
-      group: 'capture',
-      labelKey: 'capture-still.pngCompressionLabel',
-      type: { kind: 'int', min: 0, max: 9, step: 1 },
-      default: 7,
-      mpvOption: 'screenshot-png-compression',
-      keywords: ['압축', 'compression', 'png'],
-      order: 34,
-      visibleWhen: (get) => get<string>('capture-still.format') === 'png'
-    },
-    {
-      id: 'capture-still.highBitDepth',
-      section: 'general',
-      group: 'capture',
-      labelKey: 'capture-still.highBitDepthLabel',
-      descriptionKey: 'capture-still.highBitDepthDesc',
-      type: { kind: 'bool' },
-      // C06, MEASURED: mpv defaults this to `yes`, which turned every PNG from
-      // an 8-bit H.264 source into a 16-bit 5.37 MB file.
-      default: false,
-      mpvOption: 'screenshot-high-bit-depth',
-      keywords: ['비트', 'bit depth', 'hdr'],
-      advanced: true,
-      order: 35
-    },
-    {
-      id: 'capture-still.includeSubs',
-      section: 'general',
-      group: 'capture',
-      labelKey: 'capture-still.includeSubsLabel',
-      type: { kind: 'bool' },
-      default: true,
-      keywords: ['자막', 'subtitles'],
-      order: 36
-    },
-    {
-      id: 'capture-still.useDisplayResolution',
-      section: 'general',
-      group: 'capture',
-      labelKey: 'capture-still.useDisplayResolutionLabel',
-      descriptionKey: 'capture-still.useDisplayResolutionDesc',
-      type: { kind: 'bool' },
-      default: false,
-      keywords: ['해상도', 'resolution', 'display', 'scaled'],
-      order: 37
-    },
-    {
-      id: 'capture-still.burstCount',
-      section: 'general',
-      group: 'capture',
-      labelKey: 'capture-still.burstCountLabel',
-      type: { kind: 'int', min: BURST_MIN_COUNT, max: BURST_MAX_COUNT, step: 1 },
-      default: 10,
-      keywords: ['연속', 'burst', 'consecutive', '장수'],
-      order: 38
-    },
-    {
-      id: 'capture-still.burstIntervalMs',
-      section: 'general',
-      group: 'capture',
-      labelKey: 'capture-still.burstIntervalLabel',
-      type: {
-        kind: 'int',
-        min: BURST_MIN_INTERVAL_MS,
-        max: BURST_MAX_INTERVAL_MS,
-        step: 100
-      },
-      default: 1000,
-      keywords: ['간격', 'interval', 'burst'],
-      order: 39
-    },
-    {
-      id: 'capture-still.burstMode',
-      section: 'general',
-      group: 'capture',
-      labelKey: 'capture-still.burstModeLabel',
-      descriptionKey: 'capture-still.burstModeDesc',
-      type: {
-        kind: 'enum',
-        options: [
-          { value: 'time', labelKey: 'capture-still.burstMode.time' },
-          { value: 'frame', labelKey: 'capture-still.burstMode.frame' }
-        ]
-      },
-      default: 'time',
-      keywords: ['연속', 'burst', 'frame', '프레임'],
-      order: 40
-    }
-  ]
-}
-
-// ---------------------------------------------------------------------------
 // The module
 // ---------------------------------------------------------------------------
 
@@ -751,15 +705,16 @@ const mod: FeatureModule = {
       ctx.mpv.afterFileLoaded(() => void applyProperties())
     )
 
-    ctx.commands.register([
-      {
-        id: 'capture-still.save',
-        labelKey: 'capture-still.save',
-        category: 'capture',
-        // PotPlayer: Ctrl+E is "Save Current Source Frame", verified 8/8 against
-        // its own English.ini [MenuString] table (C22). Its `S` is the Pixel
-        // Shaders menu, which is why the seed's potplayer binding moved.
-        defaults: { default: ['KeyS'], potplayer: ['Ctrl+KeyE'], mpv: ['KeyS'] },
+    /**
+     * C22. The five user-facing capture actions plus the two housekeeping ones.
+     * The static half of every descriptor — id, labelKey, category and the
+     * per-preset bindings — comes from `manifest.ts` so it can be asserted
+     * without Electron; only `run`/`enabledWhen`, which close over ctx, live
+     * here. A verb with no handler is a boot error rather than a command that
+     * silently does nothing.
+     */
+    const handlers: Record<string, Omit<CommandDescriptor, 'id' | 'labelKey' | 'category' | 'defaults'>> = {
+      save: {
         enabledWhen: () => playing(),
         run: () =>
           captureFile(
@@ -767,95 +722,57 @@ const mod: FeatureModule = {
             includeSubs()
           )
       },
-      {
-        id: 'capture-still.saveNoSubs',
-        labelKey: 'capture-still.saveNoSubs',
-        category: 'capture',
-        // C02: unconditional, ignoring the current `sub-visibility` state, which
-        // is what you want from a key called "without subtitles".
-        defaults: { default: ['Shift+KeyS'], mpv: ['Shift+KeyS'] },
-        enabledWhen: () => playing(),
-        run: () => captureFile('source', false)
-      },
-      {
-        id: 'capture-still.toClipboard',
-        labelKey: 'capture-still.toClipboard',
-        category: 'capture',
-        defaults: { default: ['Ctrl+KeyS'], potplayer: ['Ctrl+KeyC'], mpv: ['Ctrl+KeyS'] },
+      // C02: unconditional, ignoring the current `sub-visibility` state — which
+      // is what you want from a key called "without subtitles".
+      saveNoSubs: { enabledWhen: () => playing(), run: () => captureFile('source', false) },
+      toClipboard: {
         enabledWhen: () => playing(),
         run: () => captureClipboard('source', includeSubs())
       },
-      {
-        id: 'capture-still.saveDisplay',
-        labelKey: 'capture-still.saveDisplay',
-        category: 'capture',
-        defaults: { default: ['Ctrl+Shift+KeyS'], potplayer: ['Ctrl+Alt+KeyE'] },
-        // C04: greyed out where `scaled` was measured to fail. The runtime
-        // fallback in captureFile() is what covers the cases this cannot see.
+      // C04: greyed out where `scaled` was measured to fail. The runtime
+      // fallback in captureFile() covers the states this guard cannot see.
+      saveDisplay: {
         enabledWhen: () => hasVideoSurface(),
         run: () => captureFile('display', includeSubs())
       },
-      {
-        id: 'capture-still.displayToClipboard',
-        labelKey: 'capture-still.displayToClipboard',
-        category: 'capture',
-        defaults: { default: ['Ctrl+Alt+KeyC'], potplayer: ['Ctrl+Alt+KeyC'] },
+      displayToClipboard: {
         enabledWhen: () => hasVideoSurface(),
         run: () => captureClipboard('display', includeSubs())
       },
-      {
-        id: 'capture-still.burstToggle',
-        labelKey: 'capture-still.burstToggle',
-        category: 'capture',
-        defaults: { default: ['Ctrl+KeyG'], potplayer: ['Ctrl+KeyG'] },
-        enabledWhen: () => playing(),
-        run: () => startBurstCapture()
-      },
-      {
-        id: 'capture-still.deleteLast',
-        labelKey: 'capture-still.deleteLast',
-        category: 'capture',
-        defaults: { default: ['Ctrl+Shift+Delete'] },
-        enabledWhen: () => recent.length > 0,
-        run: () => deleteLast()
-      },
-      {
-        id: 'capture-still.openFolder',
-        labelKey: 'capture-still.openFolder',
-        category: 'capture',
-        run: () => openCaptureFolder()
-      }
-    ])
+      burstToggle: { enabledWhen: () => playing(), run: () => startBurstCapture() },
+      deleteLast: { enabledWhen: () => recent.length > 0, run: () => deleteLast() },
+      openFolder: { run: () => openCaptureFolder() }
+    }
+    ctx.commands.register(
+      COMMAND_VERBS.map((verb) => {
+        const handler = handlers[verb]
+        if (!handler) throw new Error(`capture-still: no handler for command verb '${verb}'`)
+        return { ...commandMeta(verb), ...handler }
+      })
+    )
 
     /**
-     * C23: one capture submenu, replacing the legacy menu's two loose
-     * screenshot entries.
+     * C23: one capture submenu.
      *
      * A titled SUBMENU rather than eight items flattened into the root: a
-     * contributed section's own `labelKey` is not rendered as a title (see the
-     * findings in this module's report), so the title has to be an item that
-     * owns the submenu.
+     * contributed section's own `labelKey` is never rendered by
+     * `core/menu.ts#buildTemplate`, so the title has to be an item that owns the
+     * submenu. `replaces` is deliberately empty — the legacy menu's loose
+     * `screenshot` / `screenshotClipboard` entries C23 warns about are gone; what
+     * survives of them is `LEGACY_ACTIONS` in `core/legacy-bridge.ts`, which
+     * routes the old binding strings to `capture-still.save` /
+     * `capture-still.toClipboard` rather than drawing menu items of its own.
      */
     ctx.menu.contribute({
       id: 'capture-still.menu',
       labelKey: 'capture-still.menuTitle',
-      order: 60,
+      order: MENU_ORDER,
       items: [
         {
           labelKey: 'capture-still.menuTitle',
-          submenu: [
-            { commandId: 'capture-still.save' },
-            { commandId: 'capture-still.saveNoSubs' },
-            { commandId: 'capture-still.toClipboard' },
-            { type: 'separator' },
-            { commandId: 'capture-still.saveDisplay' },
-            { commandId: 'capture-still.displayToClipboard' },
-            { type: 'separator' },
-            { commandId: 'capture-still.burstToggle' },
-            { type: 'separator' },
-            { commandId: 'capture-still.openFolder' },
-            { commandId: 'capture-still.deleteLast' }
-          ]
+          submenu: MENU_ENTRIES.map((e) =>
+            'separator' in e ? { type: 'separator' as const } : { commandId: commandId(e.verb) }
+          )
         }
       ]
     })
@@ -877,140 +794,8 @@ const mod: FeatureModule = {
       total: burst?.state.config.count ?? 0
     }))
 
-    ctx.i18n.register('ko', {
-      'capture-still.menuTitle': '캡처',
-      'capture-still.save': '현재 프레임 저장',
-      'capture-still.saveNoSubs': '자막 없이 프레임 저장',
-      'capture-still.toClipboard': '현재 프레임 클립보드 복사',
-      'capture-still.saveDisplay': '화면 해상도로 저장',
-      'capture-still.displayToClipboard': '화면 해상도로 클립보드 복사',
-      'capture-still.burstToggle': '연속 캡처 시작/중지',
-      'capture-still.burstProgress': '연속 캡처',
-      'capture-still.deleteLast': '마지막 캡처 삭제',
-      'capture-still.openFolder': '폴더 열기',
-      'capture-still.saved': '{name}{을/를} 저장했습니다',
-      'capture-still.savedFallback': '{name}{을/를} 저장했습니다 (화면 해상도를 쓸 수 없어 원본 해상도로 저장)',
-      'capture-still.copied': '현재 프레임을 클립보드에 복사했습니다',
-      'capture-still.failed': '캡처에 실패했습니다',
-      'capture-still.relativeReply':
-        '캡처 파일 경로를 확인할 수 없습니다. 저장 폴더 설정을 확인하세요.',
-      'capture-still.burstStarted': '연속 캡처 {n}장 시작',
-      'capture-still.burstDone': '연속 캡처 {n}장 완료',
-      'capture-still.burstStopped': '연속 캡처 중지 ({n}장 저장)',
-      'capture-still.burstNeedsPause': '프레임 단위 연속 캡처는 일시정지 상태에서만 됩니다',
-      'capture-still.deleted': '{name}{을/를} 휴지통으로 보냈습니다',
-      'capture-still.deleteFailed': '삭제하지 못했습니다',
-      'capture-still.nothingToDelete': '삭제할 캡처가 없습니다',
-      'capture-still.directoryLabel': '캡처 저장 폴더',
-      'capture-still.directoryDesc':
-        '비워 두면 사진 폴더의 RLPlayer (휴대용 모드에서는 exe 옆의 Capture) 를 씁니다.',
-      'capture-still.templateLabel': '파일명 템플릿',
-      'capture-still.templateDesc':
-        '%F 파일명 · %wH.%wM.%wS.%wT 재생 위치(ms) · %#02n 일련번호. %p 와 %P 는 콜론을 포함해 밑줄로 바뀝니다.',
-      'capture-still.formatLabel': '이미지 형식',
-      'capture-still.format.png': 'PNG (무손실)',
-      'capture-still.format.jpg': 'JPEG',
-      'capture-still.format.webp': 'WebP',
-      'capture-still.format.jxl': 'JPEG XL',
-      'capture-still.format.avif': 'AVIF',
-      'capture-still.jpegQualityLabel': 'JPEG 품질',
-      'capture-still.pngCompressionLabel': 'PNG 압축 수준',
-      'capture-still.highBitDepthLabel': '고비트 심도로 저장',
-      'capture-still.highBitDepthDesc':
-        '8비트 영상에서도 16비트 PNG를 만들어 파일이 5배 커집니다. 10비트/HDR 원본에만 켜세요.',
-      'capture-still.includeSubsLabel': '자막 포함',
-      'capture-still.useDisplayResolutionLabel': '화면 해상도로 캡처',
-      'capture-still.useDisplayResolutionDesc':
-        '원본 대신 지금 보이는 크기로 저장합니다. 영상 창이 없으면 원본 해상도로 대체됩니다.',
-      'capture-still.burstCountLabel': '연속 캡처 장수',
-      'capture-still.burstIntervalLabel': '연속 캡처 간격 (ms)',
-      'capture-still.burstModeLabel': '연속 캡처 방식',
-      'capture-still.burstModeDesc': '프레임 단위는 일시정지 상태에서만 동작합니다.',
-      'capture-still.burstMode.time': '시간 간격',
-      'capture-still.burstMode.frame': '프레임 단위',
-      'capture-still.warn.colon-specifier': '%p / %P 는 콜론을 포함해 밑줄로 바뀝니다',
-      'capture-still.warn.illegal-literal': '파일명에 쓸 수 없는 문자가 있습니다',
-      'capture-still.warn.no-disambiguator':
-        '%n 이나 %wT 가 없어 같은 초에 찍은 캡처가 저장되지 않습니다 — 일련번호를 붙였습니다',
-      'capture-still.transportButton': '캡처 (Shift 클릭: 클립보드, Ctrl 클릭: 연속)',
-      'capture-still.templateHelp': '파일명 템플릿 지시자',
-      'capture-still.legend.F': '확장자 없는 파일명',
-      'capture-still.legend.f': '확장자를 포함한 파일명',
-      'capture-still.legend.pos': '재생 위치 — 시/분/초/밀리초',
-      'capture-still.legend.n': '일련번호 (두 자리, 0 채움)',
-      'capture-still.legend.date': '오늘 날짜',
-      'capture-still.legend.prop': 'mpv 속성 값 (예: 제목)',
-      'capture-still.legend.percent': '% 문자 그대로',
-      'capture-still.legend.note':
-        '%p 와 %P 는 콜론을 포함하므로 Windows 에서 밑줄로 바뀝니다. %n 이나 %wT 가 없으면 같은 이름의 파일을 덮어쓰지 않고 저장이 조용히 실패하므로, 자동으로 일련번호를 붙입니다.'
-    })
-    ctx.i18n.register('en', {
-      'capture-still.menuTitle': 'Capture',
-      'capture-still.save': 'Save current frame',
-      'capture-still.saveNoSubs': 'Save frame without subtitles',
-      'capture-still.toClipboard': 'Copy current frame',
-      'capture-still.saveDisplay': 'Save at display resolution',
-      'capture-still.displayToClipboard': 'Copy at display resolution',
-      'capture-still.burstToggle': 'Start/stop consecutive capture',
-      'capture-still.burstProgress': 'Consecutive capture',
-      'capture-still.deleteLast': 'Delete last capture',
-      'capture-still.openFolder': 'Open folder',
-      'capture-still.saved': 'Saved {name}',
-      'capture-still.savedFallback': 'Saved {name} (no display surface — used source resolution)',
-      'capture-still.copied': 'Frame copied to the clipboard',
-      'capture-still.failed': 'Capture failed',
-      'capture-still.relativeReply':
-        'mpv reported a relative capture path; check the capture folder setting.',
-      'capture-still.burstStarted': 'Consecutive capture: {n} frames',
-      'capture-still.burstDone': 'Consecutive capture finished ({n} frames)',
-      'capture-still.burstStopped': 'Consecutive capture stopped ({n} frames saved)',
-      'capture-still.burstNeedsPause': 'Frame-by-frame capture needs the player paused',
-      'capture-still.deleted': 'Moved {name} to the Recycle Bin',
-      'capture-still.deleteFailed': 'Could not delete the file',
-      'capture-still.nothingToDelete': 'No capture from this session to delete',
-      'capture-still.directoryLabel': 'Capture folder',
-      'capture-still.directoryDesc':
-        'Leave empty for Pictures\\RLPlayer (or Capture beside the exe in portable mode).',
-      'capture-still.templateLabel': 'Filename template',
-      'capture-still.templateDesc':
-        '%F filename · %wH.%wM.%wS.%wT position with ms · %#02n counter. %p and %P expand with colons, which Windows turns into underscores.',
-      'capture-still.formatLabel': 'Image format',
-      'capture-still.format.png': 'PNG (lossless)',
-      'capture-still.format.jpg': 'JPEG',
-      'capture-still.format.webp': 'WebP',
-      'capture-still.format.jxl': 'JPEG XL',
-      'capture-still.format.avif': 'AVIF',
-      'capture-still.jpegQualityLabel': 'JPEG quality',
-      'capture-still.pngCompressionLabel': 'PNG compression',
-      'capture-still.highBitDepthLabel': 'Save at high bit depth',
-      'capture-still.highBitDepthDesc':
-        'Writes 16-bit PNGs even from 8-bit video, roughly 5x the file size. Only for 10-bit/HDR sources.',
-      'capture-still.includeSubsLabel': 'Include subtitles',
-      'capture-still.useDisplayResolutionLabel': 'Capture at display resolution',
-      'capture-still.useDisplayResolutionDesc':
-        'Saves what is on screen instead of the source frame. Falls back to source resolution when there is no video window.',
-      'capture-still.burstCountLabel': 'Consecutive capture: frames',
-      'capture-still.burstIntervalLabel': 'Consecutive capture: interval (ms)',
-      'capture-still.burstModeLabel': 'Consecutive capture mode',
-      'capture-still.burstModeDesc': 'Frame-by-frame only works while paused.',
-      'capture-still.burstMode.time': 'Time interval',
-      'capture-still.burstMode.frame': 'Frame by frame',
-      'capture-still.warn.colon-specifier': '%p / %P expand with colons and become underscores',
-      'capture-still.warn.illegal-literal': 'The template contains characters Windows rejects',
-      'capture-still.warn.no-disambiguator':
-        'No %n or %wT: mpv will not overwrite, so a second capture in the same second would be lost — a counter was appended',
-      'capture-still.transportButton': 'Capture (Shift-click: clipboard, Ctrl-click: burst)',
-      'capture-still.templateHelp': 'Filename template specifiers',
-      'capture-still.legend.F': 'Filename without extension',
-      'capture-still.legend.f': 'Filename with extension',
-      'capture-still.legend.pos': 'Playback position — h/m/s/ms',
-      'capture-still.legend.n': 'Counter (two digits, zero padded)',
-      'capture-still.legend.date': 'Today’s date',
-      'capture-still.legend.prop': 'An mpv property, e.g. the title',
-      'capture-still.legend.percent': 'A literal percent sign',
-      'capture-still.legend.note':
-        '%p and %P expand with colons, which Windows turns into underscores. Without %n or %wT mpv refuses to overwrite and the capture silently does not happen, so a counter is appended for you.'
-    })
+    ctx.i18n.register('ko', KO)
+    ctx.i18n.register('en', EN)
   },
 
   dispose(): void {

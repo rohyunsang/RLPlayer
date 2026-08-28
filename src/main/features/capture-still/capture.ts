@@ -135,17 +135,32 @@ export interface ScreenshotReply {
   filename?: unknown
 }
 
+export type ReplyFailure = 'no-reply' | 'relative' | 'malformed'
+
 /**
- * The filename out of a `screenshot` reply, or null with the reason it is
- * unusable. A refused command returns `undefined` in a packaged build (the
- * ownership guard drops it), so "no reply" is a normal branch, not an assertion.
+ * The filename out of a `screenshot` reply, or the reason it is unusable.
+ *
+ * A refused command returns `undefined` in a packaged build (the ownership
+ * guard drops it), so "no reply" is a normal branch, not an assertion.
+ *
+ * THREE reasons, not two, and the third one matters because of what the caller
+ * does with it. `'relative'` is the C01 precondition failing, and the caller
+ * logs a very specific accusation for it — "screenshot-directory was not in
+ * effect, the file is in mpv's cwd". A `filename` that is not a string at all
+ * (`{filename: 42}`, an mpv that changed its reply shape) is NOT that: reporting
+ * it as `'relative'` makes the C01 diagnostic itself lie, sending the next
+ * reader to inspect a setting that was fine. The draft's own test asserted
+ * `'relative'` for `{filename: 42}` directly under a comment saying "a
+ * non-string filename is a malformed reply, not a relative path" — the comment
+ * was right and the assertion was wrong.
  */
 export function replyFilename(
   reply: unknown
-): { ok: true; filename: string } | { ok: false; reason: 'no-reply' | 'relative' } {
+): { ok: true; filename: string } | { ok: false; reason: ReplyFailure } {
   if (reply === null || typeof reply !== 'object') return { ok: false, reason: 'no-reply' }
   const raw = (reply as ScreenshotReply).filename
   if (raw === undefined || raw === null || raw === '') return { ok: false, reason: 'no-reply' }
+  if (typeof raw !== 'string') return { ok: false, reason: 'malformed' }
   if (!isAbsoluteCapturePath(raw)) return { ok: false, reason: 'relative' }
   return { ok: true, filename: raw.trim() }
 }
@@ -390,4 +405,63 @@ const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
 export function looksLikePng(bytes: Uint8Array | undefined | null): boolean {
   if (!bytes || bytes.length < PNG_MAGIC.length) return false
   return PNG_MAGIC.every((b, i) => bytes[i] === b)
+}
+
+// ---------------------------------------------------------------------------
+// Custom capture width (C07)
+// ---------------------------------------------------------------------------
+
+/**
+ * C07 has NO mpv option, and the spec is explicit that a `vf` is the wrong
+ * answer: scaling the live chain would change what the user is watching. So the
+ * resize happens after the fact, on the file mpv already wrote.
+ *
+ * That constrains it to the formats the platform can RE-ENCODE. Electron's
+ * `nativeImage` exposes exactly two encoders, `toPNG()` and `toJPEG(q)`; there
+ * is no `toWebP`, no JXL and no AVIF. So a resize request against a `webp`,
+ * `jxl` or `avif` capture cannot be honoured without silently changing the
+ * user's chosen container, and this module refuses instead — the one thing C04
+ * establishes as never acceptable is doing something different from what was
+ * asked without saying so.
+ */
+export const RESIZE_ENCODABLE = ['png', 'jpg'] as const
+
+export function canReencode(format: string): boolean {
+  return (RESIZE_ENCODABLE as readonly string[]).includes(format)
+}
+
+/** 0 (and anything unusable) means "keep the source size" — the default. */
+export const RESIZE_MIN_WIDTH = 64
+export const RESIZE_MAX_WIDTH = 7680
+
+export function clampResizeWidth(v: unknown): number {
+  const n = Number(v)
+  if (!Number.isFinite(n) || n <= 0) return 0
+  return Math.min(RESIZE_MAX_WIDTH, Math.max(RESIZE_MIN_WIDTH, Math.floor(n)))
+}
+
+export type ResizeDecision =
+  | { action: 'skip'; reason: 'off' | 'not-encodable' | 'already-small' }
+  | { action: 'resize'; width: number }
+
+/**
+ * Whether to rewrite a capture at a narrower width.
+ *
+ * `already-small` is not an optimisation: re-encoding a frame that is already
+ * at or below the target width would strip the source's bit depth and, for
+ * JPEG, add a second generation of loss for no change in size. Upscaling a
+ * capture is never what "capture at 640px" means.
+ */
+export function resizeDecision(
+  targetWidth: number,
+  sourceWidth: number | undefined,
+  format: string
+): ResizeDecision {
+  const w = clampResizeWidth(targetWidth)
+  if (w === 0) return { action: 'skip', reason: 'off' }
+  if (!canReencode(format)) return { action: 'skip', reason: 'not-encodable' }
+  if (typeof sourceWidth === 'number' && sourceWidth > 0 && sourceWidth <= w) {
+    return { action: 'skip', reason: 'already-small' }
+  }
+  return { action: 'resize', width: w }
 }
