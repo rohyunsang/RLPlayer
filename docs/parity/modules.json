@@ -792,7 +792,7 @@
     "priority": "P0",
     "dependsOn": [
       "core-vf-chain",
-      "M07"
+      "video-decode"
     ],
     "ownedProperties": [
       "allow-delayed-peak-detect",
@@ -861,7 +861,7 @@
     "priority": "P1",
     "dependsOn": [
       "core-vf-chain",
-      "M07"
+      "video-decode"
     ],
     "ownedProperties": [
       "correct-downscaling",
@@ -1088,7 +1088,7 @@
     "priority": "P1",
     "dependsOn": [
       "core-vf-chain",
-      "M02"
+      "video-geometry"
     ],
     "ownedProperties": [],
     "ownedCommands": [],
@@ -1342,7 +1342,7 @@
     "priority": "P1",
     "dependsOn": [
       "core-af-chain",
-      "M11"
+      "audio-tracks"
     ],
     "ownedProperties": [
       "ad-lavc-ac3drc",
@@ -1458,7 +1458,7 @@
     "priority": "P1",
     "dependsOn": [
       "core-af-chain",
-      "M11"
+      "audio-tracks"
     ],
     "ownedProperties": [
       "audio-buffer",
@@ -1581,7 +1581,7 @@
     "priority": "P0",
     "dependsOn": [
       "core-mpv-bus",
-      "M18"
+      "subs-formats"
     ],
     "ownedProperties": [
       "secondary-sid",
@@ -1718,7 +1718,7 @@
     "priority": "P0",
     "dependsOn": [
       "core-mpv-bus",
-      "M17"
+      "subs-tracks"
     ],
     "ownedProperties": [
       "embeddedfonts",
@@ -1889,8 +1889,8 @@
     "wave": 2,
     "priority": "P1",
     "dependsOn": [
-      "M18",
-      "M17"
+      "subs-formats",
+      "subs-tracks"
     ],
     "ownedProperties": [],
     "ownedCommands": [],
@@ -2127,8 +2127,8 @@
     "priority": "P0",
     "dependsOn": [
       "core-mpv-bus",
-      "M24",
-      "M28"
+      "nav-seek",
+      "playlist"
     ],
     "ownedProperties": [
       "chapter",
@@ -2415,7 +2415,7 @@
     "priority": "P0",
     "dependsOn": [
       "core-mpv-bus",
-      "M11"
+      "audio-tracks"
     ],
     "ownedProperties": [],
     "ownedCommands": [
@@ -2537,7 +2537,7 @@
     "dependsOn": [
       "core-osd",
       "core-window",
-      "M02"
+      "video-geometry"
     ],
     "ownedProperties": [],
     "ownedCommands": [],
@@ -2866,8 +2866,8 @@
     "wave": 2,
     "priority": "P1",
     "dependsOn": [
-      "M35",
-      "M11"
+      "stream-open",
+      "audio-tracks"
     ],
     "ownedProperties": [
       "script-opts",
@@ -2925,7 +2925,7 @@
     "priority": "P2",
     "dependsOn": [
       "core-mpv-bus",
-      "M25"
+      "nav-chapters"
     ],
     "ownedProperties": [
       "bluray-angle",

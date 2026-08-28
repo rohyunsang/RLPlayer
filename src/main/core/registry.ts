@@ -1,5 +1,10 @@
 import { ContributionError } from './errors.ts'
-import { validateIds, topoSort, type DiscoveredModule } from './registry-order.ts'
+import {
+  validateIds,
+  topoSort,
+  deferredDeps,
+  type DiscoveredModule
+} from './registry-order.ts'
 import { CORE_OWNERSHIP, OwnerMap } from './mpv/ownership.ts'
 import { createEngineService } from './mpv/engine.ts'
 import { createVfChain } from './mpv/vf-chain.ts'
@@ -103,6 +108,18 @@ export class Registry {
     // 1. Static checks. Every one of these fails the boot.
     validateIds(specs)
     const ordered = topoSort(specs)
+
+    // A dependency on a module docs/parity/modules.json reserves but this build
+    // has not implemented is deferred, not fatal — see MANIFEST_CORE_IDS. It is
+    // said out loud exactly once, because "my dependency silently was not there"
+    // is otherwise a debugging session.
+    for (const { id, dep } of deferredDeps(specs)) {
+      console.info(
+        `[registry] '${id}' dependsOn '${dep}', which modules.json reserves but this ` +
+          `build does not implement. Ordering is vacuous; '${id}' must cope with it ` +
+          `being absent.`
+      )
+    }
 
     // 2. The property owner map (§3.7). Two modules claiming one property is a
     //    boot error naming both, in the same breath as a duplicate command id.
