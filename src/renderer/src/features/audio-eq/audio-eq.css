@@ -1,0 +1,95 @@
+/*
+ * M12 audio-eq. Every selector here is prefixed `eq-` and lives in this
+ * module's own directory: `src/renderer/src/styles.css` is core's, and a
+ * feature selector sitting in it is what `check:partition` fails the build for.
+ * The host element (`.setting-custom`) is core's; everything inside is ours.
+ */
+
+.eq-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 320px;
+}
+
+/* Disabled is dimmed, not hidden: the curve is still worth reading, and the
+   toggle that switches it on is the row directly above. */
+.eq-panel.eq-off {
+  opacity: 0.55;
+}
+
+.eq-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.eq-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.eq-preset {
+  min-width: 140px;
+}
+
+.eq-name {
+  width: 120px;
+}
+
+.eq-bands {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 6px 0;
+  /* Ten bands on a narrow settings window scroll sideways rather than
+     squeezing the sliders into something undraggable. */
+  overflow-x: auto;
+}
+
+.eq-band {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 30px;
+}
+
+.eq-gain {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+.eq-freq {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+/* A vertical range input. `writing-mode` is the standard spelling; the
+   `-webkit-slider-vertical` appearance it replaces is gone from Chromium. */
+.eq-slider {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 20px;
+  height: 110px;
+  accent-color: currentColor;
+}
+
+.eq-preamp {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  margin-inline-end: auto;
+}
+
+.eq-btn {
+  font: inherit;
+  padding: 2px 10px;
+}
+
+.eq-btn:disabled {
+  opacity: 0.5;
+}
