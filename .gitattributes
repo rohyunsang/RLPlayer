@@ -1,0 +1,65 @@
+# Why this file exists.
+#
+# `src/renderer/src/features/audio-eq/index.ts` shipped with a raw NUL byte at
+# offset 1527 (`const CUSTOM = '\0custom'`). With no .gitattributes, git guesses
+# text vs binary by sniffing for a NUL in the first 8000 bytes, so it classified
+# a 326-line TypeScript file as binary:
+#
+#   git diff  ->  "Binary files a/....ts and b/....ts differ"
+#                 "src/renderer/src/features/audio-eq/index.ts | Bin 0 -> 11349 bytes"
+#   git grep  ->  "Binary file src/... matches"   (no line numbers, no context)
+#
+# 326 lines landed unreviewable, and no reviewer could have seen the line that
+# caused it. `npm run check:control-chars` now fails the build on any control
+# character in tracked source; this file is the second half — even if one gets in,
+# the diff stays readable, so the review that catches it is possible.
+#
+# `eol=lf` on top of `text` keeps the working tree LF on Windows too: a file that
+# git normalises on the way in but checks out as CRLF shows every line as changed
+# the first time somebody with different core.autocrlf touches it.
+
+# THE BOOLEAN `diff` IS THE LOAD-BEARING PART, and `diff=<driver>` is NOT a
+# substitute for it. Measured on this repo, on a one-line .ts file holding a NUL:
+#
+#   zz-probe.ts diff=typescript   ->  git diff --numstat:  -   -   zz-probe.ts
+#   zz-probe.ts diff              ->  git diff --numstat:  1   0   zz-probe.ts
+#
+# A driver name only selects hunk-header patterns; git still autodetects binary
+# and still refuses to diff. The boolean attribute is documented as "treated as
+# text, even when they contain byte values that normally never appear in text
+# files, such as NUL", and it is the only spelling that actually did.
+
+* text=auto
+
+*.ts    text eol=lf diff
+*.mts   text eol=lf diff
+*.cts   text eol=lf diff
+*.js    text eol=lf diff
+*.mjs   text eol=lf diff
+*.cjs   text eol=lf diff
+*.json  text eol=lf diff
+*.jsonc text eol=lf diff
+*.css   text eol=lf diff
+*.html  text eol=lf diff
+*.md    text eol=lf diff
+*.yml   text eol=lf diff
+*.yaml  text eol=lf diff
+*.conf  text eol=lf diff
+.gitattributes text eol=lf diff
+.gitignore     text eol=lf diff
+LICENSE        text eol=lf diff
+
+# Genuinely binary: never diff, never normalise.
+*.png  binary
+*.ico  binary
+*.icns binary
+*.jpg  binary
+*.jpeg binary
+*.webp binary
+*.mp4  binary
+*.mkv  binary
+*.bdic binary
+*.7z   binary
+*.zip  binary
+*.exe  binary
+*.dll  binary
