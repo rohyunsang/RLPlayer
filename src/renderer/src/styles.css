@@ -871,3 +871,13 @@ kbd {
   align-items: center;
   gap: 2px;
 }
+
+/*
+ * Core's timecode fragment inside the shared seek tooltip. `.seek-hover` is the
+ * BOX (core's); each fragment inside it belongs to whoever contributed it --
+ * this one to core, `.seek-tip-chapter` to M25, and N37's thumbnail to M27.
+ */
+.seek-tip-time {
+  display: block;
+  font-variant-numeric: tabular-nums;
+}

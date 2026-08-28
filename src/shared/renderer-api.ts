@@ -21,6 +21,14 @@ export interface SeekbarLayerCtx {
   /** 0 or unknown for live streams — guard. */
   readonly duration: number
   readonly width: number
+  /**
+   * The handle of THIS layer that currently has keyboard focus, or null.
+   *
+   * Paint the focus ring yourself: a handle you can Tab to but cannot see is
+   * worse than one you cannot reach, because the arrow keys then move something
+   * invisible. See rule 4 on `SeekbarHost`.
+   */
+  readonly focusedHandle: string | null
   timeToX(t: number): number
   xToTime(x: number): number
 }
@@ -51,7 +59,19 @@ export interface SeekbarLayer {
   onPointerUp?(e: SeekbarPointerEvent & { cancelled: boolean }): void
   /** Hit-test independent, throttled to one frame. `null` on leave. */
   onHover?(e: SeekbarHoverEvent | null): void
+  /**
+   * A fragment for the ONE shared tooltip, merged with every other layer's by
+   * `order` (core's timecode is order 0). Returning a fragment is how the
+   * chapter title and the thumbnail compose with the time instead of stacking
+   * three floating boxes over each other.
+   */
   tooltip?(e: SeekbarPointerEvent): { el: HTMLElement; order: number } | null
+  /**
+   * Every handle this layer currently offers, in the order Tab should reach
+   * them. REQUIRED for an interactive layer (rule 4): a layer with `hitTest`
+   * and no `handles` is grabbable with a pointer and unreachable without one.
+   */
+  handles?(ctx: SeekbarLayerCtx): readonly string[]
   onKey?(e: {
     handle: string
     key: 'ArrowLeft' | 'ArrowRight' | 'Home' | 'End'

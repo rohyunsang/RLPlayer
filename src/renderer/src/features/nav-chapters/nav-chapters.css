@@ -30,3 +30,14 @@
   font-size: 11px;
   opacity: 0.85;
 }
+
+/*
+ * Rule 4's visible half. The host tells this layer which of its handles has
+ * keyboard focus (`ctx.focusedHandle`); drawing the ring is the layer's job,
+ * because only the layer knows what its handles look like.
+ */
+.seek-chapter-tick.focused {
+  height: 16px;
+  background: #fff;
+  box-shadow: 0 0 0 2px rgba(80, 160, 255, 0.9);
+}

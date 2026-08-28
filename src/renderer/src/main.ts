@@ -68,6 +68,12 @@ let osdTimer: number | undefined
 let idleTimer: number | undefined
 
 const SEEK_STEP = 0.1
+/**
+ * How far one arrow press nudges a CONTRIBUTED handle (an A-B marker, a bookmark
+ * pin). Deliberately coarser than `SEEK_STEP`: the slider's own 0.1 s is right
+ * for scrubbing, and 1 s is right for placing a loop point by ear.
+ */
+const SEEK_KEY_STEP = 1
 
 /**
  * The interactive seek-bar layer host (§3.4). Contributed layers paint into
@@ -90,6 +96,25 @@ const seekbar = attachSeekbar(
     },
     duration: () => state?.duration ?? 0,
     width: () => seek.getBoundingClientRect().width,
+    /**
+     * Core's timecode, as a FRAGMENT at order 0 rather than as an assignment.
+     *
+     * This is the whole of the A1 collision. `seekHover.textContent =
+     * formatTime(...)` was one unconditional line here, so N37 (chapter title
+     * plus timecode in the preview tooltip, M27) and N13 (bookmark pins, M26)
+     * each needed to edit it -- in a file that is in the `mustNotTouch` list of
+     * 40 of the 55 rows, and in all three of M25's, M26's and M27's. Meanwhile
+     * M25 had already SHIPPED a `tooltip()` fragment that nothing called.
+     * Fragments merge by order in the host; nobody edits this line again.
+     */
+    baseTooltip: (x) => {
+      if (!state || state.duration <= 0) return null
+      const w = seek.getBoundingClientRect().width
+      const el = document.createElement('span')
+      el.className = 'seek-tip-time'
+      el.textContent = formatTime(w > 0 ? clamp(x / w, 0, 1) * state.duration : 0)
+      return { el, order: 0 }
+    },
     scrub(time, phase, cancelled) {
       if (phase === 'down') {
         scrubbing = true
@@ -108,6 +133,23 @@ const seekbar = attachSeekbar(
 )
 
 // --- rendering ------------------------------------------------------------
+
+/**
+ * Say which handle the arrows are about to move.
+ *
+ * Without this the focus ring is the layer's business and a screen reader hears
+ * nothing at all, so "Tab reaches every handle" would be true and useless.
+ */
+function syncSeekAria(): void {
+  const focused = seekbar.focusedTarget
+  if (focused) {
+    seek.dataset['seekHandle'] = `${focused.layerId}:${focused.handle}`
+    seek.setAttribute('aria-description', `${focused.layerId} ${focused.handle}`)
+  } else {
+    delete seek.dataset['seekHandle']
+    seek.removeAttribute('aria-description')
+  }
+}
 
 function fillPercent(input: HTMLInputElement): void {
   const min = Number(input.min)
@@ -336,6 +378,24 @@ seek.addEventListener('change', () => {
     api.action({ type: 'seek', seconds: Number(seek.value), absolute: true })
   }
 })
+/**
+ * ONE tooltip, composed from every layer's fragment plus core's timecode.
+ *
+ * The host merges by `order` (core's time is 0), so the chapter title, the
+ * thumbnail and the time stack inside a single box instead of three floating
+ * ones -- and no module has to touch this function to add a fourth.
+ */
+function renderHoverTip(clientX: number, mods: { shift: boolean }): void {
+  const rect = seek.getBoundingClientRect()
+  if (rect.width <= 0) return
+  const ratio = clamp((clientX - rect.left) / rect.width, 0, 1)
+  const frags = seekbar.tooltips(ratio * rect.width, mods)
+  seekHover.textContent = ''
+  for (const f of frags) seekHover.appendChild(f.el)
+  seekHover.hidden = frags.length === 0
+  seekHover.style.left = `${ratio * 100}%`
+}
+
 seek.addEventListener('pointermove', (e) => {
   const x = barX(e.clientX)
   if (seekbar.dragging) {
@@ -344,17 +404,16 @@ seek.addEventListener('pointermove', (e) => {
   } else {
     seekbar.hover(x, { shift: e.shiftKey })
   }
-  if (!state || state.duration <= 0) return
-  const rect = seek.getBoundingClientRect()
-  const ratio = clamp((e.clientX - rect.left) / rect.width, 0, 1)
-  seekHover.hidden = false
-  seekHover.textContent = formatTime(ratio * state.duration)
-  seekHover.style.left = `${ratio * 100}%`
+  renderHoverTip(e.clientX, { shift: e.shiftKey })
 })
 seek.addEventListener('pointerleave', () => {
   seekHover.hidden = true
+  seekHover.textContent = ''
   if (!seekbar.dragging) seekbar.hover(null)
 })
+// Leaving the bar with the keyboard drops the focus ring too, or the arrows go
+// on nudging a handle whose bar the user has walked away from.
+seek.addEventListener('blur', () => seekbar.blur())
 
 volume.addEventListener('input', () => {
   fillPercent(volume)
@@ -444,8 +503,42 @@ window.addEventListener('keydown', (e) => {
     return
   }
 
-  // Let the focused slider handle its own arrow keys rather than double-acting.
-  if (inRange && /^Arrow/.test(e.key)) return
+  /**
+   * The seek bar's own keyboard model. RULE 4 of the layer host lives here.
+   *
+   * This used to be one line -- `if (inRange && /^Arrow/.test(e.key)) return` --
+   * and the seek bar IS a range input, so every arrow key was handed to the
+   * native slider and `SeekbarHost.key()` could never be reached from anywhere.
+   * The host's own doc called keyboard equivalence "mandatory" while making it
+   * unreachable, which is the worst of both: a module author implements `onKey`,
+   * it never fires, and nothing says why.
+   *
+   * Now: Tab walks the contributed handles (an A-B marker, a bookmark pin) and
+   * the arrows nudge whichever is focused. When NOTHING is focused the native
+   * slider keeps its arrows exactly as before -- `key()` returns false and this
+   * falls through to the same early return.
+   */
+  if (target === seek && e.key === 'Tab') {
+    // `focusNext` returns false at either end so Tab can still LEAVE the bar.
+    // A widget that traps focus is how keyboard support gets switched off again.
+    if (seekbar.focusNext(e.shiftKey ? -1 : 1)) {
+      e.preventDefault()
+      syncSeekAria()
+    }
+    return
+  }
+  if (inRange && /^Arrow|^Home$|^End$/.test(e.key)) {
+    if (
+      target === seek &&
+      seekbar.key(e.key as 'ArrowLeft' | 'ArrowRight' | 'Home' | 'End', SEEK_KEY_STEP, e.shiftKey)
+    ) {
+      e.preventDefault()
+      return
+    }
+    // Nothing focused: let the focused slider handle its own arrow keys rather
+    // than double-acting.
+    if (/^Arrow/.test(e.key)) return
+  }
 
   // e.code, never e.key: with the Korean IME composing, e.key is 'Process'
   // for every letter and every bare-letter binding silently stops working.

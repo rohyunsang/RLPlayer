@@ -12,6 +12,14 @@ import type { Chapter } from '../../../../shared/types.ts'
  * tick. None of that was expressible in the render-only contract the spec
  * originally declared.
  *
+ * Two of those three used to be a claim rather than a fact. `tooltip()` was
+ * written and shipped and NEVER CALLED -- `main.ts` assigned the hover readout
+ * directly, so the fragment was dead code -- and `onKey()` could not fire
+ * because the overlay returned early on every arrow key inside a range input.
+ * The host composes the tooltip from fragments now and the arrows reach
+ * `key()`, so this module declares `handles()` (rule 4) and paints its own
+ * focus ring from `ctx.focusedHandle`.
+ *
  * Note the ownership rule holding on both halves: this file never writes an
  * mpv property. It sends to its own main half, which owns `chapter`.
  */
@@ -40,14 +48,21 @@ const mod: RendererFeatureModule = {
     // behind. Order is load-bearing here.
     let ticks: HTMLElement[] = []
 
+    let focusedHandle: string | null = null
+
     function paint(): void {
       if (!host) return
       host.textContent = ''
       ticks = []
       if (duration <= 0 || chapters.length < 2) return
-      for (const ch of chapters) {
+      for (let i = 0; i < chapters.length; i++) {
+        const ch = chapters[i]
+        if (!ch) continue
         const tick = document.createElement('span')
         tick.className = 'seek-chapter-tick'
+        // A handle you can Tab to but cannot see is worse than one you cannot
+        // reach: the arrows would move something invisible.
+        if (focusedHandle === String(i)) tick.classList.add('focused')
         tick.style.left = `${(ch.time / duration) * 100}%`
         tick.title = ch.title
         host.appendChild(tick)
@@ -66,7 +81,12 @@ const mod: RendererFeatureModule = {
       order: 10,
       render(c): void {
         host = c.el
+        focusedHandle = c.focusedHandle
         paint()
+      },
+      /** Rule 4: every tick is Tab-reachable, in time order. */
+      handles(): readonly string[] {
+        return chapters.length < 2 ? [] : chapters.map((_, i) => String(i))
       },
       /** A 2px tick is only grabbable because of `tolerancePx`. */
       hitTest(c): string | null {
@@ -94,8 +114,11 @@ const mod: RendererFeatureModule = {
       onKey(e): void {
         const index = Number(e.handle)
         if (!Number.isFinite(index)) return
-        const delta = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0
-        if (delta === 0) return
+        if (e.key === 'Home') return ctx.ipc.send('nav-chapters:goto', { index: 0 })
+        if (e.key === 'End') {
+          return ctx.ipc.send('nav-chapters:goto', { index: chapters.length - 1 })
+        }
+        const delta = e.key === 'ArrowLeft' ? -1 : 1
         ctx.ipc.send('nav-chapters:goto', { index: index + delta })
       }
     })

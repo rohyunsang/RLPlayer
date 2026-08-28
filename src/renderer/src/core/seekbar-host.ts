@@ -26,7 +26,22 @@ import type {
  *      that leaks a drag because the user alt-tabbed is a layer that eats every
  *      subsequent click.
  *   4. Keyboard equivalence is mandatory for an interactive layer. A bar you
- *      can only drag is a bar some people cannot use.
+ *      can only drag is a bar some people cannot use. A layer with `hitTest`
+ *      declares `handles()` and `onKey()`; Tab walks every handle in paint
+ *      order and the arrows nudge the focused one.
+ *
+ *      THIS RULE USED TO BE UNSATISFIABLE, which is worse than not having it.
+ *      `tooltips()`, `key()` and `focusHandle()` had ZERO production call
+ *      sites -- grep found only seekbar-host.test.ts:170, :182 and :185 -- so
+ *      the whole keyboard and tooltip half of this host was code that only its
+ *      own test ran. Meanwhile `main.ts:464` returned early on any arrow key
+ *      while a range input had focus, and the seek bar IS a range input, so
+ *      even if `key()` had been wired it could never have been reached. A
+ *      module author reading rule 4 would have implemented `onKey` and watched
+ *      it never fire. Both halves are wired now: `main.ts` composes the shared
+ *      tooltip from `tooltips()`, Tab drives `focusNext()`, and arrows reach
+ *      `key()` before the early-out, which now applies only when no handle is
+ *      focused.
  *
  * No DOM API is called in here — only geometry the caller supplies — so the
  * whole interaction model is unit-testable under `node --test`.
@@ -54,6 +69,19 @@ export interface SeekbarHostDeps {
   width(): number
   /** The host's own scrub, used when no layer claims the press. */
   scrub(time: number, phase: 'down' | 'move' | 'up', cancelled: boolean): void
+  /**
+   * Core's own tooltip fragment -- the timecode under the pointer.
+   *
+   * It lives here rather than in `main.ts`'s pointermove handler because the
+   * merge has to happen in ONE place. It used to be
+   * `seekHover.textContent = formatTime(...)`, an unconditional assignment on a
+   * single line of `main.ts` -- a file in the `mustNotTouch` list of 40 of the
+   * 55 rows -- so N37 (chapter title + timecode in the preview tooltip) and N13
+   * (bookmark pins) each had to edit that same line to add anything, and M25's
+   * already-shipped `tooltip()` fragment was dead code because nothing ever
+   * called `tooltips()`.
+   */
+  baseTooltip?(x: number): { el: HTMLElement; order: number } | null
   /** Ask the page to repaint the layers. */
   invalidate?(): void
 }
@@ -73,6 +101,8 @@ export class SeekbarHost {
   private active: { layer: SeekbarLayer; handle: string } | null = null
   private hostScrubbing = false
   private focused: { layerId: string; handle: string } | null = null
+  /** Rule-4 warnings are once per layer: an every-frame log is noise, not a report. */
+  private readonly warnedNoHandles = new Set<string>()
 
   private readonly deps: SeekbarHostDeps
 
@@ -93,6 +123,7 @@ export class SeekbarHost {
       const i = this.layers.indexOf(layer)
       if (i >= 0) this.layers.splice(i, 1)
       if (this.active?.layer === layer) this.cancel()
+      if (this.focused?.layerId === layer.id) this.focused = null
       this.layerEls.get(layer.id)?.remove()
       this.layerEls.delete(layer.id)
       this.deps.invalidate?.()
@@ -112,6 +143,10 @@ export class SeekbarHost {
       el: (layerId !== undefined ? this.layerEls.get(layerId) : undefined) ?? this.deps.el,
       duration,
       width,
+      // Only ever this layer's own handle: a layer must not be able to tell
+      // whether another layer's pin is focused.
+      focusedHandle:
+        layerId !== undefined && this.focused?.layerId === layerId ? this.focused.handle : null,
       // Guarded for live streams, where duration is 0 or unknown (R24). Every
       // layer would otherwise divide by zero in its own way.
       timeToX: (t: number) => (duration > 0 ? (t / duration) * width : 0),
@@ -223,12 +258,24 @@ export class SeekbarHost {
    *  three floating boxes. */
   tooltips(x: number, mods: PointerMods = {}): Array<{ el: HTMLElement; order: number }> {
     const out: Array<{ el: HTMLElement; order: number }> = []
+    // Core's timecode is a fragment like any other, at order 0, so the merge
+    // order is decided once here instead of half here and half in main.ts.
+    const base = this.deps.baseTooltip?.(x)
+    if (base) out.push(base)
+    // ONE hit-test for the whole tooltip. It was inside the loop, so an n-layer
+    // bar ran n hit-tests per pointermove -- and every hitTest walks its layer's
+    // own items, which for M26's bookmark pins is the whole list.
+    const claim = this.hit(x)
     for (const layer of this.layers) {
       if (!layer.tooltip) continue
-      const claim = this.hit(x)
       const handle = claim?.layer === layer ? claim.handle : ''
-      const frag = layer.tooltip(this.event(handle, x, mods))
-      if (frag) out.push(frag)
+      try {
+        const frag = layer.tooltip(this.event(handle, x, mods))
+        if (frag) out.push(frag)
+      } catch (e) {
+        // One layer's broken tooltip must not blank the timecode.
+        console.error(`[seekbar] layer '${layer.id}' tooltip threw:`, (e as Error).message)
+      }
     }
     return out.sort((a, b) => a.order - b.order)
   }
@@ -236,6 +283,76 @@ export class SeekbarHost {
   /** Focus order for Tab: every handle a layer claims, in paint order. */
   focusHandle(layerId: string, handle: string): void {
     this.focused = { layerId, handle }
+    this.deps.invalidate?.()
+  }
+
+  /** Which handle has keyboard focus, if any. Read by the page for its aria. */
+  get focusedTarget(): { layerId: string; handle: string } | null {
+    return this.focused
+  }
+
+  /**
+   * Every focusable handle, in paint order.
+   *
+   * A layer that declares `hitTest` but not `handles` is grabbable with a
+   * pointer and unreachable without one, which is rule 4 broken. It is not a
+   * throw -- refusing to register the layer would take a working feature away
+   * from sighted mouse users to punish its author -- but it is loud, once.
+   */
+  focusables(): Array<{ layerId: string; handle: string }> {
+    const out: Array<{ layerId: string; handle: string }> = []
+    for (const layer of this.layers) {
+      if (!layer.handles) {
+        if (layer.hitTest && !this.warnedNoHandles.has(layer.id)) {
+          this.warnedNoHandles.add(layer.id)
+          console.error(
+            `[seekbar] layer '${layer.id}' is interactive (it has hitTest) but declares no ` +
+              `handles(), so Tab cannot reach it. Keyboard equivalence is mandatory (rule 4).`
+          )
+        }
+        continue
+      }
+      try {
+        for (const handle of layer.handles(this.ctx(layer.id))) {
+          out.push({ layerId: layer.id, handle })
+        }
+      } catch (e) {
+        console.error(`[seekbar] layer '${layer.id}' handles() threw:`, (e as Error).message)
+      }
+    }
+    return out
+  }
+
+  /**
+   * Move focus by `delta` through `focusables()`.
+   *
+   * Returns false when it walks off either end WITHOUT wrapping, and that is
+   * deliberate: the page uses the false to let Tab leave the seek bar for the
+   * next control. A focus ring that traps the user inside one widget is the
+   * usual way keyboard support gets added and then switched off again.
+   */
+  focusNext(delta: 1 | -1): boolean {
+    const all = this.focusables()
+    if (all.length === 0) return false
+    const here = this.focused
+    const at = here
+      ? all.findIndex((f) => f.layerId === here.layerId && f.handle === here.handle)
+      : -1
+    const next = at < 0 ? (delta === 1 ? 0 : all.length - 1) : at + delta
+    if (next < 0 || next >= all.length) {
+      this.blur()
+      return false
+    }
+    const target = all[next]
+    if (!target) return false
+    this.focusHandle(target.layerId, target.handle)
+    return true
+  }
+
+  blur(): void {
+    if (!this.focused) return
+    this.focused = null
+    this.deps.invalidate?.()
   }
 
   key(key: 'ArrowLeft' | 'ArrowRight' | 'Home' | 'End', stepSec: number, shift = false): boolean {
@@ -243,7 +360,13 @@ export class SeekbarHost {
     if (!target) return false
     const layer = this.layers.find((l) => l.id === target.layerId)
     if (!layer?.onKey) return false
-    layer.onKey({ handle: target.handle, key, stepSec, shift })
+    try {
+      layer.onKey({ handle: target.handle, key, stepSec, shift })
+    } catch (e) {
+      console.error(`[seekbar] layer '${layer.id}' onKey threw:`, (e as Error).message)
+    }
+    // TRUE means the page must not also act on this key. Returning false when
+    // nothing is focused is what lets the range input keep its own arrow keys.
     return true
   }
 
