@@ -1,10 +1,10 @@
 import { app, dialog, shell } from 'electron'
-import { mpvBus } from './mpv/bus.ts'
 import { t } from './i18n/index.ts'
 import { getUiWindow, getVideoWindow } from './window/windows'
 import type { CommandRegistry } from './input/registry.ts'
 import type { MenuRegistry } from './menu.ts'
 import type { OsdBus } from './osd/index.ts'
+import type { MpvService } from '@shared/feature-api'
 
 /**
  * The core transport commands.
@@ -22,6 +22,8 @@ import type { OsdBus } from './osd/index.ts'
 export const RELEASES_URL = 'https://github.com/rohyunsang/RLPlayer/releases'
 
 export interface TransportDeps {
+  /** Core's own privileged service, minted once in src/main/index.ts. */
+  mpv: MpvService
   commands: CommandRegistry
   menu: MenuRegistry
   osd: OsdBus
@@ -30,8 +32,10 @@ export interface TransportDeps {
 }
 
 export function registerCoreCommands(deps: TransportDeps): void {
-  // Privileged: core owns `pause` and the rest of the transport (§3.7).
-  const mpv = mpvBus.createService('core/mpv/bus', { privileged: true })
+  // Privileged: core owns `pause` and the rest of the transport (§3.7). It is
+  // handed in rather than minted here, because minting it here would have
+  // meant importing the bus, and the bus is deliberately unimportable.
+  const mpv = deps.mpv
 
   deps.commands.register('core', [
     {

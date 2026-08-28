@@ -34,7 +34,6 @@ export interface ChainConfig {
   order: readonly string[]
   /** lavfi filters measured to REFUSE `<x>f-command`; they rebuild instead. */
   refusers: readonly string[]
-  exec: ChainExec
   log?: (msg: string) => void
 }
 
@@ -52,10 +51,34 @@ export class FilterChain {
   private pending = false
   private applying: Promise<void> | null = null
 
+  /**
+   * The raw `vf`/`af` exec, handed over by `core/mpv/bus` at boot.
+   *
+   * It is NOT a constructor argument any more, and that is the point: the exec
+   * used to be `(args) => mpvBus.chainExec(args)` written at module scope,
+   * which required `chainExec` to be a public method on an exported singleton —
+   * and a public `chainExec` is a public filter-chain write. Now the bus hands
+   * each chain a closure, and nothing else can reach one.
+   */
+  private exec: ChainExec | null = null
+
   private readonly cfg: ChainConfig
 
   constructor(cfg: ChainConfig) {
     this.cfg = cfg
+  }
+
+  attachExec(exec: ChainExec): void {
+    this.exec = exec
+  }
+
+  private command_(args: unknown[]): Promise<unknown> {
+    if (!this.exec) {
+      throw new ContributionError(
+        `${this.cfg.kind}-chain was used before core/registry attached its mpv exec.`
+      )
+    }
+    return this.exec.command(args)
   }
 
   /** Boot-time label claim. Two modules claiming one label is a boot error. */
@@ -137,7 +160,7 @@ export class FilterChain {
       return { path: 'rebuild' }
     }
     try {
-      await this.cfg.exec.command([
+      await this.command_([
         `${this.cfg.kind}-command`,
         label,
         option,
@@ -202,7 +225,7 @@ export class FilterChain {
     const run = async (): Promise<void> => {
       const chain = this.serialise()
       try {
-        await this.cfg.exec.command([this.cfg.kind, 'set', chain])
+        await this.command_([this.cfg.kind, 'set', chain])
       } catch (e) {
         this.cfg.log?.(
           `[${this.cfg.kind}-chain] failed to apply "${chain}": ${(e as Error).message}`

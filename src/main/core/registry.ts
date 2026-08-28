@@ -3,10 +3,11 @@ import { validateIds, topoSort, type DiscoveredModule } from './registry-order.t
 import { CORE_OWNERSHIP, OwnerMap } from './mpv/ownership.ts'
 import { vfChain, createVfService } from './mpv/vf-chain.ts'
 import { afChain, createAfService } from './mpv/af-chain.ts'
-import { mpvBus } from './mpv/bus.ts'
+import type { MpvBus } from './mpv/bus.ts'
 import { createI18nService, t } from './i18n/index.ts'
 import { createWindowService, releaseSleepBlocksFor } from './window/index.ts'
 import { createDialogService } from './dialog.ts'
+import { createNetworkService } from './no-network.ts'
 import { pathService } from './paths.ts'
 import type { SettingsRegistry } from './settings/registry.ts'
 import type { CommandRegistry } from './input/registry.ts'
@@ -30,6 +31,15 @@ import type { FeatureContext, FeatureModule, Logger } from '@shared/feature-api'
  */
 
 export interface RegistryDeps {
+  /**
+   * THE bus, created once in `src/main/index.ts` and handed here.
+   *
+   * It used to be an imported singleton, which meant every feature module
+   * could import it too and mint itself a service under any id it liked. The
+   * registry is now the only holder, and `contextFor()` below is the only
+   * place a service is ever minted.
+   */
+  mpv: MpvBus
   settings: SettingsRegistry
   commands: CommandRegistry
   ipc: FeatureIpc
@@ -56,6 +66,10 @@ export class Registry {
 
   constructor(deps: RegistryDeps) {
     this.deps = deps
+    // The chains get their raw exec from the bus, in a closure. This is the
+    // only call site, and `chainExec` is private to the bus.
+    deps.mpv.registerChain(vfChain)
+    deps.mpv.registerChain(afChain)
   }
 
   ownerMap(): OwnerMap | null {
@@ -81,7 +95,9 @@ export class Registry {
     // 2. The property owner map (§3.7). Two modules claiming one property is a
     //    boot error naming both, in the same breath as a duplicate command id.
     this.owners = new OwnerMap([...CORE_OWNERSHIP, ...ordered.map((s) => s.module)])
-    mpvBus.setOwnerMap(this.owners)
+    // The id list is what `createService` checks against: a service can only be
+    // minted for a module the registry actually loaded.
+    this.deps.mpv.setOwnerMap(this.owners, ordered.map((s) => s.id))
 
     // 3. Filter labels, same duplicate detection.
     for (const s of ordered) {
@@ -108,7 +124,7 @@ export class Registry {
     }
 
     // 5. Spawn-arg disjointness, once every contributor has registered.
-    mpvBus.validateContributions()
+    this.deps.mpv.validateContributions()
 
     // 6. A property written in the spec's mappings that nobody claims is a
     //    warning, not a failure — that is how "`vid` has no owner at all" was
@@ -140,7 +156,7 @@ export class Registry {
       id,
       log: this.logger(id),
       paths: pathService,
-      mpv: mpvBus.createService(id),
+      mpv: registry.deps.mpv.createService(id),
       settings: {
         define: (d) => registry.deps.settings.define(id, d),
         get: (sid) => registry.deps.settings.get(sid),
@@ -167,7 +183,8 @@ export class Registry {
         trackProcess: (p) => registry.processes.add(p)
       },
       window: createWindowService(id),
-      dialog: createDialogService()
+      dialog: createDialogService(),
+      network: createNetworkService(id)
     }
     // vf/af are granted only to modules that declared they need them, so an
     // accidental `ctx.vf!.set(...)` in a module that never declared it is a

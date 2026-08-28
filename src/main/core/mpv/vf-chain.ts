@@ -1,5 +1,4 @@
 import { FilterChain, VF_ORDER, VF_REFUSERS } from './chain.ts'
-import { mpvBus } from './bus.ts'
 import type { FilterChainService } from '@shared/feature-api'
 
 /**
@@ -10,11 +9,11 @@ export const vfChain = new FilterChain({
   kind: 'vf',
   order: VF_ORDER,
   refusers: VF_REFUSERS,
-  exec: { command: (args) => mpvBus.chainExec(args) },
   log: (m) => console.error(m)
 })
 
-mpvBus.registerChain(vfChain)
+// The chain is wired to mpv by core/registry, which is the only thing
+// holding the bus. Nothing here reaches mpv on its own.
 
 export function createVfService(ownerId: string): FilterChainService {
   return {

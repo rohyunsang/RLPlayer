@@ -8,12 +8,16 @@ initPaths()
 // startup, so every background-networking switch has to be appended before
 // anything touches `app.whenReady()`. See core/no-network.ts for why an
 // absence we do not switch off is an absence we are only guessing about.
-import { describeNoNetwork, disableBackgroundNetworking } from './core/no-network.ts'
+import {
+  applySessionPolicy,
+  describeNoNetwork,
+  disableBackgroundNetworking
+} from './core/no-network.ts'
 const networkPolicy = disableBackgroundNetworking()
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { app, dialog, Menu } from 'electron'
+import { app, BrowserWindow, dialog, Menu } from 'electron'
 import {
   createWindows,
   getHwnd,
@@ -33,7 +37,7 @@ import {
 import { flushConfig, loadConfig, onConfigProblem, settingsBacking } from './services/config'
 import { createStore } from './core/settings/store.ts'
 import { registerCoreMessages, resolveLanguage, setLanguage, t } from './core/i18n/index.ts'
-import { mpvBus } from './core/mpv/bus.ts'
+import { createMpvBus } from './core/mpv/bus.ts'
 import { FeatureIpc } from './core/ipc.ts'
 import { MenuRegistry } from './core/menu.ts'
 import { OsdBus } from './core/osd/index.ts'
@@ -49,7 +53,6 @@ import { commandRegistry, flushKeybinds } from './core/input/index.ts'
 import { LegacyBridge, setLegacyVolumeReader } from './core/legacy-bridge.ts'
 import { registerCoreCommands } from './core/transport.ts'
 import { collectFeatureModules } from './features/index'
-import type { BrowserWindow } from 'electron'
 import type { OsdKind } from '@shared/feature-api'
 
 /**
@@ -70,7 +73,8 @@ app.setAppUserModelId('com.rohyunsang.rlplayer')
 // nobody can see the enforcement of is a promise nobody can check.
 console.log(
   `[no-network] ${networkPolicy.switches.length} switches, ` +
-    `${networkPolicy.features.length} features disabled, host resolution off`
+    `${networkPolicy.features.length} features disabled, spellchecker off, proxy direct, ` +
+    `${networkPolicy.allowedHosts.length} host(s) allowlisted`
 )
 if (process.argv.includes('--print-network-policy')) {
   console.log(describeNoNetwork())
@@ -79,6 +83,16 @@ if (process.argv.includes('--print-network-policy')) {
 // The custom titlebar in the overlay replaces it; a native menu bar would sit
 // behind mpv's child HWND anyway.
 Menu.setApplicationMenu(null)
+
+/**
+ * THE mpv bus, created here and nowhere else.
+ *
+ * `createMpvBus()` throws on a second call, so a feature module that reaches
+ * for `await import('./core/mpv/bus.ts')` finds a factory that refuses rather
+ * than a singleton it can mint privileged services from. Everything a module
+ * touches arrives on `FeatureContext`; see docs/parity/02-wave0-api.md.
+ */
+const mpvBus = createMpvBus()
 
 let registry: Registry | null = null
 let perFile: PerFileManager | null = null
@@ -166,6 +180,12 @@ function toast(message: string, kind: 'info' | 'error'): void {
 }
 
 async function main(): Promise<void> {
+  // The per-session half of the policy, and it must be the first thing after
+  // ready: the spellchecker picks its dictionary when the first window with a
+  // text input loads, and `webRequest.onBeforeRequest` has to be installed
+  // before anything can issue a request under it.
+  applySessionPolicy()
+
   registerCoreMessages()
   setLanguage(resolveLanguage(app.getLocale()))
 
@@ -230,6 +250,9 @@ async function main(): Promise<void> {
   setLegacyVolumeReader(() => mpvBus.playerState.volume)
 
   registerCoreCommands({
+    // Core owns `pause` and the rest of the transport (§3.7), so this is one of
+    // the three ids allowed a privileged service.
+    mpv: mpvBus.createService('core/mpv/bus', { privileged: true }),
     commands: commandRegistry,
     menu,
     osd,
@@ -238,6 +261,7 @@ async function main(): Promise<void> {
   })
 
   registry = new Registry({
+    mpv: mpvBus,
     settings,
     commands: commandRegistry,
     ipc: featureIpc,
@@ -258,7 +282,7 @@ async function main(): Promise<void> {
    * only symptom was labels rendering as their message keys. Nothing about
    * these handlers needs mpv to be running.
    */
-  registerCoreIpc({ legacy, menu, osd, settings, pushState })
+  registerCoreIpc({ legacy, menu, osd, settings, pushState, refusals: () => mpvBus.refusals() })
 
   // --- the mpv bus: core args, then every module's contributions ---
   mpvBus.attachHost({
@@ -273,7 +297,7 @@ async function main(): Promise<void> {
 
   // Modules are discovered from the directory listing; adding a feature is
   // adding a directory. Nothing here names one.
-  await registry.loadAll(collectFeatureModules())
+  await registry.loadAll(await collectFeatureModules())
 
   mpvBus.onManager('state', pushState)
   mpvBus.onManager('crashed', (code: number, detail: string) => {
@@ -380,15 +404,82 @@ app.on('window-all-closed', () => {
   app.quit()
 })
 
-app.on('before-quit', () => {
-  if (disposed) return
+/**
+ * The quit path, and why it takes control of `before-quit` rather than doing its
+ * work inside it.
+ *
+ * MEASURED FAILURE 1: closing the player with the SETTINGS window open never
+ * quit — 0 s to exit without it, still running after 16 s with it, 2 out of 2.
+ * `window-all-closed` fires only when EVERY window is gone, and the settings
+ * window is a top-level BrowserWindow nobody closed. `closeAuxiliaryWindows()`
+ * below is the fix; the player is the app, so closing it closes them.
+ *
+ * MEASURED FAILURE 2: the old handler was synchronous and its only hard kill
+ * was `setTimeout(() => proc.kill(), 300)` in `MpvManager.dispose()`, inside
+ * this very event. Electron tears the loop down first, so that timer almost
+ * never fired and the IPC `quit` was the only thing killing mpv — 2 silent
+ * exits orphaned mpv and 1 orphan survived a graceful quit in ~50 launches.
+ *
+ * So: preventDefault once, run the shutdown to completion, then `app.exit()`.
+ * A watchdog guarantees the process leaves even if a hook hangs, and mpv's own
+ * `process.on('exit')` reaper runs on the way out either way.
+ */
+const QUIT_WATCHDOG_MS = 6000
+
+app.on('before-quit', (event) => {
+  // A second `before-quit` while the first shutdown is still running must NOT
+  // fall through to Electron's default quit: that is how a half-finished
+  // shutdown ends the process before mpv has been reaped. Only the `finally`
+  // below, or the watchdog, ever ends this process.
+  if (disposed) {
+    event.preventDefault()
+    return
+  }
   disposed = true
+  event.preventDefault()
+
+  // Unskippable. If a quit hook hangs, the app still leaves — and mpv's
+  // synchronous exit hook still reaps the child on the way out.
+  const watchdog = setTimeout(() => {
+    console.error('[quit] shutdown did not finish in time; exiting anyway')
+    app.exit(0)
+  }, QUIT_WATCHDOG_MS)
+  watchdog.unref?.()
+
+  void shutdown()
+    .catch((e: Error) => console.error('[quit] shutdown threw:', e.stack ?? e.message))
+    .finally(() => {
+      clearTimeout(watchdog)
+      app.exit(0)
+    })
+})
+
+async function shutdown(): Promise<void> {
   persistBounds()
+  closeAuxiliaryWindows()
   // Flush the resume position before mpv goes away, or the last few seconds of
   // playback are lost on every exit.
-  void registry?.dispose()
+  await registry?.dispose()
   perFile?.flush()
   flushConfig()
   flushKeybinds()
-  mpvBus.dispose()
-})
+  const { orphaned } = await mpvBus.shutdown()
+  if (orphaned) console.error('[quit] mpv could not be killed; see the log above')
+}
+
+/**
+ * Every window that is not the player. The settings window is created on demand
+ * by `openSettingsWindow()` and outlives the player's own close, which is the
+ * whole of measured failure 1 above.
+ */
+function closeAuxiliaryWindows(): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue
+    if (win === getVideoWindow() || win === getUiWindow()) continue
+    try {
+      win.destroy()
+    } catch {
+      /* already going away */
+    }
+  }
+}

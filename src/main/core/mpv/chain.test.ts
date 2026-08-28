@@ -15,12 +15,14 @@ function makeChain(kind: 'vf' | 'af' = 'vf'): {
   const chain = new FilterChain({
     kind,
     order: kind === 'vf' ? VF_ORDER : AF_ORDER,
-    refusers: kind === 'vf' ? VF_REFUSERS : AF_REFUSERS,
-    exec: {
-      command: async (args) => {
-        sent.push(args)
-        return undefined
-      }
+    refusers: kind === 'vf' ? VF_REFUSERS : AF_REFUSERS
+  })
+  // The exec is attached rather than constructed in: only core/mpv/bus can
+  // hand out a raw vf/af command, and a test stands in for it here.
+  chain.attachExec({
+    command: async (args: unknown[]) => {
+      sent.push(args)
+      return undefined
     }
   })
   return { chain, sent }

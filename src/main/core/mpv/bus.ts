@@ -16,14 +16,54 @@ import type { PlayerState } from '@shared/types'
  * core/mpv/bus — the property-observation bus and the only way to talk to mpv
  * (§5.3). WAVE 0 — FROZEN.
  *
- * Wraps `MpvManager`/`MpvClient`; it does not replace them. Everything a
- * module can do to mpv passes through `createService(id)`, which is where the
- * ownership check lives — so "mechanical property ownership" is not a
- * convention, it is the only code path that exists.
+ * WHY THERE IS NO `mpvBus` EXPORT ANY MORE.
+ *
+ * There used to be one, and it made every ownership guard in this file
+ * decorative. All of these were measured to LAND A WRITE in the live mpv, from
+ * a file under `src/main/features/`, in one line each:
+ *
+ *     mpvBus.createService('victim').set('speed', 1.5)        // any id, no flag
+ *     mpvBus.createService('core/mpv/bus')                    // core's own id
+ *     mpvBus.createService('x', { privileged: true })         // just ask
+ *     mpvBus.setOwnerMap(new OwnerMap([{ id: 'me', ownsProperties: ['a*'] }]))
+ *     mpvBus.contributeArgs('core/mpv/bus', 0, () => ['--speed=4'])
+ *     mpvBus.chainExec(['vf', 'set', 'hflip'])
+ *
+ * The `setOwnerMap` one disarmed all thirty-eight of the hardened attacks at
+ * once, and the legitimate owner was then refused its own property. The only
+ * barrier was `check-forbidden.mjs`, whose import regex was `from '...'` — so
+ * `await import('../../core/mpv/bus.ts')` escalated fully and the grep printed
+ * "clean (90 files scanned)" and exited 0.
+ *
+ * A `#private` field was not the answer: the FACTORY that mints services was
+ * public, and a public factory that takes the caller's word for who it is is
+ * not an ownership system, it is a suggestion. So:
+ *
+ *   - the class is not exported and the instance is not exported;
+ *   - `createMpvBus()` creates it EXACTLY ONCE and throws on a second call, so
+ *     `await import(...)` from a module gets a function that refuses;
+ *   - the only MpvService a module can ever hold is the one `core/registry`
+ *     hands it, with its own id baked in, and the id is checked against the
+ *     set of modules the registry actually loaded;
+ *   - `privileged` is granted only to three hard-coded core ids, and asking
+ *     for it under any other id throws rather than being believed.
+ *
+ * Bypassing this now requires editing a file under `src/main/core/`, which is
+ * what `check:partition` and the extended grep are for. That is the difference
+ * between a boundary and a reminder.
  */
 
 const CORE_ID = 'core/mpv/bus'
 const RESTART_DEBOUNCE_MS = 250
+
+/**
+ * The only ids that may ever hold a privileged service.
+ *
+ * A hard-coded set rather than a flag on the call, because
+ * `createService(id, { privileged: true })` used to be exactly as easy to type
+ * from a feature module as from core, and was believed either way.
+ */
+const PRIVILEGED_IDS: ReadonlySet<string> = new Set([CORE_ID, 'core/vf-chain', 'core/af-chain'])
 
 type PropertyCb = (value: unknown) => void
 type EventCb = (msg: Record<string, unknown>) => void
@@ -45,7 +85,7 @@ export interface BusHost {
   toast(message: string, kind: 'info' | 'error'): void
 }
 
-export class MpvBus {
+class MpvBus {
   /**
    * PRIVATE, and with a `#` rather than a `private` keyword so it is private at
    * RUNTIME too.
@@ -75,6 +115,8 @@ export class MpvBus {
   private readonly chainHooks: Array<{ onFileLoaded(): void; onUnload(): void }> = []
 
   private owners: OwnerMap | null = null
+  /** The ids the registry actually loaded. `createService` refuses anything else. */
+  private knownIds: ReadonlySet<string> = new Set()
   private host: BusHost | null = null
   private awaitingFirstFrame = false
   private restartTimer: NodeJS.Timeout | null = null
@@ -89,8 +131,27 @@ export class MpvBus {
     this.host = host
   }
 
-  setOwnerMap(map: OwnerMap): void {
+  /**
+   * Installed ONCE, by `core/registry` at boot.
+   *
+   * A module used to be able to call this with an OwnerMap claiming `a*`…`z*`
+   * and take over every property in the app; the legitimate owner was then
+   * refused its own writes. There is no path to it from a module any more (the
+   * bus is not exported), and a second call throws so a core file cannot do it
+   * by accident either.
+   */
+  setOwnerMap(map: OwnerMap, moduleIds: readonly string[]): void {
+    if (this.owners) {
+      throw new ContributionError(
+        'the mpv owner map is installed exactly once, at boot, by core/registry.'
+      )
+    }
     this.owners = map
+    this.knownIds = new Set(moduleIds)
+    // The owner map's hint text depends on whether an arbiter EXISTS, and only
+    // the bus knows that. Without this, the OwnershipError told developers to
+    // call `requestSet` for properties whose owner had never registered one.
+    map.setArbiterProbe((property) => this.arbiters.has(property))
   }
 
   /**
@@ -106,11 +167,27 @@ export class MpvBus {
     this.refusalHook?.(moduleId, detail)
   }
 
-  registerChain(chain: { onFileLoaded(): void; onUnload(): void }): void {
+  /**
+   * Wires one filter chain to mpv and hands it the only raw `vf`/`af` exec that
+   * exists. Called by `core/registry`; the chain keeps it in a closure and
+   * never exposes it.
+   */
+  registerChain(chain: {
+    onFileLoaded(): void
+    onUnload(): void
+    attachExec(exec: { command(args: unknown[]): Promise<unknown> }): void
+  }): void {
     this.chainHooks.push(chain)
+    chain.attachExec({ command: (args) => this.chainExec(args) })
   }
 
-  contributeArgs(ownerId: string, priority: number, fn: () => string[]): void {
+  /**
+   * PRIVATE to this file. It is reached only through `MpvService.contributeArgs`,
+   * which supplies the bound id; passing `'core/mpv/bus'` here used to buy a
+   * module the `reserved.ts` exemptions and with them `--speed=4`, `--wid=999`,
+   * `--vo=gpu` and `--fullscreen`.
+   */
+  private contributeArgs(ownerId: string, priority: number, fn: () => string[]): void {
     if (ownerId !== CORE_ID && (priority <= 0 || priority >= 1000)) {
       throw new ContributionError(
         `module '${ownerId}' contributed spawn args at priority ${priority}. ` +
@@ -317,10 +394,24 @@ export class MpvBus {
     }
   }
 
-  dispose(): void {
+  /**
+   * The quit path. AWAITABLE, because the old one was not.
+   *
+   * `dispose()` was synchronous and its only kill was a `setTimeout` inside
+   * `before-quit` that almost never fired. Returning a promise lets main's quit
+   * hook actually wait for mpv to be gone before it calls `app.exit()`, which
+   * is the difference between "usually no orphan" and "no orphan".
+   */
+  async shutdown(): Promise<{ orphaned: boolean }> {
     if (this.restartTimer) clearTimeout(this.restartTimer)
-    this.#manager.dispose()
     this.started = false
+    const r = await this.#manager.terminate()
+    return { orphaned: r.orphaned }
+  }
+
+  /** Fire-and-forget, for paths that cannot await (a crash handler). */
+  dispose(): void {
+    void this.shutdown()
   }
 
   // --- the narrow surface core needs, and nothing wider -------------------
@@ -338,15 +429,21 @@ export class MpvBus {
   /**
    * The raw exec the two filter chains need, and ONLY they.
    *
-   * It refuses anything that is not a chain command, so importing `mpvBus` and
-   * calling this buys a module exactly nothing: `chainExec(['set','aid',2])`
-   * throws. That is the point — the guard is the code, not the grep.
+   * The old `chainExec` was a PUBLIC method on the exported singleton, and its
+   * own comment claimed that importing the bus and calling it "buys a module
+   * exactly nothing". It bought `mpvBus.chainExec(['vf','set','hflip'])` — a
+   * filter-chain write that bypassed `core/vf-chain`'s label arbitration
+   * entirely, which is the one thing §0.2 rule 5 exists to prevent. The
+   * "refuses anything that is not a chain command" guard was the problem, not
+   * the protection: a chain command is precisely what the attacker wanted.
+   *
+   * It is minted per chain now, by `registerChain`, and there is no way to ask
+   * for one from outside this file.
    */
-  chainExec<T>(args: unknown[]): Promise<T> {
+  private chainExec<T>(args: unknown[]): Promise<T> {
     if (!isChainCommand(args)) {
       throw new ContributionError(
-        `chainExec is for vf/af commands only; '${String(args[0])}' is not one. ` +
-          `Everything a module does to mpv goes through ctx.mpv.`
+        `the chain exec is for vf/af commands only; '${String(args[0])}' is not one.`
       )
     }
     return this.#manager.client.command<T>(args)
@@ -365,16 +462,31 @@ export class MpvBus {
   // --- the per-module facade ---------------------------------------------
 
   /**
-   * The ONLY MpvService any module ever sees. `ownerId` is baked in by the
-   * registry, so a module cannot claim to be another one.
+   * The ONLY MpvService any module ever sees, minted by `core/registry` with the
+   * module's own id baked in.
    *
-   * `privileged` is granted to core pieces (the bus itself, the two filter
-   * chains) that legitimately need to write their own properties.
+   * It now VALIDATES, which it did not before: `createService('victim')` and
+   * `createService('core/mpv/bus')` both used to return a working service that
+   * wrote whatever that id owned, and `{ privileged: true }` was granted to
+   * anyone who typed it.
    */
   createService(ownerId: FeatureId, opts?: { privileged?: boolean }): MpvService {
     const bus = this
     const strict = !app.isPackaged
     const privileged = opts?.privileged === true
+
+    if (privileged && !PRIVILEGED_IDS.has(ownerId)) {
+      throw new ContributionError(
+        `'${ownerId}' asked for a privileged mpv service. Privilege is not a flag a caller ` +
+          `sets: it belongs to ${[...PRIVILEGED_IDS].join(', ')} and to nothing else.`
+      )
+    }
+    if (!privileged && !PRIVILEGED_IDS.has(ownerId) && !bus.knownIds.has(ownerId)) {
+      throw new ContributionError(
+        `'${ownerId}' is not a module core/registry loaded. A service is minted for a module ` +
+          `by the registry, once, with its own id — an id is not something a caller supplies.`
+      )
+    }
 
     const log = (m: string): void => {
       console.error(m)
@@ -451,8 +563,17 @@ export class MpvBus {
         if (!arb) {
           // Never fall through to a raw write: a missing arbiter is a design
           // gap, and silently writing anyway is exactly the race §3.7 exists
-          // to stop.
-          return { ok: false, reason: 'no-arbiter' }
+          // to stop. The REASON says what to do about it, because 'no-arbiter'
+          // on its own sent people back to the same call in a loop.
+          const owner = bus.owners?.ownerOf(name) ?? 'nobody'
+          return {
+            ok: false,
+            reason:
+              `'${name}' is owned by ${owner}, which has not registered an arbiter for it. ` +
+              `Call ${owner}'s mediator command instead, or open a one-line PR against ` +
+              `${owner} adding ctx.mpv.arbitrate('${name}', …) in its setup(). ` +
+              `Declaring it in requestsProperties is necessary but not sufficient.`
+          }
         }
         try {
           return await arb.fn(value, { from: ownerId, reason })
@@ -502,4 +623,27 @@ export class MpvBus {
   }
 }
 
-export const mpvBus = new MpvBus()
+export type { MpvBus }
+
+let created = false
+
+/**
+ * Creates THE bus. Exactly once, at boot, from `src/main/index.ts`.
+ *
+ * This is the whole of the ownership-bypass fix. There is no singleton to
+ * import, so `await import('../../core/mpv/bus.ts')` from a feature module
+ * yields this function and this function refuses — the escalation that used to
+ * be one line is now a throw naming the API the caller should have used.
+ */
+export function createMpvBus(): MpvBus {
+  if (created) {
+    throw new ContributionError(
+      'core/mpv/bus is created once, at boot, by src/main/index.ts. Everything a module ' +
+        'does to mpv arrives on ctx.mpv, which core/registry mints with your id baked in. ' +
+        'If you are reading this from a feature module, the API you want is in ' +
+        'docs/parity/02-wave0-api.md.'
+    )
+  }
+  created = true
+  return new MpvBus()
+}
