@@ -131,13 +131,40 @@ export function setVideoRegion(r: Rectangle): void {
   if (layout === 'compat') syncBounds()
 }
 
+/**
+ * `spellcheck: false` is not cosmetic and it is not optional.
+ *
+ * Electron turns Chromium's spellchecker on by default. The moment a window
+ * contains a text input — which Wave 0's generated settings form added — the
+ * spellchecker downloads a dictionary for the app locale from
+ * `redirector.gvt1.com`, and the 302 that answers it carries the user's public
+ * IPv6 address. Every cold launch of the packaged build did this. It is the
+ * single largest hole this app has had, and it arrived through a default nobody
+ * typed. See src/main/core/no-network.ts.
+ *
+ * MEASURED CAVEAT, and it matters: this flag ALONE does not stop the download.
+ * With only this set (session call and command-line switch both off, DNS
+ * blackhole off) the packaged build still completed the fetch. The dictionary
+ * is a per-PROFILE resource, so `session.setSpellCheckerEnabled(false)` in
+ * core/no-network.ts is the layer that actually closes it. This one is kept
+ * because it costs a line and because a window created later should not be the
+ * thing that reopens the question — but do not read it as the fix.
+ *
+ * Every BrowserWindow in this process must set it, so it lives in the shared
+ * helpers rather than being spelled out per call site; `no-network.test.ts`
+ * fails if a `webPreferences` block in this file or in `src/main/ipc.ts` omits
+ * it.
+ */
+const NO_SPELLCHECK = { spellcheck: false } as const
+
 function rendererPreload(): Electron.WebPreferences {
   return {
     preload: path.join(__dirname, '../preload/index.js'),
     nodeIntegration: false,
     contextIsolation: true,
     sandbox: false,
-    backgroundThrottling: false
+    backgroundThrottling: false,
+    ...NO_SPELLCHECK
   }
 }
 
@@ -177,7 +204,7 @@ export function createWindows(): void {
     webPreferences:
       layout === 'compat'
         ? rendererPreload()
-        : { nodeIntegration: false, contextIsolation: true }
+        : { nodeIntegration: false, contextIsolation: true, ...NO_SPELLCHECK }
   })
   mainWindow.setMenu(null)
 
@@ -197,7 +224,7 @@ export function createWindows(): void {
       // which is the only window that can see key events.
       focusable: false,
       hasShadow: false,
-      webPreferences: { nodeIntegration: false, contextIsolation: true }
+      webPreferences: { nodeIntegration: false, contextIsolation: true, ...NO_SPELLCHECK }
     })
     void mpvHost.loadURL('data:text/html,<body style="margin:0;background:#000"></body>')
   } else {
@@ -257,6 +284,14 @@ export function createWindows(): void {
     mainWindow = null
     rendererWindow = null
     mpvHost = null
+    /**
+     * The player IS the app. `window-all-closed` only fires when EVERY window
+     * has gone, and the settings window is a top-level BrowserWindow created on
+     * demand that nobody closes — so with it open, closing the player left the
+     * process running forever. Measured: 0 s to exit without the settings
+     * window, still alive after 16 s with it, 2 out of 2.
+     */
+    app.quit()
   })
 
   if (cfg.alwaysOnTop) setAlwaysOnTop(true)

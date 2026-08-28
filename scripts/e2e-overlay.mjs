@@ -16,7 +16,7 @@
  *   2. drive real keypresses through the same path a user's keyboard takes;
  *   3. zero console errors in the N seconds AFTER them, too.
  *
- * Run:  node scripts/e2e-overlay.mjs [--keep] [--seconds=4]
+ * Run:  node scripts/e2e-overlay.mjs [--packaged] [--keep] [--seconds=4]
  * Needs a desktop session (it opens real windows) so it is NOT part of CI;
  * `npm run verify` stays headless. Run it before you tag.
  */
@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url'
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const args = process.argv.slice(2)
 const KEEP = args.includes('--keep')
+const PACKAGED = args.includes('--packaged')
 const WINDOW_S = Number(args.find((a) => a.startsWith('--seconds='))?.split('=')[1] ?? 4)
 const PORT = 9333
 
@@ -49,7 +50,28 @@ function countMpv() {
   }
 }
 
+/**
+ * `--packaged` drives `dist/win-unpacked/RLPlayer.exe` instead of the dev
+ * Electron.
+ *
+ * It matters more than it looks. `scripts/watch-network.mjs` measured the DEV
+ * build and reported "0 outbound" on the very launches whose packaged netlog
+ * showed a completed download to Google — the two builds do not behave the
+ * same, because `app.isPackaged` changes ownership strictness, asar changes
+ * paths, and Chromium's subsystems are configured differently. Anything that
+ * claims to be evidence about the shipped product runs with this flag.
+ */
 function electronBinary() {
+  if (PACKAGED) {
+    const exe = path.join(repo, 'dist', 'win-unpacked', 'RLPlayer.exe')
+    if (!fs.existsSync(exe)) {
+      throw new Error(
+        `--packaged given but ${exe} does not exist. ` +
+          `Run: npm run build && npx electron-builder --win --dir`
+      )
+    }
+    return exe
+  }
   const p = path.join(repo, 'node_modules', 'electron', 'dist', 'electron.exe')
   if (!fs.existsSync(p)) throw new Error(`electron not found at ${p}`)
   return p
@@ -120,11 +142,14 @@ async function pressKey(s, code, key, windowsVirtualKeyCode) {
 async function main() {
   if (!sample) throw new Error('no sample video under samples/; cannot drive playback')
 
+  // The packaged exe IS the app; the dev binary needs the app directory as argv[1].
+  const launchArgs = PACKAGED ? [] : [repo]
   const child = spawn(
     electronBinary(),
-    [repo, `--remote-debugging-port=${PORT}`, '--remote-allow-origins=*', sample],
+    [...launchArgs, `--remote-debugging-port=${PORT}`, '--remote-allow-origins=*', sample],
     { cwd: repo, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: false }
   )
+  console.log(`driving ${PACKAGED ? 'the PACKAGED build' : 'the dev build'}`)
   const mainLog = []
   child.stdout.on('data', (d) => mainLog.push(String(d)))
   child.stderr.on('data', (d) => mainLog.push(String(d)))
@@ -277,11 +302,31 @@ async function main() {
   // does and then check, because "no orphan mpv on quit" is a v0.1 guarantee
   // and this is the only place that exercises it.
   let orphans = -1
+  let quitMs = -1
+  let hadToKill = false
   if (!KEEP) {
     const mpvBefore = countMpv()
+    const t0 = Date.now()
     await s.send('Runtime.evaluate', { expression: 'window.rlplayer.window.close()' }).catch(() => {})
     for (let i = 0; i < 40 && child.exitCode === null; i++) await sleep(250)
-    if (child.exitCode === null) child.kill()
+    /**
+     * THIS IS THE LINE THAT USED TO LIE.
+     *
+     * It was `if (child.exitCode === null) child.kill()` with no record kept,
+     * and `child.kill()` is TerminateProcess on Windows. So a build that never
+     * quit was killed by the harness, `before-quit` never ran, and the script
+     * then printed "e2e-overlay: clean" with "0 orphan mpv" — a number measured
+     * AFTER a TerminateProcess it did not report.
+     *
+     * The measured failure it hid: with the settings window open (which this
+     * harness opens, twenty lines above) the app never quit at all. 0 s to exit
+     * without it; still running after 16 s with it, 2 out of 2.
+     */
+    if (child.exitCode === null) {
+      hadToKill = true
+      child.kill()
+    }
+    quitMs = Date.now() - t0
     await sleep(1200)
     orphans = countMpv() - (mpvBefore - 1)
     s.close()
@@ -298,6 +343,9 @@ async function main() {
   console.log(`  generated from descriptors: ${(settings.ids ?? []).join(', ')}`)
   console.log(`  custom components mounted : ${settings.custom}`)
   console.log(`  contributed sections      : ${settings.contributed}`)
+  console.log(
+    `quit                        : ${hadToKill ? 'FORCE-KILLED by the harness' : `${quitMs} ms`}`
+  )
   console.log(`orphan mpv after quit       : ${orphans}`)
   for (const e of [...before, ...after, ...settings.errors]) console.log('  ' + e)
 
@@ -313,6 +361,14 @@ async function main() {
   if (settings.contributed === 0) failures.push('no contributed settings section mounted')
   if (settings.errors.length > 0) {
     failures.push(`${settings.errors.length} console error(s) in the settings window`)
+  }
+  if (hadToKill) {
+    failures.push(
+      'the app did not quit within 10 s of window.close() and the harness had to ' +
+        'TerminateProcess it. Every number after this point (orphan mpv above all) was ' +
+        'measured after a kill, so it proves nothing — which is exactly how this used to ' +
+        'report "clean". The settings window being open is the known cause.'
+    )
   }
   if (orphans > 0) failures.push(`${orphans} orphaned mpv.exe after a graceful quit`)
   if (failures.length > 0) {
