@@ -6,7 +6,7 @@ import {
   isMediaFile,
   isSubtitleFile
 } from '@shared/media-types'
-import { scanFolder, shuffleOrder } from '../../services/playlist.ts'
+import { expandDirectory, scanFolder, shuffleOrder, sortPaths } from '../../services/playlist.ts'
 import { loadConfig, saveConfig } from '../../services/config.ts'
 import type { PlaylistItem, PlaylistState } from '@shared/types'
 import type { FeatureContext, FeatureModule } from '@shared/feature-api'
@@ -82,9 +82,8 @@ async function playCurrent(): Promise<void> {
   const item = items[index]
   if (!item) return
   currentFile = item.path
-  const cfg = loadConfig()
 
-  const entry = cfg.resumePlayback ? ctx.perFile.resumeFor(item.path) : null
+  const entry = loadConfig().resumePlayback ? ctx.perFile.resumeFor(item.path) : null
   const startAt = entry?.position
 
   if (startAt && startAt > 1) {
@@ -165,7 +164,11 @@ async function openMany(files: string[]): Promise<void> {
   if (media.length === 1) return open(media[0]!)
 
   flushCurrent()
-  items = media.map((p) => ({ path: p, name: path.basename(p) }))
+  // A multi-select or a multi-file drop arrives in SELECTION order, which is
+  // whatever order the user happened to ctrl-click in. Explorer-exact ordering
+  // is a headline feature and it has to hold on every path that builds a queue,
+  // not only on the single-file folder scan.
+  items = sortPaths(media).map((p) => ({ path: p, name: path.basename(p) }))
   index = 0
   reshuffleIfNeeded()
   await playCurrent()
@@ -177,15 +180,14 @@ async function openPaths(paths: string[]): Promise<void> {
   if (clean.length === 0) return
 
   // U34: a dropped FOLDER is a perfectly ordinary thing to open, and v0.1
-  // discarded it because it only looked at files.
+  // discarded it because it only looked at files. `expandDirectory` sorts with
+  // the same StrCmpLogicalW reimplementation `scanFolder` uses -- a raw
+  // `readdirSync` here gave `a1, a10, a2, b` where Explorer shows `a1, a2, a10, b`.
   const expanded: string[] = []
   for (const p of clean) {
     try {
       if (fs.statSync(p).isDirectory()) {
-        for (const name of fs.readdirSync(p)) {
-          const full = path.join(p, name)
-          if (isMediaFile(full)) expanded.push(full)
-        }
+        expanded.push(...expandDirectory(p))
         continue
       }
     } catch {
@@ -445,6 +447,14 @@ const mod: FeatureModule = {
     })
 
     ctx.i18n.register('ko', {
+      'playlist.title': '재생목록',
+      'playlist.shuffle': '무작위 재생',
+      'playlist.repeat': '반복',
+      'playlist.close': '재생목록 닫기',
+      'playlist.remove': '{name} 제거',
+      'playlist.repeat.off': '반복 없음',
+      'playlist.repeat.one': '한 파일 반복',
+      'playlist.repeat.all': '전체 반복',
       'playlist.next': '다음 파일',
       'playlist.prev': '이전 파일',
       'playlist.stop': '정지',
@@ -458,6 +468,14 @@ const mod: FeatureModule = {
       'playlist.menuTitle': '재생목록'
     })
     ctx.i18n.register('en', {
+      'playlist.title': 'Playlist',
+      'playlist.shuffle': 'Shuffle',
+      'playlist.repeat': 'Repeat',
+      'playlist.close': 'Close playlist',
+      'playlist.remove': 'Remove {name}',
+      'playlist.repeat.off': 'Repeat off',
+      'playlist.repeat.one': 'Repeat one',
+      'playlist.repeat.all': 'Repeat all',
       'playlist.next': 'Next file',
       'playlist.prev': 'Previous file',
       'playlist.stop': 'Stop',

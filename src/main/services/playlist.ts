@@ -189,6 +189,51 @@ export function scanFolder(file: string): { items: PlaylistItem[]; index: number
   return { items, index }
 }
 
+/**
+ * Every media file directly inside `dir`, in Explorer's order.
+ *
+ * U34 opens a dropped FOLDER, and the first cut of that path called
+ * `fs.readdirSync` and used the result as-is. `readdir` returns whatever order
+ * the filesystem hands back (NTFS: a B-tree walk, which is UTF-16 code-unit
+ * order), so a folder of `a1 a10 a2 b` played in that order while Explorer —
+ * and every other entry point in this app — showed `a1 a2 a10 b`. Explorer-exact
+ * ordering is a headline feature; it belongs to the function that produces a
+ * listing, not to each of its callers.
+ */
+export function expandDirectory(dir: string): string[] {
+  let names: string[]
+  try {
+    names = fs.readdirSync(dir)
+  } catch {
+    return []
+  }
+  return names
+    .filter(isMediaFile)
+    .sort(naturalCompare)
+    .map((n) => path.join(dir, n))
+}
+
+/**
+ * Sort a set of already-chosen paths the way Explorer would.
+ *
+ * Multi-select in Explorer and a multi-file drop both arrive in selection
+ * order, which is the order the user happened to ctrl-click in. Files from one
+ * folder sort together and folders keep their own order, so the comparison is
+ * (directory, then filename) — sorting the full path as one string would
+ * interleave `a\z.mkv` and `a-b\c.mkv` by the separator's rank.
+ */
+export function sortPaths(paths: readonly string[]): string[] {
+  return [...paths].sort((a, b) => {
+    const da = path.dirname(a)
+    const db = path.dirname(b)
+    if (da !== db) {
+      const d = naturalCompare(da, db)
+      if (d !== 0) return d
+    }
+    return naturalCompare(path.basename(a), path.basename(b))
+  })
+}
+
 /** Fisher-Yates over the indices, keeping `keepIndex` first. */
 export function shuffleOrder(length: number, keepIndex: number): number[] {
   const order = Array.from({ length }, (_, i) => i).filter((i) => i !== keepIndex)
