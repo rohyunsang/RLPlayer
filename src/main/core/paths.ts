@@ -77,7 +77,26 @@ export function initPaths(): string {
   app.setPath('sessionData', path.join(dir, 'session'))
   app.setPath('logs', path.join(dir, 'logs'))
   app.setPath('crashDumps', path.join(dir, 'crash'))
-  app.commandLine.appendSwitch('disk-cache-dir', path.join(dir, 'cache'))
+  /**
+   * Chromium's HTTP disk cache, in a directory NOTHING ELSE OWNS.
+   *
+   * It used to be `<root>/cache` -- the same directory `cacheDir()` returns, and
+   * on NTFS `cache` and `Cache` are the same directory, so Chromium's own
+   * `Cache/Cache_Data` sat among `thumbs/`, `scenes/`, `art/` and `jobs/`: the
+   * four directories §12 of the module author's guide hands to all 38 Wave-1
+   * modules. `core/profile-cleanup.ts` then listed `Cache` as a leak artefact
+   * "safe to delete because a cache is by definition safe to delete", and
+   * measured deletions of `Cache/thumbs/thumb-1.jpg`, `Cache/scenes/s.jpg`,
+   * `Cache/art/a.png` and `Cache/jobs/job1/font.ttf` are what that argument
+   * actually bought.
+   *
+   * Separating the two makes the ownership question answerable by the path
+   * alone: everything under `httpcache/` is Chromium's and a cleanup may take
+   * all of it; everything under `cache/` is the app's and a cleanup may take
+   * none of it. `purgeLeakedProfileState()` asserts exactly that, and refuses
+   * any target that would swallow an app-owned path.
+   */
+  app.commandLine.appendSwitch('disk-cache-dir', path.join(dir, 'httpcache'))
   return dataRoot
 }
 

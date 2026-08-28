@@ -12,6 +12,7 @@ import path from 'node:path'
  * present on a 0.1.1 launch of this machine:
  *
  *   %APPDATA%\RLPlayer\Dictionaries\ko-3-0.bdic          11,476,456 bytes
+ *   %APPDATA%\RLPlayer\session\Dictionaries\ko-3-0.bdic  11,476,456 bytes  <- the real one
  *   %APPDATA%\RLPlayer\Network\Network Persistent State
  *   %APPDATA%\RLPlayer\session\Network\Network Persistent State
  *   %APPDATA%\RLPlayer\Cache\Cache_Data\data_1 and data_2         ~13 MB each
@@ -43,7 +44,7 @@ import path from 'node:path'
  * and no release note mentioned it. Telling the user to delete a folder by hand
  * was never going to reach it.
  *
- * FOUR RULES, because a cleanup that goes wrong is worse than the mess.
+ * FIVE RULES, because a cleanup that goes wrong is worse than the mess.
  *
  *   1. AN EXPLICIT LIST. Every path below is a literal relative path under the
  *      data root. No globs, no `rmSync(root, { recursive: true })` guarded by a
@@ -58,6 +59,10 @@ import path from 'node:path'
  *      there: all normal, all logged, none fatal. If a target survives, the
  *      marker is NOT written, so the next launch tries again — which is the
  *      behaviour a locked file actually wants.
+ *   5. NEVER THE APP'S OWN DATA. Every target is checked against the paths
+ *      `core/paths.ts` hands to modules before it is touched. Rule 1's literal
+ *      list did not prevent `Cache` from being on it, and `cacheDir()` was
+ *      `<root>/cache`; on NTFS those are one directory. See `appOwnedConflict`.
  */
 
 /**
@@ -69,10 +74,105 @@ import path from 'node:path'
  * AFTER version 1 had run and reported success. Which is the argument for
  * checking a cleanup by searching for what it was supposed to remove rather than
  * by reading its own log line.
+ *
+ * 2 -> 3: THE 11 MB DICTIONARY ITSELF -- the artefact this whole file exists for
+ * and the only one version 2 never touched. Version 2 listed `Dictionaries` at
+ * the profile ROOT, and `core/paths.ts` redirects `sessionData` to
+ * `<root>\session`, which is where Chromium actually writes it. Every other
+ * Chromium target here carries a `session/` twin; that one did not. Measured on
+ * this machine AFTER version 2 had run and written its marker:
+ *
+ *   %APPDATA%\RLPlayer\session\Dictionaries\ko-3-0.bdic   11,476,456 bytes
+ *   %APPDATA%\RLPlayer\cleanup.json                       {"version": 2, ...}
+ *
+ * The marker was already at CLEANUP_VERSION, so the file was stranded
+ * permanently and no launch would ever look at it again. THAT is why the version
+ * has to move and not just the list: a one-shot migration that already ran and
+ * missed its target has to be able to run again, and the marker is the only
+ * thing that decides whether it does.
+ *
+ * The same bump re-runs the narrowed cache targets below, which is the other
+ * half of this version: `Cache` used to be removed WHOLESALE while
+ * `core/paths.ts` put the app's own `thumbs/`, `scenes/`, `art/` and `jobs/`
+ * inside it.
  */
-export const CLEANUP_VERSION = 2
+export const CLEANUP_VERSION = 3
 
 const MARKER = 'cleanup.json'
+
+/**
+ * RULE 5, added because rules 1-4 were not enough: A TARGET MAY NEVER SWALLOW
+ * THE APP'S OWN DATA.
+ *
+ * `Cache` was on the list below, justified as "a cache is by definition safe to
+ * delete". It was not this app's cache to reason about. `core/paths.ts` returned
+ * `<root>/cache` from `cacheDir()`, and on NTFS `cache` and `Cache` are one
+ * directory, so removing that target removed `cache/thumbs`, `cache/scenes`,
+ * `cache/art` and `cache/jobs` -- the four directories §12 of the module
+ * author's guide hands to all 38 Wave-1 modules -- and logged it as
+ * "removed Cache".
+ *
+ * `paths.ts` now points `disk-cache-dir` at `httpcache/`, so the two are
+ * separable by path alone. This is the second half: the app-owned paths a target
+ * may not BE and may not CONTAIN. It is enforced here rather than only in a test
+ * because the next person to add a target will read this file.
+ */
+
+/**
+ * Mixed contents: legacy Chromium subdirectories still live under `cache/`, so a
+ * target may reach INSIDE these but may never be them or above them.
+ */
+const APP_OWNED: readonly string[] = ['cache']
+
+/**
+ * Wholly the app's. A target may not be one of these, be inside one, or be above
+ * one.
+ */
+const APP_SUBTREES: readonly string[] = [
+  'cache/thumbs',
+  'cache/scenes',
+  'cache/art',
+  'cache/jobs',
+  'subcache',
+  'logs',
+  'themes',
+  'crash',
+  'config.json',
+  'resume.json',
+  'history.json',
+  'per-file.json',
+  'keybinds.json',
+  'mpv.conf',
+  MARKER.toLowerCase()
+]
+
+/** NTFS is case-insensitive, and that is the whole point: `Cache` IS `cache`. */
+function norm(rel: string): string {
+  return rel
+    .split(/[\\/]+/)
+    .filter((x) => x && x !== '.')
+    .join('/')
+    .toLowerCase()
+}
+
+/**
+ * Why a target is unsafe, or null if it is fine. Exported so the test asserts on
+ * the reason rather than on a boolean.
+ */
+export function appOwnedConflict(rel: string): string | null {
+  const t = norm(rel)
+  if (t === '') return 'it is the data root itself'
+  for (const a of APP_OWNED) {
+    if (t === a) return `it IS the app-owned path '${a}'`
+    if (a.startsWith(t + '/')) return `it contains the app-owned path '${a}'`
+  }
+  for (const a of APP_SUBTREES) {
+    if (t === a) return `it IS the app-owned path '${a}'`
+    if (a.startsWith(t + '/')) return `it contains the app-owned path '${a}'`
+    if (t.startsWith(a + '/')) return `it is inside the app-owned path '${a}'`
+  }
+  return null
+}
 
 /**
  * The artefacts, each with the reason it is here. A literal list is the whole
@@ -85,6 +185,15 @@ const TARGETS: ReadonlyArray<{ rel: string; kind: 'dir' | 'file'; why: string }>
     kind: 'dir',
     why: "Chromium's downloaded spellcheck dictionary (ko-3-0.bdic, ~11 MB). " +
       'RLPlayer switches the spellchecker off, so nothing reads it.'
+  },
+  {
+    rel: path.join('session', 'Dictionaries'),
+    kind: 'dir',
+    why: 'THE SAME DICTIONARY, IN THE PLACE IT IS ACTUALLY WRITTEN. paths.ts redirects ' +
+      'sessionData to <root>/session, so this -- not the root twin above -- is where the ' +
+      '11,476,456-byte ko-3-0.bdic was still sitting after version 2 of this cleanup had ' +
+      'run and written its marker. Every other Chromium target here had a session/ twin ' +
+      'and this one did not, which is the whole of the defect.'
   },
   {
     rel: path.join('Network', 'Network Persistent State'),
@@ -100,17 +209,33 @@ const TARGETS: ReadonlyArray<{ rel: string; kind: 'dir' | 'file'; why: string }>
       'separately and which the release notes never mentioned.'
   },
   {
-    rel: 'Cache',
+    rel: 'httpcache',
     kind: 'dir',
-    why: "Chromium's HTTP disk cache, holding the gvt1.com request and its 302 reply " +
-      'in full -- including the `mip=` query parameter, which is the user\'s public IP. ' +
-      'RLPlayer issues no HTTP request at all, so the only thing this cache can ever ' +
-      'contain is the leak; and a cache is by definition safe to delete.'
+    why: "Chromium's HTTP disk cache, which paths.ts now points at a directory of its " +
+      'own. Nothing but Chromium ever writes there, so this one may go wholesale. It is ' +
+      'what held the gvt1.com request and its 302 reply in full -- including `mip=`, the ' +
+      "user's public IP -- back when it shared a directory with the app's own cache."
+  },
+  {
+    rel: path.join('Cache', 'Cache_Data'),
+    kind: 'dir',
+    why: 'THE LEGACY LOCATION, NARROWED TO CHROMIUM\'S OWN SUBDIRECTORY. Through 0.1.1 ' +
+      'disk-cache-dir was <root>/cache, which on NTFS is the same directory cacheDir() ' +
+      'returns -- so the previous target, the whole of `Cache`, deleted cache/thumbs, ' +
+      'cache/scenes, cache/art and cache/jobs and reported "removed Cache".'
+  },
+  {
+    rel: path.join('Cache', 'No_Vary_Search'),
+    kind: 'dir',
+    why: 'the other subdirectory Chromium creates beside Cache_Data; it keys cache ' +
+      'entries by request URL. Same argument, same narrowing.'
   },
   {
     rel: path.join('session', 'Cache'),
     kind: 'dir',
-    why: 'the same HTTP cache for the sessionData partition.'
+    why: 'the same HTTP cache for the sessionData partition. This one may go wholesale: ' +
+      "<root>/session is Chromium's directory end to end and the app writes nothing " +
+      'anywhere inside it.'
   },
   {
     rel: 'Shared Dictionary',
@@ -124,6 +249,32 @@ const TARGETS: ReadonlyArray<{ rel: string; kind: 'dir' | 'file'; why: string }>
     why: 'the same, for the sessionData partition.'
   }
 ]
+
+/**
+ * Rule 5 applied to the literal list above, once, at module load.
+ *
+ * It cannot fire in a shipped build -- TARGETS is a constant and the test
+ * asserts this array is empty -- and it exists anyway so that a target added in
+ * a hurry is skipped and named rather than silently deleting a module's
+ * thumbnails. It deliberately does NOT go into `failed`: a programming error
+ * must not hold the marker back and re-run a broken cleanup on every launch
+ * forever.
+ */
+export const REJECTED_TARGETS: ReadonlyArray<{ rel: string; reason: string }> = TARGETS.flatMap(
+  (t) => {
+    const reason = appOwnedConflict(t.rel)
+    return reason === null ? [] : [{ rel: t.rel, reason }]
+  }
+)
+
+const SAFE_TARGETS = TARGETS.filter((t) => appOwnedConflict(t.rel) === null)
+
+/**
+ * The literal list, for the tests that assert on its SHAPE rather than on one
+ * run's behaviour -- above all "every Chromium target has a session/ twin",
+ * which is the invariant `Dictionaries` broke for a whole release.
+ */
+export const TARGET_PATHS: readonly string[] = TARGETS.map((t) => t.rel)
 
 /**
  * NOT ON THE LIST, deliberately: `Code Cache`, `GPUCache`, `DawnGraphiteCache`,
@@ -177,7 +328,14 @@ export function purgeLeakedProfileState(dataRoot: string): CleanupResult {
     // marker must not be able to skip the cleanup forever.
   }
 
-  for (const target of TARGETS) {
+  for (const r of REJECTED_TARGETS) {
+    console.error(
+      `[cleanup] REFUSING to remove '${r.rel}': ${r.reason}. A cleanup routine may not ` +
+        'touch the app\'s own data. See rule 5 in src/main/core/profile-cleanup.ts.'
+    )
+  }
+
+  for (const target of SAFE_TARGETS) {
     const abs = path.join(dataRoot, target.rel)
     let existed = false
     try {
