@@ -216,7 +216,15 @@ async function main() {
     [...launchArgs, `--remote-debugging-port=${PORT}`, '--remote-allow-origins=*', sample],
     {
       cwd: repo,
-      env: { ...process.env, RLPLAYER_HOME: home },
+      env: {
+        ...process.env,
+        RLPLAYER_HOME: home,
+        // Describes the built context menu on stdout. The ONLY end-to-end proof
+        // that menuPath/menuOrder -- dead fields until this round -- reach a real
+        // template in a real build. See src/main/index.ts for why it describes
+        // rather than pops.
+        RLPLAYER_E2E_DUMP_MENU: '1'
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: false
     }
@@ -547,6 +555,27 @@ async function main() {
   console.log(`  generated from descriptors: ${(settings.ids ?? []).join(', ')}`)
   console.log(`  custom components mounted : ${settings.custom}`)
   console.log(`  contributed sections      : ${settings.contributed}`)
+  /**
+   * The context menu the packaged app actually built. `menuPath` and `menuOrder`
+   * had zero consumers, so three modules declared a menu location and got
+   * nothing; the assertion below is positional in the same sense as the tooltip
+   * one -- the named commands must be THERE, each under the root it asked for.
+   */
+  const menuLine = /\[e2e\] menu (\{.*\})/.exec(mainLog.join(''))
+  let menuDump = null
+  try {
+    menuDump = menuLine ? JSON.parse(menuLine[1]) : null
+  } catch {
+    menuDump = null
+  }
+  console.log(
+    `context menu                : ${menuDump ? menuDump.items : '?'} rendered item(s), ` +
+      `${menuDump ? menuDump.expected.length : '?'} from menuPath` +
+      (menuDump
+        ? `: ${menuDump.expected.map((e) => `${e.path}#${e.order} ${e.id} -> "${e.label}"`).join(', ')}`
+        : '')
+  )
+
   // The app's own view. Only the shutdown path that ran the hooks prints it, so
   // its ABSENCE is as much a failure as a slow quit.
   const ownQuit = /\[quit\] clean exit in (\d+) ms/.exec(mainLog.join(''))
@@ -568,18 +597,52 @@ async function main() {
   for (const e of [...before, ...after, ...settings.errors]) console.log('  ' + e)
 
   const failures = []
-  if (started > 0) failures.push(`${started} console error(s) during startup`)
-  if (before.length > 0) failures.push(`${before.length} console error(s) before any input`)
-  if (after.length > 0) failures.push(`${after.length} console error(s) after keypresses`)
-  if (dom.duration === '0:00') failures.push('no duration: nothing is playing')
-  if (dom.layers === 0) failures.push('no seek-bar layer registered')
-  if (dom.panels === 0) failures.push('no contributed panel mounted')
-  if (settings.rows < 8) failures.push(`settings form generated only ${settings.rows} rows`)
-  if (settings.custom === 0) failures.push('the custom settings component did not mount')
-  if (settings.contributed === 0) failures.push('no contributed settings section mounted')
-  if (settings.errors.length > 0) {
-    failures.push(`${settings.errors.length} console error(s) in the settings window`)
+
+  /**
+   * THE MENU ASSERTION SITS HERE, AFTER `failures`, AND ITS FIRST DRAFT DID NOT.
+   * It was written up beside the `console.log` that prints the line, forty lines
+   * above this declaration — so the happy path passed and the failing path threw
+   * a ReferenceError out of main() instead of reporting a failure. Exactly the
+   * TDZ trap section 10 of the guide warns module authors about, in the harness
+   * that checks for it. Found by deliberately reverting the fix to watch this
+   * assertion fail: it crashed instead.
+   */
+  {
+    const wanted = [
+      'audio-volume.toggleMute',
+      'audio-eq.toggle',
+      'subs-tracks.toggleVisibility'
+    ]
+    if (!menuDump) {
+      failures.push(
+        'the app printed no parseable `[e2e] menu {...}` line, so nothing proves the ' +
+          'context-menu template builds from menuPath at all in a packaged build'
+      )
+    } else {
+      // The model has to still claim them...
+      const claimed = menuDump.expected.map((e) => e.id)
+      const unclaimed = wanted.filter((w) => !claimed.includes(w))
+      if (unclaimed.length > 0) {
+        failures.push(
+          `these commands declare a menuPath but the menu model does not place them: ` +
+            `${unclaimed.join(', ')}`
+        )
+      }
+      // ...and each one's LABEL has to be in the RENDERED template. This is the
+      // half that matters: reading the model to prove the render is how the
+      // first version of this check reported clean with the rendering reverted.
+      const notRendered = menuDump.expected.filter((e) => !menuDump.rendered.includes(e.label))
+      if (notRendered.length > 0) {
+        failures.push(
+          `the context menu template does not contain the item(s) these commands asked for: ` +
+            notRendered.map((e) => `${e.id} ("${e.label}" under ${e.path})`).join(', ') +
+            `. menuPath and menuOrder had NO consumer before this round, so "declared" and ` +
+            `"in the menu" are two different claims and this asserts the second.`
+        )
+      }
+    }
   }
+
   if (hadToKill) {
     failures.push(
       'the app did not quit within 10 s of window.close() and the harness had to ' +

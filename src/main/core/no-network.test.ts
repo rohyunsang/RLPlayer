@@ -164,6 +164,37 @@ test('the unsafe blackhole override is env-only and loudly named', () => {
   }
 })
 
+/**
+ * EVERY e2e hook gets the same three rules, and this loop is what stops the
+ * fourth one from being added without them. It used to be one test hardcoded to
+ * one hook name, so the rules were a precedent rather than a rule -- and a
+ * precedent is what `menuPath` was.
+ */
+for (const hook of ['RLPLAYER_E2E_OPEN_SETTINGS', 'RLPLAYER_E2E_DUMP_MENU']) {
+  test(`the ${hook} test hook is env-only, loudly named, and read once`, () => {
+    const readers = mainSources()
+      .filter((f) => !f.endsWith('.test.ts'))
+      .filter((f) => fs.readFileSync(f, 'utf8').includes(hook))
+    assert.deepEqual(
+      readers.map((f) => path.relative(repo, f).split(path.sep).join('/')),
+      ['src/main/index.ts'],
+      `${hook} must be read in exactly one place`
+    )
+    const index = fs.readFileSync(path.join(repo, 'src/main/index.ts'), 'utf8')
+    const read = `process.env['${hook}']`
+    assert.equal(index.split(read).length - 1, 1, `${hook} is read more than once in index.ts`)
+    assert.ok(
+      index.includes(`${read} === '1'`),
+      'the hook must require an exact value, so a stray empty string does not enable it'
+    )
+    assert.ok(
+      !fs.readFileSync(path.join(repo, 'src/main/core/settings/registry.ts'), 'utf8').includes(hook),
+      'the hook must never be reachable from a setting'
+    )
+  })
+}
+
+/** Kept for the extra assertions that are specific to the settings hook. */
 test('the settings-window test hook is env-only, loudly named, and read once', () => {
   /**
    * `RLPLAYER_E2E_OPEN_SETTINGS` exists because `check-network.mjs` only ever
