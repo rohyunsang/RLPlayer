@@ -6,7 +6,19 @@ import {
   settingsSections,
   t
 } from './feature-host.ts'
-import type { SettingType } from '../../../shared/feature-api.ts'
+/**
+ * THE WIRE TYPE, IMPORTED RATHER THAN RE-DECLARED.
+ *
+ * `SettingRow` used to be declared here AND in `src/main/ipc.ts` -- same shape,
+ * two files, opposite sides of an IPC boundary, with nothing checking that the
+ * two agreed. That is not an oversight, it is the shape the toolchain forces:
+ * `tsconfig.web.json` excludes `src/main` and `tsconfig.node.json` excludes
+ * `src/renderer`, so the two halves of anything share no compilation unit.
+ * `src/shared` is in BOTH, which makes it the only place a wire type can live
+ * and still be checked at both ends. Core had already made the mistake all 38
+ * Wave-1 modules were about to make.
+ */
+import type { SettingRow } from '../../../shared/settings-rows.ts'
 import type { SettingBinding } from '../../../shared/renderer-api.ts'
 
 /**
@@ -44,24 +56,6 @@ const SECTIONS = [
 ] as const
 
 type Section = (typeof SECTIONS)[number]
-
-interface SettingRow {
-  id: string
-  section: Section
-  group?: string
-  label: string
-  description?: string
-  type: SettingType
-  value: unknown
-  default: unknown
-  mpvOption?: string
-  requiresRestart?: boolean
-  advanced?: boolean
-  order?: number
-  keywords?: readonly string[]
-  /** `false` when the descriptor's `visibleWhen` predicate excludes it. */
-  visible?: boolean
-}
 
 interface SystemInfo {
   version: string

@@ -106,7 +106,9 @@
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/core/settings/",
-      "src/main/services/config.ts"
+      "src/main/services/config.ts",
+      "src/shared/settings-rows.test.ts",
+      "src/shared/settings-rows.ts"
     ],
     "features": [
       "P03",
@@ -2264,7 +2266,8 @@
     "ownedFilterLabels": [],
     "ownedFiles": [
       "src/main/features/nav-thumbnails/",
-      "src/renderer/src/features/nav-thumbnails/"
+      "src/renderer/src/features/nav-thumbnails/",
+      "src/shared/features/nav-thumbnails/"
     ],
     "features": [
       "N14",

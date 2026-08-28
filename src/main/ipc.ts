@@ -17,13 +17,8 @@ import { notifyVideoRegion } from './core/window/index.ts'
 import { commandRegistry, resolvedKeybinds, setBinding, setPreset } from './core/input/index.ts'
 import { messageCatalog, t } from './core/i18n/index.ts'
 import type { SettingsRegistry } from './core/settings/registry.ts'
-import type {
-  FileFilter,
-  SettingDescriptor,
-  SettingId,
-  SettingSection,
-  SettingType
-} from '@shared/feature-api'
+import type { FileFilter, SettingId } from '@shared/feature-api'
+import { buildSettingRows, type SettingRow } from '@shared/settings-rows'
 import type { LegacyBridge } from './core/legacy-bridge.ts'
 import type { MenuRegistry } from './core/menu.ts'
 import type { OsdBus } from './core/osd/index.ts'
@@ -108,75 +103,6 @@ export interface CoreIpcDeps {
   pushState(): void
 }
 
-/**
- * One row of the generated settings form.
- *
- * Labels are resolved HERE, in main, where the catalogs live — the settings
- * window gets finished strings and never has to know which module contributed
- * which key. `component` carries a `custom` descriptor's renderer component
- * name so the form can look it up in `settingsComponents`.
- */
-export interface SettingRow {
-  id: string
-  section: SettingSection
-  group?: string
-  label: string
-  description?: string
-  type: SettingType
-  value: unknown
-  default: unknown
-  mpvOption?: string
-  requiresRestart?: boolean
-  advanced?: boolean
-  order?: number
-  keywords?: readonly string[]
-  /**
-   * `false` when the descriptor's `visibleWhen` predicate says this row does
-   * not apply right now. Evaluated HERE and shipped as a boolean because
-   * `visibleWhen` is a FUNCTION and a function cannot cross the snapshot IPC --
-   * which is why the field sat in the public API with no consumer at all while
-   * three Wave-1 modules reached for it. M03 shipped fourteen descriptors using
-   * it; every one of them rendered unconditionally.
-   */
-  visible?: boolean
-}
-
-/**
- * Evaluate a descriptor's `visibleWhen` against the live settings.
- *
- * A predicate that throws hides nothing: one module's bad predicate must not
- * blank a page that every other module also renders into (§3.5 rule 7).
- */
-function rowVisible(d: SettingDescriptor, get: <V>(id: SettingId) => V): boolean {
-  if (d.visibleWhen === undefined) return true
-  try {
-    return d.visibleWhen(get) !== false
-  } catch (e) {
-    console.error(`[settings] visibleWhen for '${d.id}' threw:`, (e as Error).message)
-    return true
-  }
-}
-
-function toRow(d: SettingDescriptor, value: unknown, visible = true): SettingRow {
-  const row: SettingRow = {
-    id: d.id,
-    section: d.section,
-    label: t(d.labelKey),
-    type: d.type,
-    value,
-    default: d.default
-  }
-  if (d.group !== undefined) row.group = d.group
-  if (d.descriptionKey !== undefined) row.description = t(d.descriptionKey)
-  if (d.mpvOption !== undefined) row.mpvOption = d.mpvOption
-  if (d.requiresRestart !== undefined) row.requiresRestart = d.requiresRestart
-  if (d.advanced !== undefined) row.advanced = d.advanced
-  if (d.order !== undefined) row.order = d.order
-  if (d.keywords !== undefined) row.keywords = d.keywords
-  if (!visible) row.visible = false
-  return row
-}
-
 export function registerCoreIpc(deps: CoreIpcDeps): void {
   const invoke = (id: string, arg?: unknown): void => {
     void commandRegistry.invoke(id, arg).catch((e: Error) => {
@@ -257,9 +183,12 @@ export function registerCoreIpc(deps: CoreIpcDeps): void {
   // neither this file nor `settings.html`.
   const settingsRows = (): SettingRow[] => {
     const get = <V,>(id: SettingId): V => deps.settings.get(id) as V
-    return deps.settings
-      .snapshot()
-      .map(({ descriptor, value }) => toRow(descriptor, value, rowVisible(descriptor, get)))
+    // `SettingRow`, `rowVisible` and `toRow` USED TO BE DECLARED HERE, and
+    // `SettingRow` was declared a second time in settings-form.ts with nothing
+    // comparing the two. They live in `@shared/settings-rows` now -- the one
+    // place both tsconfigs compile -- so the wire type has a single definition
+    // and `visibleWhen` is testable without Electron. It had no tests at all.
+    return buildSettingRows(deps.settings.snapshot(), get, t)
   }
   ipcMain.handle('core-settings:list', () => settingsRows())
   ipcMain.handle('core-settings:set', (_e, msg: { id: string; value: unknown }) => {
