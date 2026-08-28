@@ -403,3 +403,123 @@ test('a migrated bucket is readable through the service, and evictable', async (
   // right answer: it is the one we know least about.
   assert.equal(mgr.storedFiles()[0]?.updatedAt, 0)
 })
+
+/**
+ * ---------------------------------------------------------------------------
+ * A DISABLED MODULE MUST NOT ERASE ITS OWN PER-FILE DATA.
+ *
+ * Found by migrating a real profile: after one play of the file, a slice key
+ * that no registered module claimed was gone from the bucket.
+ *
+ * `captureSlices()` rebuilt the bucket from the REGISTERED slices only, so any
+ * stored slice whose owner was not registered on this boot was discarded — and
+ * if no registered slice produced a diff, `delete all[key]` threw the whole
+ * bucket away, other modules' data included.
+ *
+ * That collides head-on with a documented guarantee: "a runtime failure inside
+ * your setup() disables your module only: it logs loudly, shows one toast, and
+ * the app starts. One broken feature must never black-screen the player." A
+ * module disabled that way registers no slice — so every file the user played
+ * while it was broken silently DELETED that module's saved state for that file,
+ * and one bad release would take the user's per-file settings with it.
+ * ---------------------------------------------------------------------------
+ */
+test('a slice whose module did not load this boot is PRESERVED, not erased', async () => {
+  const resume = memStore<ResumeFile>({ entries: {} })
+  const history = memStore<HistoryFile>({ entries: {} })
+  const opts = memStore<OptsFile>({ entries: {} })
+
+  // Boot 1: both modules healthy. Both store something.
+  {
+    const mgr = new PerFileManager({ resume, history, opts })
+    const live = { a: 0, b: 0 }
+    mgr.registerSlice('mod-a', {
+      key: 'mod-a',
+      capture: () => ({ v: live.a }),
+      apply: (s) => {
+        if (typeof s.v === 'number') live.a = s.v
+      },
+      rememberDefaults: { v: true }
+    })
+    mgr.registerSlice('mod-b', {
+      key: 'mod-b',
+      capture: () => ({ v: live.b }),
+      apply: (s) => {
+        if (typeof s.v === 'number') live.b = s.v
+      },
+      rememberDefaults: { v: true }
+    })
+    await mgr.onFileLoaded(FILE)
+    live.a = 11
+    live.b = 22
+    mgr.captureSlices()
+  }
+
+  // Boot 2: mod-a's setup() threw, so it is disabled and registers no slice.
+  // The app runs — that is the documented contract — and the user plays the
+  // same file again.
+  {
+    const mgr = new PerFileManager({ resume, history, opts })
+    const live = { b: 0 }
+    mgr.registerSlice('mod-b', {
+      key: 'mod-b',
+      capture: () => ({ v: live.b }),
+      apply: (s) => {
+        if (typeof s.v === 'number') live.b = s.v
+      },
+      rememberDefaults: { v: true }
+    })
+    await mgr.onFileLoaded(FILE)
+    assert.equal(live.b, 22, 'mod-b was restored')
+    mgr.captureSlices()
+
+    assert.deepEqual(
+      mgr.sliceFor(FILE, 'mod-a'),
+      { v: 11 },
+      "mod-a was disabled this boot, not uninstalled: its stored slice must survive"
+    )
+    assert.deepEqual(mgr.sliceFor(FILE, 'mod-b'), { v: 22 })
+  }
+
+  // Boot 3: mod-a is fixed. Its value must come back.
+  {
+    const mgr = new PerFileManager({ resume, history, opts })
+    const live = { a: 0 }
+    mgr.registerSlice('mod-a', {
+      key: 'mod-a',
+      capture: () => ({ v: live.a }),
+      apply: (s) => {
+        if (typeof s.v === 'number') live.a = s.v
+      },
+      rememberDefaults: { v: true }
+    })
+    await mgr.onFileLoaded(FILE)
+    assert.equal(live.a, 11, 'mod-a recovers the value it had before it broke')
+  }
+})
+
+test('a bucket is not deleted just because no REGISTERED slice has a diff', async () => {
+  const resume = memStore<ResumeFile>({ entries: {} })
+  const history = memStore<HistoryFile>({ entries: {} })
+  const opts = memStore<OptsFile>({
+    entries: {
+      [resumeKey(FILE)]: {
+        path: FILE,
+        updatedAt: 5,
+        slices: { 'mod-a': { v: 11 } }
+      }
+    }
+  })
+  // Only mod-b is registered, and it has nothing to say. The old code took the
+  // `delete all[key]` branch and dropped mod-a with the bucket.
+  const mgr = new PerFileManager({ resume, history, opts })
+  mgr.registerSlice('mod-b', {
+    key: 'mod-b',
+    capture: () => ({ v: 0 }),
+    apply: () => undefined,
+    rememberDefaults: { v: true }
+  })
+  await mgr.onFileLoaded(FILE)
+  mgr.captureSlices()
+  assert.deepEqual(mgr.sliceFor(FILE, 'mod-a'), { v: 11 })
+})

@@ -301,7 +301,28 @@ export class PerFileManager {
     const key = this.current?.key
     if (!key) return
     const all = { ...this.stores.opts.read().entries }
-    const bucket: Record<string, Record<string, unknown>> = {}
+
+    /**
+     * START FROM WHAT IS ALREADY STORED, minus the keys the modules registered
+     * on THIS boot own. Anything left is a slice whose owner is not here, and it
+     * is kept verbatim.
+     *
+     * This used to start from `{}`, so the bucket was rebuilt from the registered
+     * slices alone — and a stored slice whose module was not registered was
+     * discarded. That collides with a documented guarantee: a module whose
+     * `setup()` throws is disabled while the app still runs. Such a module
+     * registers no slice, so every file played while it was broken silently
+     * DELETED its saved state for that file, and one bad release took the user's
+     * per-file settings with it. Worse, when no registered slice produced a diff
+     * the whole entry was deleted, taking every OTHER module's data for that
+     * file too.
+     *
+     * P10 is the same principle one level up: the store preserves unknown keys
+     * across versions rather than sweeping away what this build does not
+     * recognise.
+     */
+    const bucket: Record<string, Record<string, unknown>> = { ...(all[key]?.slices ?? {}) }
+    for (const reg of this.slices) delete bucket[reg.slice.key]
 
     for (const reg of this.slices) {
       let now: Record<string, unknown>
@@ -329,6 +350,9 @@ export class PerFileManager {
         slices: bucket
       }
     } else delete all[key]
+    // Note the branch above is now reached only when NOTHING is left at all —
+    // no diff from any registered slice and no preserved foreign slice — which
+    // is the only case where deleting the entry loses nothing.
     this.stores.opts.write({ entries: bound(all, MAX_OPTS_ENTRIES, (e) => e.updatedAt) })
   }
 
