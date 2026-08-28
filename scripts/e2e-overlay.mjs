@@ -20,7 +20,7 @@
  * Needs a desktop session (it opens real windows) so it is NOT part of CI;
  * `npm run verify` stays headless. Run it before you tag.
  */
-import { execFileSync, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { listProcesses, machineWideMpvCount, orphansAfterQuit, snapshot } from './lib/mpv-procs.mjs'
 import fs from 'node:fs'
 import os from 'node:os'
