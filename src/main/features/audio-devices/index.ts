@@ -15,6 +15,9 @@ let ctx: FeatureContext
 
 const mod: FeatureModule = {
   id: 'audio-devices',
+  // §3.6: M15 "owns every AO-reinit round-trip; nothing else may re-set
+  // `audio-device`". `ao-reload` is that round-trip in one command.
+  ownsCommands: ['ao-reload'],
   ownsProperties: [
     'audio-device',
     'audio-exclusive',
@@ -82,8 +85,34 @@ const mod: FeatureModule = {
         internal: true,
         run: async (arg) => {
           const value = String(arg ?? 'auto')
+          // Read the selected track BEFORE the switch: reopening the audio
+          // output can drop it, and mpv then re-picks by its own rules.
+          const previous = ctx.mpv.peek<number | false>('aid') ?? false
           await ctx.mpv.set('audio-device', value)
           saveConfig({ audioDevice: value })
+
+          /**
+           * THE MEDIATED PATH, USED FOR REAL.
+           *
+           * `aid` is M11's (§3.6: "owns `aid` and `vid` outright"), and this
+           * module must not round-trip it itself — that is the whole reason
+           * `audio-tracks.reinitDecoder` exists. Until now `requestSet` had
+           * ZERO call sites anywhere in `src/`, so the mediated half of §3.7
+           * was a design nobody had ever executed. This is it, at the one
+           * moment M15 genuinely needs it.
+           *
+           * A refusal is a NORMAL outcome, not an error: M11 refuses while its
+           * own per-file restore is in flight, because granting it there picks
+           * the wrong dub on a dual-audio release. Log it and move on.
+           */
+          if (previous !== false) {
+            const r = await ctx.mpv.requestSet(
+              'aid',
+              previous,
+              'the audio output was reopened for a device change and may have dropped the track'
+            )
+            if (!r.ok) ctx.log.warn(`audio track not re-asserted after the switch: ${r.reason}`)
+          }
         }
       }
     ])
