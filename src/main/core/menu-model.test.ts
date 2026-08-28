@@ -1,5 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { MENU_ROOTS, commandMenuGroups, validateMenuPlacement } from './menu-model.ts'
 import type { MenuCommand } from './menu-model.ts'
 
@@ -135,4 +138,65 @@ test('the roots are eight, distinct, and their orders are distinct and ascending
   assert.equal(new Set(paths).size, paths.length)
   assert.equal(new Set(orders).size, orders.length)
   assert.deepEqual(orders, [...orders].sort((a, b) => a - b))
+})
+
+/**
+ * ---------------------------------------------------------------------------
+ * The live declarations, read off disk.
+ *
+ * The unit tests above prove the rules; this proves the eighteen implemented
+ * modules OBEY them, without booting Electron. It is the check that would have
+ * caught all three modules declaring a menuPath that did nothing, and it is
+ * also the only cross-module duplicate-slot check that runs in `npm test`.
+ * ---------------------------------------------------------------------------
+ */
+test('every menuPath declared by a real module is valid and slot-unique', () => {
+  const featuresDir = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '..',
+    'features'
+  )
+  const taken = new Map<string, string>()
+  let withPath = 0
+
+  for (const dir of fs.readdirSync(featuresDir, { withFileTypes: true })) {
+    if (!dir.isDirectory()) continue
+    const file = path.join(featuresDir, dir.name, 'index.ts')
+    if (!fs.existsSync(file)) continue
+    const src = fs.readFileSync(file, 'utf8')
+
+    // Each descriptor literal, from its `id:` to the next `id:` or the end.
+    const declared: MenuCommand[] = []
+    const idRe = /\n\s*id: '([^']+)',/g
+    const marks = [...src.matchAll(idRe)]
+    for (let i = 0; i < marks.length; i++) {
+      const from = marks[i]?.index ?? 0
+      const to = marks[i + 1]?.index ?? src.length
+      const body = src.slice(from, to)
+      const id = marks[i]?.[1] as string
+      if (!id.startsWith(`${dir.name}.`)) continue // module id, not a command
+      const mp = /\n\s*menuPath: '([^']+)'/.exec(body)?.[1]
+      const mo = /\n\s*menuOrder: (\d+)/.exec(body)?.[1]
+      const internal = /\n\s*internal: true/.test(body)
+      if (!mp && !mo) continue
+      declared.push({
+        id,
+        labelKey: id,
+        ...(mp === undefined ? {} : { menuPath: mp }),
+        ...(mo === undefined ? {} : { menuOrder: Number(mo) }),
+        ...(internal ? { internal: true } : {})
+      })
+      if (mp) withPath++
+    }
+    if (declared.length === 0) continue
+    assert.doesNotThrow(
+      () => validateMenuPlacement(dir.name, declared, taken),
+      `${dir.name} has an invalid menu placement`
+    )
+  }
+
+  // A parser that silently matched nothing would pass this test forever, which
+  // is how the visibleWhen and orphan-counter checks lied. Three commands carry
+  // a menuPath today; if that number drops to zero, the scan broke.
+  assert.ok(withPath >= 3, `expected to find the live menuPath declarations, found ${withPath}`)
 })
