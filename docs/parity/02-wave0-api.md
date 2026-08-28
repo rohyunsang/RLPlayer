@@ -686,8 +686,12 @@ menuOrder: 30           // REQUIRED with a menuPath, and unique within that root
 - `menuOrder` is **required** with a `menuPath`, and a duplicate `(path, order)`
   is rejected naming both commands. Without it, item order falls to module
   discovery order -- alphabetical directory order, which nobody chose and nothing
-  documents. Same rule as a seek-bar layer's `order` and a menu section's
-  `order`; all three ordering namespaces now reject a tie.
+  documents. Same rule as every other cross-module ordering namespace — seek-bar
+  layers, panels, stats sections, settings sections, transport buttons and menu
+  sections all reject a tie, scoped where a scope exists. The two deliberate
+  exceptions are `contributeArgs` priority, which is a BAND that eight modules
+  share by design (ties broken deterministically by owner id), and
+  `settings.define`, which already sorted by `(order, id)`.
 - `menuOrder` without `menuPath`, and `menuPath` on an `internal: true` mediator,
   are contribution errors rather than silent no-ops.
 - The label is your command's `labelKey` and the accelerator is your command's own
