@@ -3,7 +3,8 @@ import type {
   FeatureContext,
   FeatureModule,
   MenuNode,
-  SettingDescriptor
+  SettingDescriptor,
+  Unsubscribe
 } from '@shared/feature-api'
 import {
   AUTOLEVEL_SMOOTHING,
@@ -102,6 +103,42 @@ let restored = false
 /** Mirrors the three filter toggles (see the header). */
 const filters = { levels: false, autoLevel: false, chromaShift: false }
 
+/** Everything to release on quit: observers, event hooks, settings listeners. */
+let offs: Unsubscribe[] = []
+
+/**
+ * True while THIS module is writing its own settings store.
+ *
+ * `SettingsRegistry.set()` calls its `onChange` listeners SYNCHRONOUSLY
+ * (`core/settings/registry.ts`), and this module subscribes to every id it
+ * defines so that the settings WINDOW moving a slider reaches mpv. Without this
+ * flag every gesture ran the apply path twice — measured, before the fix:
+ *
+ *   `video-color.brightnessUp` once            -> OSD ['밝기 +1', '밝기 +1']
+ *   `video-color.reset` from a non-neutral tuple -> five per-knob readouts
+ *                                                  stacked under '색 조정 초기화됨'
+ *
+ * which is precisely the "one updating readout rather than forty stacked ones"
+ * §3.3.5 asks for, inverted. The second apply was a no-op on the pipe (mpv
+ * already held the value), so only the OSD showed it — a duplicate nothing but a
+ * test that counts messages can see.
+ *
+ * It is a flag rather than "drop the OSD from the listener" because the listener
+ * is the ONLY signal for a settings-window edit while video plays behind it, and
+ * dropping it there would have traded a visible duplicate for a silent gap.
+ */
+let storing = false
+
+/** Write this module's own setting without re-entering the apply path. */
+function store<T>(id: string, value: T): void {
+  storing = true
+  try {
+    ctx.settings.set(id, value)
+  } finally {
+    storing = false
+  }
+}
+
 const num = (id: string): number => ctx.settings.get<number>(id)
 const flag = (id: string): boolean => ctx.settings.get<boolean>(id)
 
@@ -166,11 +203,33 @@ async function setKnob(knob: ColourKnob, value: number): Promise<void> {
   // override that happens to equal the stored preference still reaches mpv.
   // `settings.set` fires `onChange` only on a real change, and the re-apply it
   // triggers is a no-op because mpv already holds `v`.
-  ctx.settings.set(settingIdOf(knob), v)
+  store(settingIdOf(knob), v)
 }
 
 const stepKnob = (knob: ColourKnob, delta: number): Promise<void> =>
   setKnob(knob, liveTuple()[knob] + delta)
+
+// ---------------------------------------------------------------------------
+// V04 — video-output-levels
+// ---------------------------------------------------------------------------
+
+/** mpv only, and only one of the three values mpv accepts. */
+async function applyOutputLevels(value: OutputLevels): Promise<void> {
+  if (ctx.mpv.peek<string>('video-output-levels') !== value) {
+    await ctx.mpv.set('video-output-levels', value)
+  }
+}
+
+/** A gesture: apply, then remember it. Same asymmetry as `setKnob`. */
+async function setOutputLevels(value: unknown): Promise<void> {
+  const v = toOutputLevels(value)
+  await applyOutputLevels(v)
+  store('video-color.outputLevels', v)
+  ctx.osd.show({
+    kind: 'info',
+    text: `${t('video-color.outputLevels')}: ${t(`video-color.outputLevels.${v}`)}`
+  })
+}
 
 // ---------------------------------------------------------------------------
 // The three filter slots
@@ -200,7 +259,12 @@ async function applySlot(
   if (!on) {
     // Disable IN PLACE (§5): the slot keeps its spec, so coming back is not a
     // full chain rebuild and the user's values survive the toggle.
-    if (vf.has(label)) vf.toggle(label, false)
+    //
+    // `isEnabled` and not just `has`: the parameter listeners call through here
+    // on every slider tick whether or not the filter is on, so without it a
+    // drag on a switched-off black point emitted one `toggle(label, false)` per
+    // tick against a slot that was already disabled.
+    if (vf.has(label) && vf.isEnabled(label)) vf.toggle(label, false)
     return
   }
 
@@ -278,7 +342,7 @@ async function toggleLastUsed(): Promise<void> {
   if (!isNeutral(current)) {
     lastUsed = current
     await applyTuple(NEUTRAL)
-    for (const k of COLOUR_KNOBS) ctx.settings.set(settingIdOf(k), 0)
+    for (const k of COLOUR_KNOBS) store(settingIdOf(k), 0)
     ctx.osd.show({ kind: 'info', text: t('video-color.osd.colourOff') })
     return
   }
@@ -288,7 +352,7 @@ async function toggleLastUsed(): Promise<void> {
   }
   const wanted = lastUsed
   await applyTuple(wanted)
-  for (const k of COLOUR_KNOBS) ctx.settings.set(settingIdOf(k), wanted[k])
+  for (const k of COLOUR_KNOBS) store(settingIdOf(k), wanted[k])
   ctx.osd.show({ kind: 'info', text: t('video-color.osd.colourOn') })
 }
 
@@ -301,21 +365,21 @@ async function toggleLastUsed(): Promise<void> {
 async function resetAll(): Promise<void> {
   lastUsed = null
   await applyTuple(NEUTRAL)
-  for (const k of COLOUR_KNOBS) ctx.settings.set(settingIdOf(k), 0)
+  for (const k of COLOUR_KNOBS) store(settingIdOf(k), 0)
 
-  ctx.settings.set('video-color.outputLevels', 'auto')
-  await ctx.mpv.set('video-output-levels', 'auto')
+  store('video-color.outputLevels', 'auto')
+  await applyOutputLevels('auto')
 
   filters.levels = false
   filters.autoLevel = false
   filters.chromaShift = false
-  ctx.settings.set('video-color.levels', false)
-  ctx.settings.set('video-color.autoLevel', false)
-  ctx.settings.set('video-color.chromaShift', false)
-  ctx.settings.set('video-color.levelsBlack', LEVELS_DEFAULTS.black)
-  ctx.settings.set('video-color.levelsWhite', LEVELS_DEFAULTS.white)
-  ctx.settings.set('video-color.chromaShiftH', CHROMA_SHIFT_DEFAULTS.horizontal)
-  ctx.settings.set('video-color.chromaShiftV', CHROMA_SHIFT_DEFAULTS.vertical)
+  store('video-color.levels', false)
+  store('video-color.autoLevel', false)
+  store('video-color.chromaShift', false)
+  store('video-color.levelsBlack', LEVELS_DEFAULTS.black)
+  store('video-color.levelsWhite', LEVELS_DEFAULTS.white)
+  store('video-color.chromaShiftH', CHROMA_SHIFT_DEFAULTS.horizontal)
+  store('video-color.chromaShiftV', CHROMA_SHIFT_DEFAULTS.vertical)
   await applyAllFilters()
 
   ctx.osd.show({ kind: 'info', text: t('video-color.osd.reset') })
@@ -329,7 +393,7 @@ async function toggleFilter(which: keyof typeof filters): Promise<void> {
       : which === 'autoLevel'
         ? 'video-color.autoLevel'
         : 'video-color.chromaShift'
-  ctx.settings.set(id, filters[which])
+  store(id, filters[which])
   if (which === 'levels') await applyLevels()
   else if (which === 'autoLevel') await applyAutoLevel()
   else await applyChromaShift()
@@ -337,6 +401,59 @@ async function toggleFilter(which: keyof typeof filters): Promise<void> {
     kind: 'info',
     text: t(`video-color.osd.${which}${filters[which] ? 'On' : 'Off'}`)
   })
+}
+
+// ---------------------------------------------------------------------------
+// §4.2 — this module's contribution to M29's stats overlay
+// ---------------------------------------------------------------------------
+
+/**
+ * One row of the stats block. §4.2 names M01 as a producer of an M29 stats
+ * section, additive and non-blocking.
+ *
+ * The shape is declared HERE and again in the renderer half, which is the
+ * hand-duplication §3.4 says `src/shared/features/<id>/` exists to prevent —
+ * except that M01's manifest row does not list that directory (only M12's, M26's
+ * and M27's do), so this module may not create it. Reported as a finding. It is
+ * kept to two string fields so the duplication is three lines and cannot drift
+ * silently: `value` is already formatted in main, and the renderer only resolves
+ * `labelKey` through its own `t()`.
+ */
+interface StatsRow {
+  labelKey: string
+  value: string
+}
+
+/**
+ * The five knobs, the output range, and WHICH of the three lavfi slots is live.
+ *
+ * The last row is the point of the whole block: §6.3's acceptance criterion for
+ * this module is "brightness ±100 visibly changes the picture with hwdec active
+ * — proves it is a VO-level property, not a filter", and the way to see that in
+ * the app is a readout that says the knobs moved while no CPU filter is in the
+ * chain. `ctx.vf.hasCpuFilter` is the whole chain's answer across every module,
+ * so this reports only its own three labels.
+ */
+function statsRows(): StatsRow[] {
+  const tuple = liveTuple()
+  const active: string[] = []
+  if (filters.levels) active.push(LEVELS_LABEL)
+  if (filters.autoLevel) active.push(AUTOLEVEL_LABEL)
+  if (filters.chromaShift) active.push(CSHIFT_LABEL)
+  return [
+    ...COLOUR_KNOBS.map((k) => ({
+      labelKey: `video-color.${k}`,
+      value: signed(tuple[k])
+    })),
+    {
+      labelKey: 'video-color.outputLevels',
+      value: toOutputLevels(ctx.mpv.peek<string>('video-output-levels'))
+    },
+    {
+      labelKey: 'video-color.statsCpuFilters',
+      value: active.length === 0 ? '—' : active.join(', ')
+    }
+  ]
 }
 
 // ---------------------------------------------------------------------------
@@ -525,37 +642,52 @@ const mod: FeatureModule = {
     filters.autoLevel = flag('video-color.autoLevel')
     filters.chromaShift = flag('video-color.chromaShift')
 
-    // --- settings -> mpv --------------------------------------------------
+    /**
+     * --- the settings WINDOW -> mpv ---------------------------------------
+     *
+     * Every listener below is guarded by `storing`, because this module writes
+     * the same ids itself and `SettingsRegistry.set()` calls listeners
+     * synchronously. Unguarded, one key press applied twice and announced twice;
+     * see `storing`'s declaration for the measurement.
+     */
+    const onSetting = <T>(id: string, fn: (v: T) => void): void => {
+      offs.push(
+        ctx.settings.onChange<T>(id, (v) => {
+          if (!storing) fn(v)
+        })
+      )
+    }
+
     for (const knob of COLOUR_KNOBS) {
-      ctx.settings.onChange<number>(settingIdOf(knob), (v) => {
+      onSetting<number>(settingIdOf(knob), (v) => {
         void applyKnob(knob, v)
       })
     }
-    ctx.settings.onChange<string>('video-color.outputLevels', (v) => {
-      void ctx.mpv.set('video-output-levels', toOutputLevels(v))
+    onSetting<string>('video-color.outputLevels', (v) => {
+      void applyOutputLevels(toOutputLevels(v))
     })
-    ctx.settings.onChange<boolean>('video-color.levels', (v) => {
+    onSetting<boolean>('video-color.levels', (v) => {
       filters.levels = v
       void applyLevels()
     })
-    ctx.settings.onChange<number>('video-color.levelsBlack', () => {
+    onSetting<number>('video-color.levelsBlack', () => {
       void applyLevels('black')
     })
-    ctx.settings.onChange<number>('video-color.levelsWhite', () => {
+    onSetting<number>('video-color.levelsWhite', () => {
       void applyLevels('white')
     })
-    ctx.settings.onChange<boolean>('video-color.autoLevel', (v) => {
+    onSetting<boolean>('video-color.autoLevel', (v) => {
       filters.autoLevel = v
       void applyAutoLevel()
     })
-    ctx.settings.onChange<boolean>('video-color.chromaShift', (v) => {
+    onSetting<boolean>('video-color.chromaShift', (v) => {
       filters.chromaShift = v
       void applyChromaShift()
     })
-    ctx.settings.onChange<number>('video-color.chromaShiftH', () => {
+    onSetting<number>('video-color.chromaShiftH', () => {
       void applyChromaShift('horizontal')
     })
-    ctx.settings.onChange<number>('video-color.chromaShiftV', () => {
+    onSetting<number>('video-color.chromaShiftV', () => {
       void applyChromaShift('vertical')
     })
 
@@ -567,9 +699,11 @@ const mod: FeatureModule = {
      * a `peek()` rather than a round trip on every key repeat.
      */
     for (const name of [...COLOUR_KNOBS, 'video-output-levels']) {
-      ctx.mpv.observe(name, () => {
-        /* the bus caches it; `peek()` is the read */
-      })
+      offs.push(
+        ctx.mpv.observe(name, () => {
+          /* the bus caches it; `peek()` is the read */
+        })
+      )
     }
 
     /**
@@ -594,9 +728,11 @@ const mod: FeatureModule = {
 
     // --- V53 --------------------------------------------------------------
 
-    ctx.mpv.onEvent('start-file', () => {
-      restored = false
-    })
+    offs.push(
+      ctx.mpv.onEvent('start-file', () => {
+        restored = false
+      })
+    )
 
     /**
      * A file with no memory of its own starts from the user's defaults, and the
@@ -609,15 +745,14 @@ const mod: FeatureModule = {
      * one episode silently follows them to the next film. `restored` keeps it
      * order-independent (see its declaration).
      */
-    ctx.mpv.afterFileLoaded(async () => {
-      if (restored) return
-      await applyTuple(defaultTuple())
-      await ctx.mpv.set(
-        'video-output-levels',
-        toOutputLevels(ctx.settings.get<string>('video-color.outputLevels'))
-      )
-      await applyAllFilters()
-    })
+    offs.push(
+      ctx.mpv.afterFileLoaded(async () => {
+        if (restored) return
+        await applyTuple(defaultTuple())
+        await applyOutputLevels(toOutputLevels(ctx.settings.get<string>('video-color.outputLevels')))
+        await applyAllFilters()
+      })
+    )
 
     /**
      * The five knobs, the output-level choice and the three toggles are
@@ -708,9 +843,7 @@ const mod: FeatureModule = {
         labelKey: 'video-color.setOutputLevels',
         category: 'video',
         internal: true,
-        run: (arg) => {
-          ctx.settings.set('video-color.outputLevels', toOutputLevels(arg))
-        }
+        run: (arg) => setOutputLevels(arg)
       },
       {
         id: 'video-color.setKnob',
@@ -729,10 +862,17 @@ const mod: FeatureModule = {
       }
     ])
 
-    // The renderer half's "reset" button, and the only channel this module has.
+    // The renderer half's "reset" button (settings surface) …
     ctx.ipc.on('video-color:reset', () => {
       void resetAll()
     })
+    // … and the stats block's pull (player surface). A pull rather than a push
+    // because `StatsSection.fields()` is synchronous, so the renderer has to
+    // hold the last answer and re-ask — the same shape as core's own
+    // `core.refusals` section, and for the same reason.
+    ctx.ipc.handle<void, { rows: StatsRow[] }>('video-color:stats', () => ({
+      rows: statsRows()
+    }))
 
     ctx.menu.contribute({
       id: 'video-color.menu',
@@ -832,6 +972,8 @@ const mod: FeatureModule = {
       'video-color.toggleChromaShift': '색 위치 보정 켜기/끄기',
       'video-color.toggleLastUsed': '색 조정 끄기/되살리기',
       'video-color.reset': '색 조정 초기화',
+      'video-color.stats': '화면 색 조정',
+      'video-color.statsCpuFilters': 'CPU 필터',
       'video-color.help': '화면 색 조정',
       'video-color.helpProps': '밝기·명암·채도·색조·감마는 GPU에서 처리되므로 성능 부담이 없습니다.',
       'video-color.helpFilters':
@@ -893,6 +1035,8 @@ const mod: FeatureModule = {
       'video-color.toggleChromaShift': 'Toggle chroma offset',
       'video-color.toggleLastUsed': 'Disable / last-used colour controls',
       'video-color.reset': 'Reset colour',
+      'video-color.stats': 'Colour',
+      'video-color.statsCpuFilters': 'CPU filters',
       'video-color.help': 'Colour adjustment',
       'video-color.helpProps':
         'Brightness, contrast, saturation, hue and gamma run on the GPU and cost nothing.',
@@ -913,9 +1057,13 @@ const mod: FeatureModule = {
   },
 
   dispose(): void {
-    // Nothing to release: no timers, no processes, and the chain's slots are
-    // core's to tear down. `lastUsed` is app state and dies with the process,
-    // which is what V03 asks for.
+    // No timers and no processes. What there IS to release is every observer,
+    // event hook and settings listener registered above — the bus refcounts its
+    // `observe_property`s, so leaving them registered leaves mpv observing six
+    // properties for a module that is gone. `lastUsed` is app state and dies
+    // with the process, which is what V03 asks for.
+    for (const off of offs) off()
+    offs = []
     lastUsed = null
   }
 }

@@ -52,6 +52,7 @@ const events = new Map<string, Array<() => void>>()
 const fileLoadedCbs: Array<() => void | Promise<void>> = []
 const argContributors: Array<{ priority: number; fn: () => string[] }> = []
 const ipcListeners = new Map<string, (req: unknown) => void>()
+const ipcHandlers = new Map<string, (req: unknown) => unknown>()
 let slice: PerFileSlice<Record<string, unknown>> | null = null
 
 function getSetting<T>(id: string): T {
@@ -144,7 +145,7 @@ const ctx = {
   },
   ipc: {
     on: (channel: string, fn: (req: unknown) => void) => ipcListeners.set(channel, fn),
-    handle: () => {},
+    handle: (channel: string, fn: (req: unknown) => unknown) => ipcHandlers.set(channel, fn),
     send: () => {}
   },
   osd: { show: (m: { text: string }) => osdMessages.push(m.text) },
@@ -181,17 +182,45 @@ const loadFile = async (): Promise<void> => {
 }
 const spawnArgs = (): string[] => argContributors.flatMap((c) => c.fn())
 
-/** The whole colour state as mpv holds it. */
+/**
+ * The colour state as mpv EFFECTIVELY holds it.
+ *
+ * `?? 0` and not a bare `props.get()`, and the difference is the whole point:
+ * the module writes only the knobs that actually move, so after a reset from
+ * `{brightness: 20}` mpv is never told about `contrast` at all and `props` has
+ * no entry for it — which is mpv's own default 0, i.e. exactly neutral. The
+ * first version of this helper asserted `contrast: 0` against `undefined` and
+ * failed on correct behaviour, demanding four redundant round trips per reset.
+ *
+ * Because `?? 0` would also be satisfied by a module that wrote NOTHING, every
+ * caller pairs it with an assertion on `writes` — the minimal write set is the
+ * half that proves something happened.
+ */
 const mpvTuple = (): Record<string, unknown> => ({
-  brightness: props.get('brightness'),
-  contrast: props.get('contrast'),
-  saturation: props.get('saturation'),
-  hue: props.get('hue'),
-  gamma: props.get('gamma')
+  brightness: props.get('brightness') ?? 0,
+  contrast: props.get('contrast') ?? 0,
+  saturation: props.get('saturation') ?? 0,
+  hue: props.get('hue') ?? 0,
+  gamma: props.get('gamma') ?? 0
 })
 
-/** Back to a cold start: nothing in mpv, nothing stored, no slot. */
-const coldStart = (): void => {
+const NEUTRAL_TUPLE = { brightness: 0, contrast: 0, saturation: 0, hue: 0, gamma: 0 }
+
+/**
+ * Back to a cold start — and it has to go through the MODULE, not just the
+ * recorders.
+ *
+ * `lastUsed` and the three `filters` flags are module-private (V03 requires the
+ * first: "there is no mpv-side restore primitive ... keep the state in the
+ * app"), so clearing `props`/`values`/`slots` left them behind. Every one of the
+ * seven failures this file had on its first real run traced back to that:
+ * `toggleLevels` after a "cold" start flipped a leftover `true` to `false` and
+ * the test saw an empty chain; the "nothing to restore" test restored the
+ * previous test's tuple. `video-color.reset` is the module's own documented way
+ * to put all of it back, so the harness uses that rather than reaching inside.
+ */
+const coldStart = async (): Promise<void> => {
+  await run('video-color.reset')
   props.clear()
   values.clear()
   slots.clear()
@@ -292,7 +321,10 @@ test('setup registers namespaced settings, commands and both catalogs', () => {
     'video-color.help',
     'video-color.helpProps',
     'video-color.helpFilters',
-    'video-color.helpReset'
+    'video-color.helpReset',
+    // …and its stats block (§4.2).
+    'video-color.stats',
+    'video-color.statsCpuFilters'
   ]
   for (const key of referenced) {
     assert.ok(key in ko, `ko is missing ${key}`)
@@ -354,7 +386,7 @@ test('the spawn args are the six properties this module owns, and no reserved on
 // --- V01 / V02: the properties ---------------------------------------------
 
 test('a step command writes mpv once, shows an OSD and records the preference', async () => {
-  coldStart()
+  await coldStart()
   await run('video-color.brightnessUp')
 
   assert.deepEqual(writes, [{ name: 'brightness', value: 1 }], 'exactly one property write')
@@ -366,8 +398,51 @@ test('a step command writes mpv once, shows an OSD and records the preference', 
   assert.equal(writes.length, 1)
 })
 
+/**
+ * ONE READOUT PER GESTURE, and this is the assertion that found a real defect
+ * rather than confirming one.
+ *
+ * `SettingsRegistry.set()` calls `onChange` synchronously, and this module
+ * subscribes to every id it defines so the settings WINDOW reaches mpv. So each
+ * gesture ran the apply path twice: once directly, once re-entrantly through its
+ * own store write. The second apply was a no-op on the pipe — mpv already held
+ * the value — so `writes` looked perfect and only the OSD carried the evidence.
+ * Measured against the module before the `storing` guard:
+ *
+ *   brightnessUp  -> ['밝기 +1', '밝기 +1']
+ *   reset         -> ['채도 0', '색 조정 초기화됨']   (one per knob that moved)
+ *
+ * §3.3.5's "one updating readout rather than forty stacked ones" is a product
+ * rule, and a per-knob readout stacked under a whole-gesture one is the shape it
+ * names. `show()` coalesces by kind, which is exactly why nothing but a counting
+ * assertion could see it.
+ */
+test('one gesture produces exactly one OSD readout, never a stack', async () => {
+  await coldStart()
+  await run('video-color.setKnob', { knob: 'saturation', value: 30 })
+  assert.deepEqual(osdMessages, ['채도 +30'])
+
+  clear()
+  await run('video-color.reset')
+  assert.deepEqual(
+    osdMessages,
+    ['색 조정 초기화됨'],
+    'the reset speaks once for the whole gesture; the knobs it moved must not each announce'
+  )
+
+  clear()
+  await run('video-color.setKnob', { knob: 'brightness', value: 5 })
+  await run('video-color.toggleLevels')
+  await run('video-color.setOutputLevels', 'limited')
+  assert.deepEqual(osdMessages, [
+    '밝기 +5',
+    '블랙/화이트 레벨 켜짐',
+    '출력 범위: 제한 (TV, 16-235)'
+  ])
+})
+
 test('the step commands cover all five knobs in both directions', async () => {
-  coldStart()
+  await coldStart()
   for (const knob of ['brightness', 'contrast', 'saturation', 'hue', 'gamma']) {
     await run(`video-color.${knob}Up`)
     await run(`video-color.${knob}Up`)
@@ -377,7 +452,7 @@ test('the step commands cover all five knobs in both directions', async () => {
 })
 
 test('a step at the limit clamps instead of sending mpv a value it rejects', async () => {
-  coldStart()
+  await coldStart()
   props.set('hue', 100)
   setSetting('video-color.hue', 100)
   clear()
@@ -387,7 +462,7 @@ test('a step at the limit clamps instead of sending mpv a value it rejects', asy
 })
 
 test('the arg-driven entry point clamps and ignores an unknown knob', async () => {
-  coldStart()
+  await coldStart()
   await run('video-color.setKnob', { knob: 'contrast', value: 900 })
   assert.equal(props.get('contrast'), 100)
   clear()
@@ -399,19 +474,13 @@ test('the arg-driven entry point clamps and ignores an unknown knob', async () =
 // --- V03 -------------------------------------------------------------------
 
 test("V03: the last-used toggle zeroes the tuple and gives it back", async () => {
-  coldStart()
+  await coldStart()
   await run('video-color.setKnob', { knob: 'brightness', value: 20 })
   await run('video-color.setKnob', { knob: 'gamma', value: -8 })
   clear()
 
   await run('video-color.toggleLastUsed')
-  assert.deepEqual(mpvTuple(), {
-    brightness: 0,
-    contrast: 0,
-    saturation: 0,
-    hue: 0,
-    gamma: 0
-  })
+  assert.deepEqual(mpvTuple(), NEUTRAL_TUPLE)
   assert.deepEqual(writes.map((w) => w.name).sort(), ['brightness', 'gamma'])
   assert.deepEqual(osdMessages, ['색 조정 끔'])
 
@@ -424,14 +493,14 @@ test("V03: the last-used toggle zeroes the tuple and gives it back", async () =>
 })
 
 test('V03: with nothing to restore the toggle says so instead of doing nothing', async () => {
-  coldStart()
+  await coldStart()
   await run('video-color.toggleLastUsed')
   assert.deepEqual(writes, [])
   assert.deepEqual(osdMessages, ['되살릴 색 조정이 없습니다'])
 })
 
 test('V53: reset puts every property, every toggle and every slot back', async () => {
-  coldStart()
+  await coldStart()
   await run('video-color.setKnob', { knob: 'saturation', value: 30 })
   await run('video-color.toggleLevels')
   await run('video-color.toggleChromaShift')
@@ -440,13 +509,7 @@ test('V53: reset puts every property, every toggle and every slot back', async (
 
   await run('video-color.reset')
 
-  assert.deepEqual(mpvTuple(), {
-    brightness: 0,
-    contrast: 0,
-    saturation: 0,
-    hue: 0,
-    gamma: 0
-  })
+  assert.deepEqual(mpvTuple(), NEUTRAL_TUPLE)
   assert.equal(props.get('video-output-levels'), 'auto')
   assert.equal(getSetting<number>('video-color.levelsBlack'), LEVELS_DEFAULTS.black)
   assert.equal(getSetting<boolean>('video-color.levels'), false)
@@ -458,7 +521,7 @@ test('V53: reset puts every property, every toggle and every slot back', async (
 // --- V04 -------------------------------------------------------------------
 
 test('V04: the output-level mediator only ever writes one of mpv three values', async () => {
-  coldStart()
+  await coldStart()
   await run('video-color.setOutputLevels', 'limited')
   assert.equal(props.get('video-output-levels'), 'limited')
   await run('video-color.setOutputLevels', 'nonsense')
@@ -468,13 +531,13 @@ test('V04: the output-level mediator only ever writes one of mpv three values', 
 // --- V05 / V06 / V07: the chain -------------------------------------------
 
 test('a colour filter puts nothing in the chain until it is switched on', async () => {
-  coldStart()
+  await coldStart()
   await loadFile()
   assert.deepEqual(vfCalls, [], 'three disabled slots must not be parked in the chain')
 })
 
 test('V05: switching levels on sets the spec BEFORE enabling the slot', async () => {
-  coldStart()
+  await coldStart()
   await run('video-color.toggleLevels')
   assert.deepEqual(vfCalls, [
     { op: 'set', args: ['rl-levels', levelsSpec(LEVELS_DEFAULTS)] },
@@ -484,7 +547,7 @@ test('V05: switching levels on sets the spec BEFORE enabling the slot', async ()
 })
 
 test('V05: moving the black point is a live four-argument vf-command per channel', async () => {
-  coldStart()
+  await coldStart()
   await run('video-color.toggleLevels')
   clear()
   setSetting('video-color.levelsBlack', 0.1)
@@ -502,7 +565,7 @@ test('V05: moving the black point is a live four-argument vf-command per channel
 })
 
 test('a filter toggled off is disabled IN PLACE, never removed', async () => {
-  coldStart()
+  await coldStart()
   await run('video-color.toggleLevels')
   clear()
   await run('video-color.toggleLevels')
@@ -513,7 +576,7 @@ test('a filter toggled off is disabled IN PLACE, never removed', async () => {
 })
 
 test('V06: auto level carries the mandatory smoothing and has no live options', async () => {
-  coldStart()
+  await coldStart()
   await run('video-color.toggleAutoLevel')
   assert.deepEqual(vfCalls, [
     { op: 'set', args: ['rl-autolevel', autoLevelSpec()] },
@@ -530,14 +593,69 @@ test('the module never writes a property it does not own, and never a raw chain 
   // Every filter change went through ctx.vf. A raw `['vf', …]` is refused for
   // every feature module, and `ctx.mpv.command` is not called at all here.
   assert.deepEqual(rawCommands, [])
-  // And the only IPC channel is this module's own.
+  // And every IPC channel is inside this module's own `${ctx.id}:` namespace.
   assert.deepEqual([...ipcListeners.keys()], ['video-color:reset'])
+  assert.deepEqual([...ipcHandlers.keys()], ['video-color:stats'])
+  for (const ch of [...ipcListeners.keys(), ...ipcHandlers.keys()]) {
+    assert.ok(ch.startsWith('video-color:'), ch)
+  }
+})
+
+// --- §4.2: the stats block -------------------------------------------------
+
+/**
+ * The stats rows are asserted on their CONTENT, not on "a handler was
+ * registered". The last row is the one that matters: §6.3's criterion for this
+ * module is that brightness moves the picture with hwdec ACTIVE, i.e. that the
+ * five knobs are VO-level properties and no CPU filter of this module's is in
+ * the chain — a claim you can only check in the app if something reports both.
+ */
+test('§4.2: the stats block reports the tuple, the range and which slots are live', async () => {
+  await coldStart()
+  const pull = async (): Promise<Array<{ labelKey: string; value: string }>> => {
+    const r = (await ipcHandlers.get('video-color:stats')?.(undefined)) as {
+      rows: Array<{ labelKey: string; value: string }>
+    }
+    return r.rows
+  }
+
+  let rows = await pull()
+  assert.deepEqual(rows, [
+    { labelKey: 'video-color.brightness', value: '0' },
+    { labelKey: 'video-color.contrast', value: '0' },
+    { labelKey: 'video-color.saturation', value: '0' },
+    { labelKey: 'video-color.hue', value: '0' },
+    { labelKey: 'video-color.gamma', value: '0' },
+    { labelKey: 'video-color.outputLevels', value: 'auto' },
+    // No lavfi slot of this module's is in the chain, so a colour change that
+    // survives hwdec cannot be coming from a filter.
+    { labelKey: 'video-color.statsCpuFilters', value: '—' }
+  ])
+
+  await run('video-color.setKnob', { knob: 'brightness', value: -20 })
+  await run('video-color.setOutputLevels', 'full')
+  await run('video-color.toggleAutoLevel')
+  await run('video-color.toggleChromaShift')
+  rows = await pull()
+  assert.equal(rows.find((r) => r.labelKey === 'video-color.brightness')?.value, '-20')
+  assert.equal(rows.find((r) => r.labelKey === 'video-color.outputLevels')?.value, 'full')
+  assert.equal(
+    rows.find((r) => r.labelKey === 'video-color.statsCpuFilters')?.value,
+    'rl-autolevel, rl-cshift',
+    'only this module labels, and only the ones actually enabled'
+  )
+  // Every label the block emits must be translated in both catalogs, which the
+  // sweep above enforces for the two static keys; these are the dynamic half.
+  for (const r of rows) {
+    assert.ok(r.labelKey in (catalogs.get('ko') ?? {}), r.labelKey)
+    assert.ok(r.labelKey in (catalogs.get('en') ?? {}), r.labelKey)
+  }
 })
 
 // --- V53: the per-file slice ----------------------------------------------
 
 test('V53: the slice captures the live tuple, the output level and the three toggles', async () => {
-  coldStart()
+  await coldStart()
   await run('video-color.setKnob', { knob: 'brightness', value: 12 })
   await run('video-color.toggleAutoLevel')
   assert.ok(slice)
@@ -558,7 +676,7 @@ test('V53: the slice captures the live tuple, the output level and the three tog
 })
 
 test("V53: a file with nothing stored starts from the user's defaults, not the last file's", async () => {
-  coldStart()
+  await coldStart()
   // File A restored a stored override of +20. A restore writes mpv only, so the
   // preference is untouched.
   fire('start-file')
@@ -595,7 +713,7 @@ test("V53: a file with nothing stored starts from the user's defaults, not the l
  */
 test('V53: a stored restore beats the baseline in EITHER order', async () => {
   // Order A: baseline first, restore second (today's real order).
-  coldStart()
+  await coldStart()
   fire('start-file')
   await loadFile()
   await slice?.apply({ brightness: 20, autoLevel: true })
@@ -603,7 +721,7 @@ test('V53: a stored restore beats the baseline in EITHER order', async () => {
   assert.equal(slots.get('rl-autolevel')?.enabled, true)
 
   // Order B: restore first, baseline second.
-  coldStart()
+  await coldStart()
   fire('start-file')
   await slice?.apply({ brightness: 20, autoLevel: true })
   await loadFile()
@@ -612,7 +730,7 @@ test('V53: a stored restore beats the baseline in EITHER order', async () => {
 })
 
 test('V53: the restore is per-file, so the NEXT file is not restored again', async () => {
-  coldStart()
+  await coldStart()
   fire('start-file')
   await slice?.apply({ brightness: 20 })
   await loadFile()
@@ -625,7 +743,7 @@ test('V53: the restore is per-file, so the NEXT file is not restored again', asy
 })
 
 test('V53: a stored slice from an older build cannot inject a foreign property', async () => {
-  coldStart()
+  await coldStart()
   fire('start-file')
   await slice?.apply({ brightness: 5, vf: 'lavfi=[hflip]', 'video-rotate': 90 } as never)
   const owned = new Set(mod.ownsProperties ?? [])
