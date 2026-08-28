@@ -31,6 +31,7 @@
     "test:no-network": "node --import ./scripts/lib/ts-resolve-register.mjs --test \"src/main/core/no-network.test.ts\"",
     "check:network": "node scripts/check-network.mjs",
     "e2e:resume": "node scripts/e2e-resume.mjs",
+    "e2e:wave1": "node scripts/e2e-wave1.mjs",
     "make:sample": "node scripts/make-sample.mjs"
   },
   "devDependencies": {
