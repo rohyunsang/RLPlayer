@@ -87,6 +87,7 @@ Two things need a desktop session and a build, so run them before you tag:
 ```
 npm run build && npx electron-builder --win --dir
 npm run e2e:overlay -- --packaged     # real keypresses, real settings window, real quit
+npm run e2e:resume                    # seek, quit, reopen — the v0.1 resume guarantee
 npm run check:network                 # packaged cold launches, asserting on Chromium's netlog
 ```
 
@@ -1065,6 +1066,7 @@ and network all failed, with measurements. This is what moved.
 | 27 | `requestSet` had zero call sites, and the hint promised an arbiter without checking one existed | M15 uses it for real after an audio-device switch; the hint and the refusal both tell the truth |
 | 28 | M25's `.seek-chapter-tick` / `.seek-tip-chapter` lived in core's `styles.css`, with M20, M26 and M27 heading for the same file | core owns the layer's container; the layer's look lives in its own directory; `check:partition` is content-granular for CSS |
 | 29 | closing the player with the settings window open never quit (still running after 16 s, 2/2), and `e2e-overlay` then did a silent `child.kill()` and printed "clean" | the player is the app: closing it quits. `before-quit` takes control, runs the shutdown to completion and then `app.exit(0)`, with a watchdog. The harness fails loudly on a force-kill and reports the quit time |
+| 31 | giving `seek` an owner **broke seeking**, and 192 tests, the greps and the partition check all stayed green: `['seek',…]` implies a `time-pos` write nobody owns, so M24 was refused its own command and M28's four resume seeks were dropped behind `.catch(() => undefined)` | a command's **implied** side effects belong to its owner (decided once in `modules.json`, checked by `commands.test.ts`); the properties it **names** are still checked for everyone, so `loadfile` being M28's never becomes "M28 may write anything". `npm run e2e:resume` drives the packaged app and asserts the position survives a real quit |
 | 30 | `MpvManager.dispose()` was `setTimeout(() => proc.kill(), 300)` inside `before-quit`, which almost never fired | an awaited escalation — IPC `quit`, `kill()`, `taskkill /T /F`, each verified by re-polling the pid — plus a synchronous `process.on('exit')` reaper that cannot be skipped |
 
 Two smaller notes:
@@ -1118,7 +1120,8 @@ Two smaller notes:
 - [ ] Any mpv command you issue that mutates state is in §2.2's table with an
       owner, or you are calling the owner's mediator. `['frame-step']` writes
       `pause`; `['ab-loop']` writes `ab-loop-a`; neither says so in its name.
-- [ ] `npm run verify` is green; `npm run e2e:overlay -- --packaged` is clean
+- [ ] `npm run verify` is green; `npm run e2e:overlay -- --packaged` and
+      `npm run e2e:resume` are clean
       **and reports a quit time rather than a force-kill**; `npm run
       check:network` is clean on a packaged build; and your §6.3 acceptance row
       is ticked in your module's `VERIFY.md`.
