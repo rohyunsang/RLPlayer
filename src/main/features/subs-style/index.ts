@@ -15,6 +15,7 @@ const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.m
 
 const mod: FeatureModule = {
   id: 'subs-style',
+  dependsOn: ['core-mpv-bus', 'subs-tracks'],
   ownsProperties: [
     'sub-font',
     'sub-font-size',
