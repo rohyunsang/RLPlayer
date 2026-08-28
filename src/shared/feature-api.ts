@@ -516,30 +516,51 @@ export interface FilterChainService {
    * `['vf-command', label, option, value, lavfiFilterName]`. Falls back to a
    * full rebuild for the measured refusers and reports which path it took.
    *
-   * **Pass `spec`.** It is the whole filter spec the slot should hold AFTER
-   * this change, and without it `command()` is a slider that does not move:
+   * `spec` IS REQUIRED. It is the whole filter spec the slot must hold AFTER
+   * this change, and the chain both stores it and CHECKS that it expresses the
+   * change (see `specReflects` in core/mpv/chain.ts). It was optional for one
+   * release, with zero production adopters, and the chain's model of the filter
+   * therefore diverged from mpv's on every live update in the shipped app:
    *
    *  - On the REBUILD path (`unsharp`, `pan`, `loudnorm`, `superequalizer` --
    *    the four measured refusers, one of them V08's) the rebuild re-serialises
-   *    the spec the slot ALREADY holds, i.e. the pre-change value. Literally a
-   *    no-op.
-   *  - On the COMMAND path mpv changes but the slot does not, so the next
-   *    whole-chain rebuild -- another module's `set()`, an mpv respawn, the
-   *    next file -- silently reverts the value.
+   *    the spec the slot ALREADY holds, i.e. the pre-change value. Measured:
+   *    `command('rl-sharpen','luma_amount','1.2','unsharp')` sent mpv
+   *    `unsharp=5:5:1.0`. The slider did nothing.
+   *  - On the COMMAND path mpv changes and the slot does not, so the next
+   *    whole-chain rebuild -- another module's `set()`, an mpv respawn, the next
+   *    file -- silently reverts it. Measured:
+   *    `command('rl-sharpen','strength','0.55','cas')` left `serialise()`
+   *    returning `@rl-sharpen:lavfi=[cas=strength=0.4]`.
    *
-   * Both were measured in Wave 1 and cost M03 a whole compensating file
-   * (`chain-sync.ts`) that every `ctx.vf`/`ctx.af` author would have had to
-   * write again. With `spec`, the slot and mpv stay in agreement on both paths
-   * and no module has to mirror core's refuser table to know which happened.
-   * It is optional only so the old three-argument calls still typecheck.
+   * Being optional cost M03 a whole compensating file (`chain-sync.ts`, 201
+   * lines + 247 of test) that every `ctx.vf`/`ctx.af` author would have written
+   * again, and which did not fix it either -- it kept a SECOND model of the
+   * chain's state. With `spec` required, the slot and mpv agree on both paths,
+   * there is nothing left for a module to mirror, and the compiler refuses the
+   * call shape that used to desynchronise them.
    */
   command(
     label: string,
     option: string,
     value: string,
     lavfiFilterName: string,
-    spec?: string
+    spec: string
   ): Promise<{ path: 'command' | 'rebuild' }>
+  /**
+   * Whether this module's slot exists, and whether it is enabled.
+   *
+   * Here because without them a module cannot tell a first `set()` from a live
+   * `command()` without keeping its own copy of the chain's state -- and a
+   * second model of one piece of state is how the two come to disagree. Both are
+   * ownership-checked: asking about ANOTHER module's label throws, because a
+   * layer of Wave-1 modules able to observe each other's slots is the coupling
+   * §5 exists to prevent.
+   */
+  has(label: string): boolean
+  isEnabled(label: string): boolean
+  /** What the chain currently holds for this label. Reads, for a stats row. */
+  specOf(label: string): string | undefined
   readonly hasCpuFilter: boolean
 }
 

@@ -1,10 +1,10 @@
 import type { FeatureContext, FeatureModule, MenuNode, SettingId } from '@shared/feature-api'
-import { createSlotSync, type SlotSync } from './chain-sync.ts'
 import {
   DENOISE_DEFAULTS,
   SHARPEN_DEFAULTS,
   type DenoiseKnob,
   type DenoiseState,
+  type LiveOption,
   type SharpenKnob,
   type SharpenMode,
   type SharpenState,
@@ -35,15 +35,24 @@ import {
  *     five properties and no filter, so no lavfi pass and no copy-back. It is
  *     therefore more prominent here than it is in PotPlayer.
  *
- * The stale-spec trap in `command()`'s rebuild path, and what this module does
- * about it, is written up in `chain-sync.ts`.
+ * THIS MODULE NO LONGER KEEPS A COPY OF THE CHAIN'S STATE, and that is the
+ * headline change since the pilot. `ctx.vf.command()` used to leave the chain's
+ * slot holding the PRE-change spec, so a live `vf-command` was reverted by the
+ * next whole-chain rebuild and a rebuild for `unsharp` re-sent the old value.
+ * This module compensated with `chain-sync.ts`: 201 lines keeping `desired` and
+ * `applied` specs, a debounced authoritative `set()`, and a learned refuser
+ * table. It was a SECOND model of the chain's state, which is how the two come
+ * to disagree — and M01, M09, M13 and M14 would each have written it again.
+ *
+ * `ctx.vf.command()` now takes the post-change spec as a REQUIRED argument and
+ * verifies it, and `ctx.vf.has/isEnabled/specOf` answer the three questions the
+ * shadow copy existed for. `applySlot()` below is the whole of what is left.
  */
 
 const SHARPEN_LABEL = 'rl-sharpen'
 const DENOISE_LABEL = 'rl-denoise'
 
 let ctx: FeatureContext
-let slots: SlotSync
 
 /**
  * The EFFECTIVE state of the three toggles, which is not the same thing as the
@@ -72,28 +81,72 @@ function denoiseState(): DenoiseState {
 }
 
 /**
+ * Hand one labelled slot its current spec — live where libavfilter allows it.
+ *
+ * The three questions this used to need a shadow copy of the chain to answer are
+ * now `ctx.vf.has()`, `ctx.vf.isEnabled()` and `ctx.vf.specOf()`, so there is
+ * exactly one model of the chain and it lives in the chain.
+ *
+ * `liveOptions` is the set of `<x>f-command` payloads for the ONE control the user just
+ * moved, or undefined when several options moved at once (a sharpen MODE switch
+ * is a different filter entirely; a per-file restore moves the whole slice). The
+ * refuser table is not duplicated here: `command()` falls back to a rebuild by
+ * itself and carries the new spec through it, which is the entire reason the
+ * spec argument is required.
+ */
+async function applySlot(
+  label: string,
+  on: boolean,
+  spec: string,
+  liveOptions: readonly LiveOption[] | undefined
+): Promise<void> {
+  const vf = ctx.vf
+  // `ctx.vf` exists only because `usesVideoFilters` is declared below; the
+  // registry leaves the field undefined otherwise, deliberately, so an
+  // undeclared use is a type error rather than a crash at runtime.
+  if (!vf) return
+
+  if (!on) {
+    // Disable IN PLACE (`@label:!spec`), never `remove()`: §5's disable-in-place
+    // is what lets a toggle survive with its settings, and tearing the slot down
+    // would also cost a full chain rebuild on the way back in.
+    if (vf.has(label)) vf.toggle(label, false)
+    return
+  }
+
+  const liveSlot = vf.has(label) && vf.isEnabled(label)
+  if (liveSlot && vf.specOf(label) === spec) return
+
+  // First appearance, coming back from a disable, or a change that moves more
+  // than one option: the slot has to carry the whole spec BEFORE it is switched
+  // on, or the frame in between shows the previous settings.
+  if (!liveSlot || liveOptions === undefined || liveOptions.length === 0) {
+    vf.set(label, spec)
+    vf.toggle(label, true)
+    return
+  }
+
+  for (const o of liveOptions) {
+    await vf.command(label, o.option, o.value, o.filter, spec)
+  }
+}
+
+/**
  * `knob` names the single control the user just moved, which is what makes a
  * live `vf-command` possible at all: a mode change, or a restore of a whole
  * per-file slice, moves several options at once and has to be a rebuild.
  */
 async function applySharpen(knob?: SharpenKnob): Promise<void> {
-  if (!live.sharpen) {
-    slots.disable(SHARPEN_LABEL)
-    return
-  }
   const state = sharpenState()
   const option = knob ? sharpenLiveOption(state, knob) : undefined
-  await slots.update(SHARPEN_LABEL, sharpenSpec(state), option ? [option] : undefined)
+  await applySlot(SHARPEN_LABEL, live.sharpen, sharpenSpec(state), option ? [option] : undefined)
 }
 
 async function applyDenoise(knob?: DenoiseKnob): Promise<void> {
-  if (!live.denoise) {
-    slots.disable(DENOISE_LABEL)
-    return
-  }
   const state = denoiseState()
-  await slots.update(
+  await applySlot(
     DENOISE_LABEL,
+    live.denoise,
     denoiseSpec(state),
     knob ? denoiseLiveOptions(state, knob) : undefined
   )
@@ -165,18 +218,6 @@ const mod: FeatureModule = {
 
   setup(c): void {
     ctx = c
-    slots = createSlotSync({
-      // `ctx.vf` exists only because `usesVideoFilters` is declared above; the
-      // registry leaves the field undefined otherwise, deliberately, so an
-      // undeclared use is a type error rather than a crash at runtime.
-      vf: {
-        set: (label, spec) => ctx.vf?.set(label, spec),
-        toggle: (label, enabled) => ctx.vf?.toggle(label, enabled),
-        command: async (label, option, value, filter) =>
-          (await ctx.vf?.command(label, option, value, filter)) ?? { path: 'rebuild' }
-      },
-      log: (msg) => ctx.log.info(msg)
-    })
 
     ctx.settings.define([
       {
@@ -424,11 +465,12 @@ const mod: FeatureModule = {
     void applySharpen()
     void applyDenoise()
 
-    ctx.mpv.afterFileLoaded(() => {
-      // A new file re-applies the chain from the specs the SLOTS hold, so any
-      // live value not yet written back has to land first.
-      slots.flush()
-    })
+    // NO `afterFileLoaded` FLUSH ANY MORE. It used to exist because a live
+    // `vf-command` left the chain's slot holding the old spec and this module
+    // held the new one in a debounce timer, so a new file re-applied the chain
+    // from stale slots unless the timer was forced first. The slot is now
+    // updated by `command()` itself, so the chain the next file gets is already
+    // the one the user is looking at, and there is nothing to flush.
 
     // V53. Only the three toggles are per-file: the strengths are a preference,
     // and a file remembering "denoise 6.5" would make a later default change
@@ -650,7 +692,8 @@ const mod: FeatureModule = {
   },
 
   dispose(): void {
-    slots.dispose()
+    // Nothing to release: the debounce timers this module used to own went with
+    // `chain-sync.ts`, and the chain's slots are core's to tear down.
   }
 }
 

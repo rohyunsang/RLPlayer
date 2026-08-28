@@ -47,6 +47,12 @@ const tracked = execFileSync(
   .split('\n')
   .map((l) => l.trim())
   .filter(Boolean)
+  // A file that is tracked but no longer on disk is a deletion in progress, and
+  // this check used to CRASH on one — `readFileSync` ENOENT out of rule 4, an
+  // uncaught throw, no failure list, no diagnosis. A check whose exit code can
+  // mean "I fell over" is a check nobody can read. The list is narrowed to what
+  // exists; rule 2 below still reports the stale `ownedFiles` claim on its own.
+  .filter((f) => fs.existsSync(path.join(repo, f)))
 
 if (tracked.length === 0) {
   console.error('check:partition: git ls-files returned nothing under src/')

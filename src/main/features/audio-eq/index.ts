@@ -165,21 +165,39 @@ function canCommand(): boolean {
   return Boolean(ctx.af) && enabled() && slotsLive && fileLoaded
 }
 
-/** A03. The preamp tracks the curve while the curve is being dragged. */
+/**
+ * A03. The preamp tracks the curve while the curve is being dragged.
+ *
+ * The fifth argument is the spec the `rlpre` slot must hold AFTER this change,
+ * and it is required rather than optional for a measured reason: without it the
+ * chain's slot kept the PREVIOUS `volume=` value, so the next whole-chain
+ * rebuild -- another module's `af set`, an mpv respawn, the next file -- pushed
+ * the old preamp back and undid the drag. `preampSpec()` is the same function
+ * `applyChain()` uses, so there is one expression of the A03 row and not two.
+ */
 async function pushPreamp(): Promise<void> {
   if (!canCommand()) return
-  await ctx.af?.command('rlpre', 'volume', preampValue(currentPreamp()), PREAMP_FILTER)
+  const db = currentPreamp()
+  await ctx.af?.command('rlpre', 'volume', preampValue(db), PREAMP_FILTER, preampSpec(db))
 }
 
 /**
  * One band, live. Eight `change` commands — one per declared channel — and no
  * `af set` anywhere, which is the entire point of the four-argument form.
+ *
+ * Every one of the eight carries the SAME post-change spec, because it is the
+ * spec of the whole 80-entry graph once this band has moved on every declared
+ * channel; the eight commands are how mpv is told, not eight different states.
+ * Without it the chain's slot still held `g=0` for the band the user had just
+ * dragged (measured), and the next `af set` flattened it again. `equaliserSpec`
+ * is the same function `applyChain()` uses.
  */
 async function pushBand(band: number): Promise<void> {
   if (!canCommand()) return
   const gain = gains[band] ?? 0
+  const spec = equaliserSpec(gains)
   for (const arg of changeArgsForBand(band, gain)) {
-    await ctx.af?.command('rleq', 'change', arg, EQ_FILTER)
+    await ctx.af?.command('rleq', 'change', arg, EQ_FILTER, spec)
   }
   await pushPreamp()
 }
