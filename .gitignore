@@ -9,3 +9,7 @@ samples/
 
 # TypeScript incremental build info
 *.tsbuildinfo
+
+# Verifier scratch: packaged-build drives, netlog captures and the 61 MB
+# chaptered.mkv fixture e2e-wave1 generates. Untracked and uncovered before.
+.verify-*/

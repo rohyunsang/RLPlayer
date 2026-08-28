@@ -13,6 +13,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/core/no-network.test.ts",
       "src/main/core/no-network.ts",
@@ -46,6 +47,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/core/errors.ts",
       "src/shared/feature-api.ts",
@@ -73,6 +75,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/core/i18n/"
     ],
@@ -104,6 +107,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/core/settings/",
       "src/main/services/config.ts",
@@ -142,6 +146,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/core/manifest.test.ts",
       "src/main/core/registry-order.test.ts",
@@ -208,6 +213,19 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {
+      "menuSection": [
+        {
+          "id": "core.playback",
+          "order": 20,
+          "tiesRoot": "video"
+        },
+        {
+          "id": "core.app",
+          "order": 90
+        }
+      ]
+    },
     "ownedFiles": [
       "src/main/core/mpv/arg-owner.test.ts",
       "src/main/core/mpv/bus.ts",
@@ -243,6 +261,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/core/mpv/commands.test.ts",
       "src/main/core/mpv/guards.test.ts",
@@ -274,6 +293,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/core/mpv/chain.test.ts",
       "src/main/core/mpv/chain.ts",
@@ -306,6 +326,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/core/mpv/af-chain.ts"
     ],
@@ -335,6 +356,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/core/input/",
       "src/shared/input/accel.test.ts",
@@ -372,6 +394,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/core/osd/"
     ],
@@ -400,6 +423,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/core/state/per-file.test.ts",
       "src/main/core/state/per-file.ts",
@@ -435,6 +459,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/core/dialog.ts",
       "src/main/core/window/",
@@ -463,6 +488,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/core/ipc.ts",
       "src/main/core/legacy-bridge.test.ts",
@@ -497,6 +523,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/renderer/index.html",
       "src/renderer/settings.html",
@@ -541,6 +568,32 @@
       "rl-cshift",
       "rl-levels"
     ],
+    "ownedOrders": {
+      "statsSection": [
+        {
+          "id": "video-color.stats",
+          "order": 25
+        }
+      ],
+      "settingsSection": [
+        {
+          "id": "video-color.help",
+          "order": 8,
+          "scope": "video"
+        }
+      ],
+      "menuSection": [
+        {
+          "id": "video-color.menu",
+          "order": 51
+        }
+      ],
+      "spawnArgPriority": [
+        {
+          "order": 20
+        }
+      ]
+    },
     "ownedFiles": [
       "src/main/features/video-color/",
       "src/renderer/src/features/video-color/"
@@ -624,6 +677,15 @@
       "rl-rotate",
       "rl-vflip"
     ],
+    "ownedOrders": {
+      "menuSection": [
+        {
+          "id": "video-geometry.menu",
+          "order": 50,
+          "tiesRoot": "navigate"
+        }
+      ]
+    },
     "ownedFiles": [
       "src/main/features/video-geometry/",
       "src/renderer/src/features/video-geometry/"
@@ -694,6 +756,19 @@
       "rl-soften",
       "rl-tdenoise"
     ],
+    "ownedOrders": {
+      "menuSection": [
+        {
+          "id": "video-enhance.menu",
+          "order": 55
+        }
+      ],
+      "spawnArgPriority": [
+        {
+          "order": 20
+        }
+      ]
+    },
     "ownedFiles": [
       "src/main/features/video-enhance/",
       "src/renderer/src/features/video-enhance/"
@@ -753,6 +828,7 @@
       "rl-deint",
       "rl-idet"
     ],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/video-deinterlace/",
       "src/renderer/src/features/video-deinterlace/"
@@ -823,6 +899,7 @@
       "rl-dv",
       "rl-truehdr"
     ],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/video-hdr/",
       "src/renderer/src/features/video-hdr/"
@@ -918,6 +995,7 @@
       "rl-lut",
       "rl-vsr"
     ],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/video-scaler/",
       "src/renderer/src/features/video-scaler/"
@@ -994,6 +1072,19 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {
+      "statsSection": [
+        {
+          "id": "video-decode.stats",
+          "order": 20
+        }
+      ],
+      "spawnArgPriority": [
+        {
+          "order": 10
+        }
+      ]
+    },
     "ownedFiles": [
       "src/main/features/video-decode/",
       "src/renderer/src/features/video-decode/"
@@ -1051,6 +1142,13 @@
     "ownedFilterLabels": [
       "rl-mi"
     ],
+    "ownedOrders": {
+      "spawnArgPriority": [
+        {
+          "order": 10
+        }
+      ]
+    },
     "ownedFiles": [
       "src/main/features/video-framerate/",
       "src/renderer/src/features/video-framerate/"
@@ -1105,6 +1203,7 @@
       "rl-360",
       "rl-3d"
     ],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/video-stereo360/",
       "src/renderer/src/features/video-stereo360/"
@@ -1165,6 +1264,13 @@
       "rlboost",
       "rltempo"
     ],
+    "ownedOrders": {
+      "spawnArgPriority": [
+        {
+          "order": 10
+        }
+      ]
+    },
     "ownedFiles": [
       "src/main/features/audio-volume/",
       "src/renderer/src/features/audio-volume/"
@@ -1249,6 +1355,20 @@
     },
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {
+      "menuSection": [
+        {
+          "id": "audio-tracks.menu",
+          "order": 40,
+          "tiesRoot": "subtitles"
+        }
+      ],
+      "spawnArgPriority": [
+        {
+          "order": 10
+        }
+      ]
+    },
     "ownedFiles": [
       "src/main/features/audio-tracks/",
       "src/renderer/src/features/audio-tracks/"
@@ -1303,6 +1423,7 @@
       "rlpre",
       "rltone"
     ],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/audio-eq/",
       "src/renderer/src/features/audio-eq/",
@@ -1365,6 +1486,7 @@
       "rlnight",
       "rlnorm"
     ],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/audio-loudness/",
       "src/renderer/src/features/audio-loudness/"
@@ -1419,6 +1541,7 @@
     "ownedFilterLabels": [
       "rlch"
     ],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/audio-channels/",
       "src/renderer/src/features/audio-channels/"
@@ -1486,6 +1609,13 @@
     "ownedFilterLabels": [
       "rlac3"
     ],
+    "ownedOrders": {
+      "spawnArgPriority": [
+        {
+          "order": 10
+        }
+      ]
+    },
     "ownedFiles": [
       "src/main/features/audio-devices/",
       "src/renderer/src/features/audio-devices/"
@@ -1541,6 +1671,7 @@
       "rlfx",
       "rlnr"
     ],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/audio-effects/",
       "src/renderer/src/features/audio-effects/"
@@ -1617,6 +1748,25 @@
     },
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {
+      "transportButton": [
+        {
+          "id": "subs-tracks.toggle",
+          "order": 10
+        }
+      ],
+      "menuSection": [
+        {
+          "id": "subs-tracks.menu",
+          "order": 41
+        }
+      ],
+      "spawnArgPriority": [
+        {
+          "order": 10
+        }
+      ]
+    },
     "ownedFiles": [
       "src/main/features/subs-tracks/",
       "src/renderer/src/features/subs-tracks/"
@@ -1677,6 +1827,32 @@
       "subs-tracks.reload"
     ],
     "ownedFilterLabels": [],
+    "ownedOrders": {
+      "statsSection": [
+        {
+          "id": "subs-formats.stats",
+          "order": 45
+        }
+      ],
+      "settingsSection": [
+        {
+          "id": "subs-formats.help",
+          "order": 5,
+          "scope": "subtitles"
+        }
+      ],
+      "menuSection": [
+        {
+          "id": "subs-formats.menu",
+          "order": 43
+        }
+      ],
+      "spawnArgPriority": [
+        {
+          "order": 20
+        }
+      ]
+    },
     "ownedFiles": [
       "src/main/features/subs-formats/",
       "src/renderer/src/features/subs-formats/"
@@ -1782,6 +1958,26 @@
       "subs-tracks.reload"
     ],
     "ownedFilterLabels": [],
+    "ownedOrders": {
+      "settingsSection": [
+        {
+          "id": "subs-style.state",
+          "order": 10,
+          "scope": "subtitles"
+        }
+      ],
+      "menuSection": [
+        {
+          "id": "subs-style.menu",
+          "order": 42
+        }
+      ],
+      "spawnArgPriority": [
+        {
+          "order": 10
+        }
+      ]
+    },
     "ownedFiles": [
       "src/main/features/subs-style/",
       "src/renderer/src/features/subs-style/"
@@ -1849,6 +2045,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/subs-sync/",
       "src/renderer/src/features/subs-sync/"
@@ -1901,6 +2098,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/subs-browser/",
       "src/renderer/src/features/subs-browser/"
@@ -1956,6 +2154,33 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {
+      "transportButton": [
+        {
+          "id": "capture-still.capture",
+          "order": 40
+        }
+      ],
+      "settingsSection": [
+        {
+          "id": "capture-still.templateHelp",
+          "order": 10,
+          "scope": "general"
+        }
+      ],
+      "menuSection": [
+        {
+          "id": "capture-still.menu",
+          "order": 60,
+          "tiesRoot": "capture"
+        }
+      ],
+      "spawnArgPriority": [
+        {
+          "order": 10
+        }
+      ]
+    },
     "ownedFiles": [
       "src/main/features/capture-still/",
       "src/renderer/src/features/capture-still/"
@@ -2018,6 +2243,33 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {
+      "panel": [
+        {
+          "id": "capture-encode",
+          "order": 70
+        }
+      ],
+      "transportButton": [
+        {
+          "id": "capture-encode.togglePanel",
+          "order": 70
+        }
+      ],
+      "settingsSection": [
+        {
+          "id": "capture-encode.limits",
+          "order": 12,
+          "scope": "general"
+        }
+      ],
+      "menuSection": [
+        {
+          "id": "capture-encode.menu",
+          "order": 62
+        }
+      ]
+    },
     "ownedFiles": [
       "src/main/features/capture-encode/",
       "src/renderer/src/features/capture-encode/"
@@ -2082,6 +2334,7 @@
     },
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/nav-seek/",
       "src/renderer/src/features/nav-seek/"
@@ -2147,6 +2400,40 @@
       "nav-seek.seek"
     ],
     "ownedFilterLabels": [],
+    "ownedOrders": {
+      "panel": [
+        {
+          "id": "nav-chapters.skip",
+          "order": 40
+        }
+      ],
+      "transportButton": [
+        {
+          "id": "nav-chapters.skipPrompt",
+          "order": 60
+        }
+      ],
+      "seekbarLayer": [
+        {
+          "id": "nav-chapters.ticks",
+          "order": 10
+        },
+        {
+          "id": "nav-chapters.skipBands",
+          "order": 15
+        }
+      ],
+      "menuSection": [
+        {
+          "id": "nav-chapters.menu",
+          "order": 45
+        },
+        {
+          "id": "nav-chapters.skipMenu",
+          "order": 48
+        }
+      ]
+    },
     "ownedFiles": [
       "src/main/features/nav-chapters/",
       "src/renderer/src/features/nav-chapters/"
@@ -2208,6 +2495,36 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {
+      "panel": [
+        {
+          "id": "nav-bookmarks",
+          "order": 20
+        }
+      ],
+      "transportButton": [
+        {
+          "id": "nav-bookmarks.toggle",
+          "order": 30
+        }
+      ],
+      "seekbarLayer": [
+        {
+          "id": "nav-bookmarks.pins",
+          "order": 20
+        },
+        {
+          "id": "nav-bookmarks.abloop",
+          "order": 30
+        }
+      ],
+      "menuSection": [
+        {
+          "id": "nav-bookmarks.menu",
+          "order": 46
+        }
+      ]
+    },
     "ownedFiles": [
       "src/main/features/nav-bookmarks/",
       "src/renderer/src/features/nav-bookmarks/",
@@ -2268,6 +2585,20 @@
     },
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {
+      "seekbarLayer": [
+        {
+          "id": "nav-thumbnails.preview",
+          "order": 5
+        }
+      ],
+      "menuSection": [
+        {
+          "id": "nav-thumbnails.menu",
+          "order": 47
+        }
+      ]
+    },
     "ownedFiles": [
       "src/main/features/nav-thumbnails/",
       "src/renderer/src/features/nav-thumbnails/",
@@ -2339,6 +2670,32 @@
       "nav-thumbnails.getThumb"
     ],
     "ownedFilterLabels": [],
+    "ownedOrders": {
+      "panel": [
+        {
+          "id": "playlist",
+          "order": 10
+        }
+      ],
+      "transportButton": [
+        {
+          "id": "playlist.toggle",
+          "order": 20
+        }
+      ],
+      "menuSection": [
+        {
+          "id": "playlist.menuOpen",
+          "order": 10,
+          "tiesRoot": "playback"
+        },
+        {
+          "id": "playlist.menuQueue",
+          "order": 30,
+          "tiesRoot": "audio"
+        }
+      ]
+    },
     "ownedFiles": [
       "src/main/features/playlist/",
       "src/main/services/playlist.test.ts",
@@ -2434,6 +2791,59 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {
+      "panel": [
+        {
+          "id": "mediainfo",
+          "order": 29
+        }
+      ],
+      "transportButton": [
+        {
+          "id": "mediainfo.toggle",
+          "order": 55
+        }
+      ],
+      "statsSection": [
+        {
+          "id": "mediainfo.general",
+          "order": 71
+        },
+        {
+          "id": "mediainfo.video",
+          "order": 73
+        },
+        {
+          "id": "mediainfo.audio",
+          "order": 75
+        },
+        {
+          "id": "mediainfo.pipeline",
+          "order": 77
+        },
+        {
+          "id": "mediainfo.frames",
+          "order": 79
+        },
+        {
+          "id": "mediainfo.stream",
+          "order": 81
+        }
+      ],
+      "settingsSection": [
+        {
+          "id": "mediainfo.notes",
+          "order": 22,
+          "scope": "advanced"
+        }
+      ],
+      "menuSection": [
+        {
+          "id": "mediainfo.menu",
+          "order": 82
+        }
+      ]
+    },
     "ownedFiles": [
       "src/main/features/mediainfo/",
       "src/renderer/src/features/mediainfo/"
@@ -2496,6 +2906,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/history/",
       "src/renderer/src/features/history/"
@@ -2551,6 +2962,22 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {
+      "settingsSection": [
+        {
+          "id": "shell-window.layoutHelp",
+          "order": 6,
+          "scope": "video"
+        }
+      ],
+      "menuSection": [
+        {
+          "id": "shell-window.menu",
+          "order": 70,
+          "tiesRoot": "window"
+        }
+      ]
+    },
     "ownedFiles": [
       "src/main/features/shell-window/",
       "src/renderer/src/features/shell-window/"
@@ -2625,6 +3052,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/shell-taskbar/",
       "src/renderer/src/features/shell-taskbar/"
@@ -2676,6 +3104,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/shell-system/",
       "src/renderer/src/features/shell-system/"
@@ -2733,6 +3162,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/shell-associations/",
       "src/renderer/src/features/shell-associations/"
@@ -2816,6 +3246,50 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {
+      "panel": [
+        {
+          "id": "stream-open",
+          "order": 30
+        }
+      ],
+      "transportButton": [
+        {
+          "id": "stream-open.toggle",
+          "order": 50
+        }
+      ],
+      "statsSection": [
+        {
+          "id": "stream-open.stats",
+          "order": 30
+        }
+      ],
+      "settingsSection": [
+        {
+          "id": "stream-open.streamNotes",
+          "order": 13,
+          "scope": "advanced"
+        }
+      ],
+      "seekbarLayer": [
+        {
+          "id": "stream-open.cache",
+          "order": 2
+        }
+      ],
+      "menuSection": [
+        {
+          "id": "stream-open.menu",
+          "order": 15
+        }
+      ],
+      "spawnArgPriority": [
+        {
+          "order": 20
+        }
+      ]
+    },
     "ownedFiles": [
       "src/main/features/stream-open/",
       "src/renderer/src/features/stream-open/"
@@ -2886,6 +3360,26 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {
+      "statsSection": [
+        {
+          "id": "stream-ytdl.stats",
+          "order": 40
+        }
+      ],
+      "settingsSection": [
+        {
+          "id": "stream-ytdl.notes",
+          "order": 14,
+          "scope": "playback"
+        }
+      ],
+      "spawnArgPriority": [
+        {
+          "order": 30
+        }
+      ]
+    },
     "ownedFiles": [
       "src/main/features/stream-ytdl/",
       "src/renderer/src/features/stream-ytdl/"
@@ -2943,6 +3437,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/disc-devices/",
       "src/renderer/src/features/disc-devices/"
@@ -2990,6 +3485,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/settings-ui/",
       "src/renderer/src/features/settings-ui/"
@@ -3042,6 +3538,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/input-ui/",
       "src/renderer/src/features/input-ui/"
@@ -3089,6 +3586,7 @@
     "mediates": {},
     "usesMediators": [],
     "ownedFilterLabels": [],
+    "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/transfer/",
       "src/renderer/src/features/transfer/"

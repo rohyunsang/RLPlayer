@@ -91,11 +91,19 @@ export class MenuRegistry {
      * second-rate one — an `audio` command lands next to the audio section, not
      * in a lump at the bottom.
      */
-    const blocks: { order: number; render: () => MenuItemConstructorOptions[] }[] = []
+    const blocks: {
+      order: number
+      /** 0 = a contributed section, 1 = a command-derived root. See the sort. */
+      kind: 0 | 1
+      key: string
+      render: () => MenuItemConstructorOptions[]
+    }[] = []
 
     for (const section of this.sections.filter((s) => !removed.has(s.id) && !s.parent)) {
       blocks.push({
         order: section.order,
+        kind: 0,
+        key: section.id,
         render: () => {
           const children = this.sections
             .filter((s) => s.parent === section.id && !removed.has(s.id))
@@ -109,6 +117,8 @@ export class MenuRegistry {
     for (const group of commandMenuGroups(this.commands.all())) {
       blocks.push({
         order: group.order,
+        kind: 1,
+        key: group.path,
         render: () =>
           group.items
             .map((i) => ({ commandId: i.commandId }) as MenuNode)
@@ -116,7 +126,31 @@ export class MenuRegistry {
       })
     }
 
-    blocks.sort((a, b) => a.order - b.order)
+    /**
+     * THE TIE-BREAK, MADE EXPLICIT — and it was load-order-dependent before.
+     *
+     * `MenuRegistry.contribute()` rejects two SECTIONS sharing an order under one
+     * parent, and nothing compares a section against a command-derived ROOT, whose
+     * base order comes from `MENU_ROOTS` in the same space. Seven such ties exist
+     * in the shipped tree: `playlist.menuOpen` 10 = root `playback`,
+     * `core.playback` 20 = root `video`, `playlist.menuQueue` 30 = root `audio`,
+     * `audio-tracks.menu` 40 = root `subtitles`, `video-geometry.menu` 50 = root
+     * `navigate`, `capture-still.menu` 60 = root `capture`,
+     * `shell-window.menu` 70 = root `window`.
+     *
+     * `Array.prototype.sort` is stable, so before this the tie fell to insertion
+     * order: every section first, in `this.sections` order, which is the order the
+     * registry set the modules up in, which is `import.meta.glob`'s directory
+     * order. That is precisely the "an ordering nobody chose" this file's own
+     * duplicate-order error message refuses for sections.
+     *
+     * (order, kind, key) is total, independent of load order, and reproduces
+     * today's rendering exactly: sections came before roots at a tie then, and
+     * `kind` keeps them there. `docs/parity/modules.json` now records each tie as
+     * `tiesRoot` on the claim, and `npm run check:ordering` fails on a NEW,
+     * undeclared one.
+     */
+    blocks.sort((a, b) => a.order - b.order || a.kind - b.kind || a.key.localeCompare(b.key))
 
     const out: MenuItemConstructorOptions[] = []
     for (const block of blocks) {

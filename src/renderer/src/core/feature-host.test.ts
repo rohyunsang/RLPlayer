@@ -19,6 +19,13 @@ import {
 } from './feature-host.ts'
 import type { RendererFeatureModule } from '../../../shared/renderer-api.ts'
 import type { PlayerState } from '../../../shared/types.ts'
+import {
+  NAMESPACES,
+  checkOrdering,
+  readMenuRoots,
+  scanRepoClaims,
+  type ManifestRow
+} from '../../../../scripts/lib/ordering.mjs'
 
 /**
  * The regression suite for the "one keypress permanently breaks the overlay"
@@ -409,45 +416,110 @@ test('settings sections may share an order only in DIFFERENT pages', () => {
   assert.throws(() => section('shell-window.c', 6, 'video'), orderClash)
 })
 
-test('the shipped contributions hold distinct orders in every namespace', () => {
-  // The throws above only matter if the tree passes them, and the menu namespace
-  // did NOT: nav-chapters.menu and nav-thumbnails.menu were both at 45.
+
+/**
+ * THE SHIPPED CONTRIBUTIONS, AGAINST THE ORDERING PARTITION IN `modules.json`.
+ *
+ * WHAT THIS TEST USED TO BE, AND WHY IT LIED. It paired `id:` to `order:` with
+ * one regex per namespace and a 400/600-character window:
+ *
+ *     /ctx\.panel\(\{\s*\n?\s*id:\s*'([^']+)'[\s\S]{0,400}?order:\s*(\d+)/g
+ *
+ * Three ways for that to report clean on a real duplicate, all three present in
+ * the delivered tree:
+ *
+ *   1. the WINDOW — `nav-chapters.skipPrompt` (transport button 60) and
+ *      `nav-chapters.skipBands` (seek-bar layer 15) both sit further than 400
+ *      characters from their own `id:`, because M25 wrote an 11-line comment
+ *      between the two keys to document the collision this test had caught. The
+ *      test was blinded by the note about itself;
+ *   2. the KEY ORDER — `order:` before `id:` matches nothing;
+ *   3. the VALUE — `order: MENU_ORDER` is not `(\d+)`, so M22's menu section was
+ *      invisible.
+ *
+ * MEASURED: putting the duplicate back (`nav-chapters.skipPrompt` at 50, which
+ * is `stream-open.toggle`'s) gave `npm test` 1143 pass / 0 fail, while the
+ * runtime host threw `duplicate transport button order 50` — a boot crash no
+ * check in the repository could see.
+ *
+ * WHAT IT IS NOW. Ordering is a partition key in `docs/parity/modules.json`
+ * (`ownedOrders`), exactly like `ownedProperties` and `ownedFiles`, and the code
+ * side is read with the TypeScript AST by `scripts/lib/ordering.mjs` — the same
+ * reader `npm run check:ordering` uses, imported rather than re-implemented,
+ * because a test that grows its own weaker copy of a shared rule is how this
+ * repository got here twice (see `scripts/lib/lex.d.mts`).
+ *
+ * A comment cannot separate two properties of one object literal in a parse
+ * tree, `order` may be a named constant, and key order is irrelevant.
+ */
+test('the shipped contributions agree with the ordering partition, both directions', () => {
   const here = path.dirname(fileURLToPath(import.meta.url))
   const repo = path.resolve(here, '..', '..', '..', '..')
-  const sources: string[] = []
-  const walk = (dir: string): void => {
-    if (!fs.existsSync(dir)) return
-    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, e.name)
-      if (e.isDirectory()) walk(full)
-      else if (e.name === 'index.ts') sources.push(fs.readFileSync(full, 'utf8'))
-    }
-  }
-  walk(path.join(repo, 'src', 'main', 'features'))
-  walk(path.join(repo, 'src', 'renderer', 'src', 'features'))
-  const all = sources.join('\n')
+  const modules = JSON.parse(
+    fs.readFileSync(path.join(repo, 'docs', 'parity', 'modules.json'), 'utf8')
+  ) as ManifestRow[]
 
-  const namespaces: Array<[string, RegExp]> = [
-    ['ctx.panel', /ctx\.panel\(\{\s*\n?\s*id:\s*'([^']+)'[\s\S]{0,400}?order:\s*(\d+)/g],
-    ['ctx.transportButton', /ctx\.transportButton\(\{\s*\n?\s*id:\s*'([^']+)'[\s\S]{0,400}?order:\s*(\d+)/g],
-    ['ctx.statsSection', /ctx\.statsSection\(\{\s*\n?\s*id:\s*'([^']+)'[\s\S]{0,400}?order:\s*(\d+)/g],
-    ['ctx.menu.contribute', /ctx\.menu\.contribute\(\{\s*\n?\s*id:\s*'([^']+)'[\s\S]{0,400}?order:\s*(\d+)/g],
-    ['ctx.seekbarLayer', /ctx\.seekbarLayer\(\{\s*\n?\s*id:\s*'([^']+)'[\s\S]{0,600}?order:\s*(\d+)/g]
-  ]
-  const problems: string[] = []
-  for (const [name, re] of namespaces) {
-    const byOrder = new Map<number, string[]>()
-    for (let m = re.exec(all); m !== null; m = re.exec(all)) {
-      const order = Number(m[2])
-      byOrder.set(order, [...(byOrder.get(order) ?? []), m[1] as string])
-    }
-    for (const [order, ids] of byOrder) {
-      // A single module contributing a parented submenu at the same order as its
-      // own parent is not a cross-module clash; distinct ids are what matter.
-      const unique = [...new Set(ids)]
-      if (unique.length > 1) problems.push(`${name} order ${order}: ${unique.join(', ')}`)
-    }
-    if (byOrder.size === 0) problems.push(`${name}: the scan found NO contributions at all`)
+  const { claims, unresolved } = scanRepoClaims(repo)
+  const problems = checkOrdering({
+    modules,
+    codeClaims: claims,
+    unresolved,
+    menuRoots: readMenuRoots(repo)
+  })
+  assert.deepEqual(problems, [], '\n  ' + problems.join('\n  '))
+
+  // A reader that found nothing agrees with everything, which is the shape of
+  // the header-only netlog. Every namespace must have been exercised by the
+  // shipped tree, and the count is asserted per namespace rather than in total.
+  for (const spec of NAMESPACES) {
+    assert.ok(
+      claims.some((c) => c.ns === spec.ns),
+      `the AST reader found NO ${spec.ns} contributions in the whole tree`
+    )
   }
-  assert.deepEqual(problems, [], problems.join('\n  '))
+
+  // The three claims the retired regex could not read are named, so "the new
+  // reader sees them" is a fact this file asserts rather than a claim it makes.
+  for (const id of ['nav-chapters.skipPrompt', 'nav-chapters.skipBands', 'capture-still.menu']) {
+    assert.ok(
+      claims.some((c) => c.id === id),
+      `${id} was invisible to the retired regex and must be visible now`
+    )
+  }
+})
+
+/**
+ * The partition is only worth having if a collision is detectable from the
+ * MANIFEST ALONE — that is the whole difference between "a boot crash we find by
+ * booting" and "a conflict CI reports by reading one file". Planted here rather
+ * than only in `check-ordering.mjs --self-test`, because `npm test` is what a
+ * module author runs.
+ */
+test('a duplicate order in the manifest is a collision naming both rows', () => {
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const repo = path.resolve(here, '..', '..', '..', '..')
+  const modules = JSON.parse(
+    fs.readFileSync(path.join(repo, 'docs', 'parity', 'modules.json'), 'utf8')
+  ) as ManifestRow[]
+
+  // `stream-open.toggle` holds transportButton 50. Give it to M25 as well —
+  // the exact duplicate that shipped and booted-crashed — and read the report.
+  const planted = modules.map((row) =>
+    row.id === 'M25'
+      ? {
+          ...row,
+          ownedOrders: {
+            ...row.ownedOrders,
+            transportButton: [{ id: 'nav-chapters.skipPrompt', order: 50 }]
+          }
+        }
+      : row
+  )
+  const problems = checkOrdering({ modules: planted, codeClaims: [] })
+  const collision = problems.find((p) => p.includes('ORDERING COLLISION'))
+  assert.ok(collision, `expected a collision, got:\n  ${problems.join('\n  ')}`)
+  assert.match(collision, /nav-chapters\.skipPrompt/)
+  assert.match(collision, /stream-open\.toggle/)
+  assert.match(collision, /M25/)
+  assert.match(collision, /M35/)
 })
