@@ -210,6 +210,19 @@ export interface PathService {
   subCacheDir(): string
   thumbCacheDir(): string
   sceneCacheDir(): string
+  /**
+   * Album art and poster frames.
+   *
+   * It existed in `core/paths.ts` and was promised to modules by
+   * `02-wave0-api.md` section 12, and it was in NEITHER this interface NOR the
+   * `pathService` object, so `ctx.paths.artCacheDir()` was `undefined` and every
+   * module that followed the guide would have crashed on
+   * "artCacheDir is not a function". M27's poster frames and M30's
+   * continue-watching thumbnails are both named users. The gap survived because
+   * nothing compared the promised surface against the implemented one; the
+   * `paths.ts` test does now.
+   */
+  artCacheDir(): string
   logsDir(): string
   /** A per-job scratch directory. lavfi cannot take Windows absolute paths;
    *  stage assets here and spawn with `cwd` set (§7.7 trap 1). */

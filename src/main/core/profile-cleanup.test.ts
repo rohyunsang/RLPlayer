@@ -11,7 +11,8 @@ import {
   TARGET_PATHS,
   appOwnedConflict,
   describeCleanup,
-  purgeLeakedProfileState
+  purgeLeakedProfileState,
+  refuseTarget
 } from './profile-cleanup.ts'
 
 /**
@@ -110,6 +111,16 @@ function dirtyProfile(): string {
   for (const sub of ['Shared Dictionary', path.join('session', 'Shared Dictionary')]) {
     write(path.join(sub, 'db'), 'compression dictionary')
   }
+
+  // Version 4's artefact, byte for byte as it is on the machine this was written
+  // on: the root Preferences names the dictionary 0.1.0 fetched, and the SESSION
+  // twin is 0.1.1's correct state and must survive untouched. Both spellings
+  // matter -- assuming there was only one is what stranded the 11 MB dictionary.
+  write('Preferences', '{"spellcheck":{"dictionaries":["ko"],"dictionary":""},"pinned":1}')
+  write(
+    path.join('session', 'Preferences'),
+    '{"browser":{"enable_spellchecking":false},"spellcheck":{"dictionaries":[],"dictionary":""}}'
+  )
   return root
 }
 
@@ -223,6 +234,7 @@ test('the leaked artefacts go, and nothing else in the profile is touched', () =
     [
       'Network/',
       'Network/NetworkDataMigrated',
+      'Preferences',
       'cache/',
       'cache/art/',
       'cache/art/a.png',
@@ -241,6 +253,7 @@ test('the leaked artefacts go, and nothing else in the profile is touched', () =
       'session/',
       'session/Network/',
       'session/Network/NetworkDataMigrated',
+      'session/Preferences',
       'subcache/',
       'subcache/movie.srt',
       'themes/',
@@ -406,19 +419,205 @@ test('an older marker version re-runs, so a new artefact can be added later', ()
   fs.rmSync(root, { recursive: true, force: true })
 })
 
-test('the target list is literal: no glob, no recursive delete of the root', () => {
-  // The safety argument for this file is that a reviewer can read the whole
-  // target list in one screen. A glob cannot be reviewed, and
-  // `rmSync(root, { recursive: true })` behind a condition is one bad edit away
-  // from deleting the user's resume positions and playlists.
+test('the target list is literal: no glob, and no directory scan feeds rmSync', () => {
+  // Two of the three assertions here USED to be source greps, and one of them
+  // was for a spelling this file has never contained:
+  //
+  //     assert.ok(!/rmSync\(\s*dataRoot/.test(src), 'the data root itself is passed to rmSync')
+  //
+  // The dangerous call is `fs.rmSync(abs, { recursive: true, force: true })`,
+  // where `abs = path.join(dataRoot, target.rel)`. No edit that ever endangered
+  // the root would have matched that regex — and one did: `norm()` filtered
+  // `'.'` and not `'..'`, so `path.join(root, 'session', '..') === root` was a
+  // legal target and the test was green. The BEHAVIOUR is asserted below; what
+  // is left as a source check is the part that genuinely is about shape.
   const src = fs.readFileSync(path.join(here, 'profile-cleanup.ts'), 'utf8')
-  assert.ok(!/readdirSync\([^)]*\)\s*\)?\s*\{[\s\S]{0,200}rmSync/.test(src), 'a directory scan feeds rmSync')
-  assert.ok(!/rmSync\(\s*dataRoot/.test(src), 'the data root itself is passed to rmSync')
+  assert.ok(
+    !/readdirSync\([^)]*\)\s*\)?\s*\{[\s\S]{0,200}rmSync/.test(src),
+    'a directory scan feeds rmSync'
+  )
   assert.ok(!/glob|\*\.|match\(/.test(src.replace(/\/\*[\s\S]*?\*\//g, '')), 'a pattern selects targets')
-  // Every removable path is spelled out.
   for (const literal of ['Dictionaries', 'Network Persistent State', 'session', 'httpcache']) {
     assert.ok(src.includes(`'${literal}'`), `the target list no longer names '${literal}'`)
   }
+})
+
+test('PATH TRAVERSAL: no target may walk out of the data root', () => {
+  // THE HOLE. `norm()` filtered '.' and not '..', so:
+  //
+  //     appOwnedConflict('session/..')          -> null   (i.e. "safe")
+  //     path.join(root, 'session', '..')        === root
+  //     fs.rmSync(root, { recursive: true, force: true })
+  //
+  // — resume.json, history.json, per-file.json, keybinds.json, config.json,
+  // every bookmark, every thumbnail. Rule 5's own "it is the data root itself"
+  // guard was reachable only via '', the one spelling norm() collapsed to empty.
+  //
+  // This asserts on the function that actually gates the rmSync, and on every
+  // spelling of the escape rather than the one that was found.
+  const root = path.join(os.tmpdir(), 'rlplayer-guard-probe')
+  const escapes = [
+    'session/..',
+    '..',
+    '../..',
+    'a/../..',
+    'session\\..',
+    './..',
+    'Cache/../..',
+    'session/../../Roaming'
+  ]
+  for (const rel of escapes) {
+    const refusal = refuseTarget(root, rel)
+    assert.ok(
+      refusal !== null,
+      `refuseTarget(root, '${rel}') returned null, so it would be handed to rmSync. ` +
+        `path.join puts it at '${path.join(root, rel)}'.`
+    )
+    assert.match(refusal, /\.\.|outside|data root/, `the refusal for '${rel}' should say why`)
+  }
+  // Rooted paths are not relative targets either.
+  for (const rel of ['C:/Windows', 'C:\\Windows', '/etc', '\\\\server\\share']) {
+    assert.ok(refuseTarget(root, rel) !== null, `'${rel}' is not a relative target`)
+  }
+  // And the real targets still pass, or this check would just break the feature.
+  for (const rel of TARGET_PATHS) {
+    assert.equal(refuseTarget(root, rel), null, `refuseTarget rejects the real target '${rel}'`)
+  }
+  assert.equal(refuseTarget(root, ''), 'it is the data root itself')
+})
+
+test('PATH TRAVERSAL, end to end: the profile survives a run', () => {
+  // The guard above is a unit; this is the property the user cares about. If a
+  // traversal target ever gets past both guards, the whole fixture disappears
+  // and this fails by inventory rather than by reasoning about a regex.
+  const root = dirtyProfile()
+  purgeLeakedProfileState(root)
+  assert.equal(fs.existsSync(root), true, 'the data root itself was deleted')
+  for (const survivor of ['config.json', 'resume.json', 'cache/thumbs/thumb-1.jpg']) {
+    assert.equal(
+      exists(root, ...survivor.split('/')),
+      true,
+      `${survivor} is gone; a cleanup routine deleted the user's own data`
+    )
+  }
+  fs.rmSync(root, { recursive: true, force: true })
+})
+
+test('THE MARKER NEVER NAMES THE LEAKED HOST, because grepping is the user check', () => {
+  // The invariant at profile-cleanup.ts:378-381 had NO TEST. Adding
+  // `host: "redirector.gvt1.com"` to the marker passed all 12 cleanup tests and
+  // all 395 overall — while breaking the only check a user can actually run on
+  // their own profile: search it for the host and see whether anything is left.
+  // A marker that contains the string makes that search answer "yes" forever.
+  //
+  // Asserted on the WHOLE PROFILE rather than on the marker alone, because the
+  // user's grep does not know which file it is looking at.
+  const root = dirtyProfile()
+  const r = purgeLeakedProfileState(root)
+  assert.deepEqual(r.failed, [])
+
+  const hits: string[] = []
+  const walk = (dir: string, prefix: string): void => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const rel = prefix === '' ? e.name : `${prefix}/${e.name}`
+      const abs = path.join(dir, e.name)
+      if (e.isDirectory()) {
+        walk(abs, rel)
+        continue
+      }
+      const text = fs.readFileSync(abs, 'latin1')
+      // What the user would search for: the host, the path it served, the file
+      // it served, and their own address out of the 302's `mip=`.
+      for (const needle of [
+        'gvt1',
+        'redirector',
+        'edgedl',
+        'ko-3-0.bdic',
+        'mip=',
+        '2406:5900',
+        // A dotted domain of three or more labels, so a host nobody thought to
+        // list is caught too.
+        null
+      ]) {
+        if (needle === null) {
+          const m = /\b[a-z0-9-]+\.[a-z0-9-]+\.[a-z]{2,}\b/i.exec(text)
+          if (m) hits.push(`${rel}: '${m[0]}' (a hostname-shaped string)`)
+          continue
+        }
+        if (text.includes(needle)) hits.push(`${rel}: '${needle}'`)
+      }
+    }
+  }
+  walk(root, '')
+  assert.deepEqual(
+    hits,
+    [],
+    'a user grepping their own profile for the leaked host would still find these:\n  ' +
+      hits.join('\n  ')
+  )
+
+  // …and the marker still has to say enough to be understood, or "contains no
+  // host" would be satisfiable by an empty file.
+  const marker = JSON.parse(fs.readFileSync(path.join(root, 'cleanup.json'), 'utf8'))
+  assert.equal(marker.version, CLEANUP_VERSION)
+  assert.ok(Array.isArray(marker.removed) && marker.removed.length > 0)
+  assert.match(
+    String(marker.why),
+    /profile-cleanup\.ts/,
+    'the marker has to point at the file that holds the full story, since it may not hold it'
+  )
+  fs.rmSync(root, { recursive: true, force: true })
+})
+
+test("version 4 scrubs the spellcheck key and leaves 0.1.1's own state alone", () => {
+  const root = dirtyProfile()
+  const r = purgeLeakedProfileState(root)
+  assert.deepEqual(r.failed, [])
+  assert.deepEqual(r.scrubbed, ['Preferences'])
+
+  // The dirty one loses ONLY the spellcheck key. Deleting the file wholesale
+  // would be the `Cache` mistake again: Preferences is Chromium's, and in the
+  // general case it holds live state.
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, 'Preferences'), 'utf8')), {
+    pinned: 1
+  })
+  // The session twin already reads `dictionaries: []`, which is 0.1.1 behaving
+  // correctly, so it is read and left byte-identical rather than churned.
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(path.join(root, 'session', 'Preferences'), 'utf8')),
+    {
+      browser: { enable_spellchecking: false },
+      spellcheck: { dictionaries: [], dictionary: '' }
+    }
+  )
+  fs.rmSync(root, { recursive: true, force: true })
+})
+
+test('a Preferences file that held nothing else is removed, not left empty', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rlplayer-prefs-'))
+  // Exactly what is on the machine this was written on.
+  fs.writeFileSync(
+    path.join(root, 'Preferences'),
+    '{"spellcheck":{"dictionaries":["ko"],"dictionary":""}}'
+  )
+  const r = purgeLeakedProfileState(root)
+  assert.deepEqual(r.scrubbed, ['Preferences'])
+  assert.equal(fs.existsSync(path.join(root, 'Preferences')), false)
+  fs.rmSync(root, { recursive: true, force: true })
+})
+
+test('an unparseable Preferences file is left completely alone', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rlplayer-prefs-bad-'))
+  fs.writeFileSync(path.join(root, 'Preferences'), 'not json at all')
+  const r = purgeLeakedProfileState(root)
+  assert.deepEqual(r.scrubbed, [])
+  assert.equal(fs.readFileSync(path.join(root, 'Preferences'), 'utf8'), 'not json at all')
+  assert.ok(
+    r.failed.some((f) => f.rel === 'Preferences'),
+    'a Preferences file this cannot read is reported, so the marker is not written and the ' +
+      'next launch tries again — the same rule a locked cache file gets'
+  )
+  fs.rmSync(root, { recursive: true, force: true })
 })
 
 test('paths.ts keeps the app cache and Chromium cache in different directories', () => {

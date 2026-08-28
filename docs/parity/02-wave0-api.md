@@ -1168,7 +1168,7 @@ switched off, which is the difference between "gone" and "blackholed".
 
 ```ts
 ctx.paths.dataDir() / cacheDir() / subCacheDir() / thumbCacheDir() /
-          sceneCacheDir() / logsDir() / tempJobDir(jobId)
+          sceneCacheDir() / artCacheDir() / logsDir() / tempJobDir(jobId)
 ctx.paths.isPortable() / ctx.paths.portableFallback / ctx.paths.mpvBinary()
 ctx.lifecycle.onReady(cb) / onQuit(cb) / trackProcess(child)
 ```

@@ -174,6 +174,15 @@ export function mpvBinary(): string {
   return resolveMpvPath()
 }
 
+/**
+ * The object `ctx.paths` IS.
+ *
+ * `artCacheDir` was missing from here AND from `PathService` while
+ * `02-wave0-api.md` section 12 promised it, so `ctx.paths.artCacheDir()` threw
+ * "not a function" for any module that took the guide at its word.
+ * `paths.test.ts` now asserts that every exported directory accessor in this
+ * file appears on this object, so the next one cannot be forgotten in silence.
+ */
 export const pathService: PathService = {
   mpvBinary,
   dataDir,
@@ -181,6 +190,7 @@ export const pathService: PathService = {
   subCacheDir,
   thumbCacheDir,
   sceneCacheDir,
+  artCacheDir,
   logsDir,
   tempJobDir,
   isPortable,
