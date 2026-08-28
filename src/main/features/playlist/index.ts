@@ -284,7 +284,17 @@ function savePosition(): void {
 
 const mod: FeatureModule = {
   id: 'playlist',
+  // M28 is the single entry point for "play these files" (§3.7.3), which only
+  // means anything if nothing else can issue `loadfile` behind its back: mpv's
+  // own playlist must always hold exactly one entry (§7.6), and that invariant
+  // is what keeps Explorer order, per-file resume and non-destructive shuffle.
+  ownsCommands: ['loadfile', 'loadlist', 'stop', 'playlist-*'],
   ownsProperties: [
+    // Written through `loadfile`'s options map on the resume path, which is a
+    // property write like any other -- and one nobody had noticed, because the
+    // guard did not read that argument until it was taught to. The resume
+    // position is M28's.
+    'start',
     'loop-file',
     'loop-playlist',
     'gapless-audio',

@@ -15,7 +15,7 @@ export const afChain = new FilterChain({
   kind: 'af',
   order: AF_ORDER,
   refusers: AF_REFUSERS,
-  exec: { command: (args) => mpvBus.manager.client.command(args) },
+  exec: { command: (args) => mpvBus.chainExec(args) },
   log: (m) => console.error(m)
 })
 

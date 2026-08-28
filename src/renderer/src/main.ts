@@ -15,7 +15,7 @@ import {
   initStatsHost,
   loadRendererFeatures,
   publishState,
-  registerRendererMessages,
+  fetchMessages,
   setOsdSink,
   statsOnStateChange,
   toggleStats
@@ -520,16 +520,15 @@ wakeChrome()
  */
 async function boot(): Promise<void> {
   setOsdSink((m) => showOsd({ kind: m.kind, text: m.text, value: m.value }))
-  try {
-    const messages = (await window.rl.invoke('core-i18n:messages')) as Record<string, string>
-    registerRendererMessages(messages)
-  } catch (e) {
-    // A missing catalog means keys render as their ids, which is ugly but
-    // usable. It must never stop the overlay from coming up.
-    console.warn('[overlay] message catalog unavailable:', e)
-  }
+  // A missing catalog means labels render as their message keys, which is ugly
+  // but usable; it must never stop the overlay from coming up.
+  await fetchMessages((ch) => window.rl.invoke(ch))
   initPanelHost(panelRoot)
-  initStatsHost(statsPanel)
+  initStatsHost(
+    statsPanel,
+    () =>
+      window.rl.invoke('core-mpv:refusals') as Promise<Array<{ moduleId: string; count: number }>>
+  )
   // Renderer feature modules, discovered by the same directory glob main uses.
   loadRendererFeatures('player')
   seekbar.render()

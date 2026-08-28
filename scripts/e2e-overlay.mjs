@@ -20,7 +20,7 @@
  * Needs a desktop session (it opens real windows) so it is NOT part of CI;
  * `npm run verify` stays headless. Run it before you tag.
  */
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -36,6 +36,18 @@ const sample = ['samples/bbb_long.mp4', 'samples/bbb.mp4']
   .find((p) => fs.existsSync(p))
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/** How many mpv.exe processes are running right now. */
+function countMpv() {
+  try {
+    const out = execFileSync('tasklist', ['/FI', 'IMAGENAME eq mpv.exe', '/NH'], {
+      encoding: 'utf8'
+    })
+    return (out.match(/mpv\.exe/g) ?? []).length
+  } catch {
+    return -1
+  }
+}
 
 function electronBinary() {
   const p = path.join(repo, 'node_modules', 'electron', 'dist', 'electron.exe')
@@ -154,10 +166,35 @@ async function main() {
   await sleep(WINDOW_S * 1000)
   const before = errors.splice(0).slice()
 
+  // LIVENESS, before anything else is believed. A hung app also reports zero
+  // console errors, which is how a boot failure behind a modal `showErrorBox`
+  // once passed this test: the main process blocks, CDP stops answering, no
+  // events arrive, and "0 errors in 4s" reads as success. Ask a question and
+  // require an answer.
+  const alive = await s
+    .send('Runtime.evaluate', { expression: '1 + 1', returnByValue: true })
+    .then((r) => r.result?.value === 2)
+    .catch(() => false)
+  if (!alive) {
+    child.kill()
+    throw new Error(
+      'the app stopped answering CDP before any input. A blocked main process ' +
+        'produces zero console errors too, so this is a FAILURE, not a clean run.\n' +
+        'main log:\n' +
+        mainLog.join('')
+    )
+  }
+
   // The exact key the audit used, plus a few more bound ones. ArrowUp is
   // volume in the default preset; every one of these goes through the keydown
   // handler the stray call was spliced into.
   console.log('driving keypresses...')
+  process.on('uncaughtException', (e) => {
+    console.error('main process log so far:\n' + mainLog.join(''))
+    console.error(e)
+    child.kill()
+    process.exit(1)
+  })
   await pressKey(s, 'ArrowUp', 'ArrowUp', 38)
   await sleep(200)
   await pressKey(s, 'ArrowDown', 'ArrowDown', 40)
@@ -233,10 +270,21 @@ async function main() {
     ss.close()
   }
 
+  // --- graceful quit, and no orphan mpv ------------------------------------
+  //
+  // `child.kill()` is TerminateProcess on Windows, so `before-quit` never runs
+  // and mpv is orphaned -- by the harness, not by the app. Quit the way a user
+  // does and then check, because "no orphan mpv on quit" is a v0.1 guarantee
+  // and this is the only place that exercises it.
+  let orphans = -1
   if (!KEEP) {
+    const mpvBefore = countMpv()
+    await s.send('Runtime.evaluate', { expression: 'window.rlplayer.window.close()' }).catch(() => {})
+    for (let i = 0; i < 40 && child.exitCode === null; i++) await sleep(250)
+    if (child.exitCode === null) child.kill()
+    await sleep(1200)
+    orphans = countMpv() - (mpvBefore - 1)
     s.close()
-    child.kill()
-    await sleep(800)
   }
 
   console.log('\n--- results ---')
@@ -250,6 +298,7 @@ async function main() {
   console.log(`  generated from descriptors: ${(settings.ids ?? []).join(', ')}`)
   console.log(`  custom components mounted : ${settings.custom}`)
   console.log(`  contributed sections      : ${settings.contributed}`)
+  console.log(`orphan mpv after quit       : ${orphans}`)
   for (const e of [...before, ...after, ...settings.errors]) console.log('  ' + e)
 
   const failures = []
@@ -265,6 +314,7 @@ async function main() {
   if (settings.errors.length > 0) {
     failures.push(`${settings.errors.length} console error(s) in the settings window`)
   }
+  if (orphans > 0) failures.push(`${orphans} orphaned mpv.exe after a graceful quit`)
   if (failures.length > 0) {
     console.error('\ne2e-overlay FAILED:')
     for (const f of failures) console.error('  - ' + f)

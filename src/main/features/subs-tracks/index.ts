@@ -46,9 +46,14 @@ const mod: FeatureModule = {
     'subs-fallback',
     'subs-fallback-forced',
     'subs-match-os-language',
-    'sub-create-cc-track',
-    'sub-reload'
+    'sub-create-cc-track'
   ],
+  // `sub-reload` used to sit in ownsProperties, where it did nothing: mpv
+  // answers "property not found" for it, because it is a COMMAND. Anyone could
+  // call ctx.mpv.command(['sub-reload']) and blow away M17's track selection.
+  // It is owned properly now, together with the two commands that add and
+  // remove the external tracks M17 tracks in `sid`.
+  ownsCommands: ['sub-reload', 'sub-add', 'sub-remove'],
 
   setup(c): void {
     ctx = c

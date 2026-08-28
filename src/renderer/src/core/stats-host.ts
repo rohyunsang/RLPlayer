@@ -95,8 +95,51 @@ export function statsOnStateChange(): void {
   if (statsSections.some((s) => s.refresh?.mode === 'onChange')) repaint()
 }
 
-export function initStatsHost(el: HTMLElement): void {
+/**
+ * Core's own section: mpv property writes the owner map refused.
+ *
+ * In a dev build a foreign write throws and this stays empty. In a SHIPPED
+ * build it is dropped and counted instead, so that one misbehaving module
+ * cannot black-screen the player — and until now the count went nowhere at all.
+ * `refusalCount` was never read anywhere in `src/`, which made "surfaced in
+ * stats" a comment rather than a fact, and made a module quietly corrupting
+ * another's state indistinguishable from a module working.
+ *
+ * Here it is, surfaced for real, on a poll because there is no property to
+ * watch and refusals are rare enough that two seconds is generous.
+ */
+function registerRefusalSection(read: () => Promise<Array<{ moduleId: string; count: number }>>): void {
+  let refusals: Array<{ moduleId: string; count: number }> = []
+  const pull = (): void => {
+    void read()
+      .then((r) => {
+        refusals = r
+      })
+      .catch(() => {
+        refusals = []
+      })
+  }
+  pull()
+  statsSections.push({
+    id: 'core.refusals',
+    order: 90,
+    titleKey: 'core.refusals',
+    refresh: { mode: 'poll', intervalMs: 2000 },
+    fields: () => {
+      pull()
+      if (refusals.length === 0) return [{ labelKey: 'core.refusals', value: '—' }]
+      return refusals.map((r) => ({ labelKey: r.moduleId, value: String(r.count) }))
+    }
+  })
+  statsSections.sort((a, b) => a.order - b.order)
+}
+
+export function initStatsHost(
+  el: HTMLElement,
+  readRefusals?: () => Promise<Array<{ moduleId: string; count: number }>>
+): void {
   container = el
+  if (readRefusals) registerRefusalSection(readRefusals)
   onContributionsChanged(() => {
     if (visible) {
       repaint()

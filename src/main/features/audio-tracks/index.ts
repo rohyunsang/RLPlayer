@@ -20,6 +20,8 @@ let ctx: FeatureContext
  *  to whatever happened to be current when a caller asked. */
 let intended: number | false = false
 let restoring: Promise<void> = Promise.resolve()
+/** True while the per-file restore is in flight; the arbiter refuses then. */
+let busyRestoring = false
 
 const tracks = (): Track[] => ctx.mpv.peek<Track[]>('track-list') ?? []
 const audioTracks = (): Track[] => tracks().filter((t) => t.type === 'audio')
@@ -59,6 +61,40 @@ const mod: FeatureModule = {
 
     ctx.mpv.contributeArgs(10, () => ['--audio-file-auto=fuzzy'])
 
+    /**
+     * The arbiter for `aid` (§3.7). Until this existed, every `requestSet` in
+     * the app returned `{ok: false, reason: 'no-arbiter'}` -- no module
+     * registered one anywhere in src/ -- while the OwnershipError told the
+     * developer to use exactly that call. The mediated path was a dead end that
+     * the error message advertised.
+     *
+     * It is not a rubber stamp. M15's passthrough round-trip and M13's AC-3
+     * reinit both want `aid` at moments M11's own per-file restore may be in
+     * flight, and that race picks the wrong dub on a dual-audio release:
+     * silent, intermittent, and precisely what ownership exists to stop. So a
+     * request during a restore is REFUSED, with a reason the caller can log,
+     * rather than queued behind it -- by the time the restore finishes the
+     * caller's reason is usually stale.
+     */
+    ctx.mpv.arbitrate('aid', async (value, req) => {
+      if (busyRestoring) {
+        return {
+          ok: false,
+          reason: `audio-tracks is restoring the per-file track; '${req.reason}' would race it`
+        }
+      }
+      const id = value === false || value === 'no' ? false : Number(value)
+      if (id !== false && !Number.isFinite(id)) {
+        return { ok: false, reason: `'${String(value)}' is not a track id` }
+      }
+      if (id !== false && !audioTracks().some((t) => t.id === id)) {
+        return { ok: false, reason: `no audio track ${id} in this file` }
+      }
+      await select(id)
+      ctx.log.info(`aid -> ${String(id)} at the request of ${req.from}: ${req.reason}`)
+      return { ok: true }
+    })
+
     ctx.mpv.observe<number | false>('aid', (v) => {
       // Keep `intended` honest when mpv picks a track on its own at file load.
       if (typeof v === 'number') intended = v
@@ -69,11 +105,15 @@ const mod: FeatureModule = {
       capture: () => ({ aid: ctx.mpv.peek<number | false>('aid') ?? false }),
       apply: async (v) => {
         if (typeof v.aid === 'number') {
+          // The window the arbiter refuses inside: a foreign write landing
+          // here picks the wrong dub on a dual-audio release.
+          busyRestoring = true
           restoring = select(v.aid).then(
             () => undefined,
             () => undefined
           )
           await restoring
+          busyRestoring = false
         }
       },
       rememberDefaults: { aid: true }

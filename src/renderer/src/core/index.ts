@@ -44,6 +44,7 @@ export function loadRendererFeatures(surface: Surface = 'player'): RendererFeatu
 }
 
 export {
+  fetchMessages,
   getSeekbarHost as getSeekbar,
   onContributionsChanged,
   panels,

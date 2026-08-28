@@ -10,7 +10,7 @@ export const vfChain = new FilterChain({
   kind: 'vf',
   order: VF_ORDER,
   refusers: VF_REFUSERS,
-  exec: { command: (args) => mpvBus.manager.client.command(args) },
+  exec: { command: (args) => mpvBus.chainExec(args) },
   log: (m) => console.error(m)
 })
 

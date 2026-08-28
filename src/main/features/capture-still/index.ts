@@ -81,6 +81,11 @@ async function saveToClipboard(): Promise<void> {
 const mod: FeatureModule = {
   id: 'capture-still',
   ownsProperties: ['screenshot-*'],
+  // `screenshot` returns a BARE RELATIVE FILENAME unless screenshot-directory
+  // is set first, and fails outright with `scaled`/`window` when there is no
+  // window-backed VO (§7.7 traps 3 and 4). Both are M22's problem to get right
+  // once, not everyone's to rediscover.
+  ownsCommands: ['screenshot', 'screenshot-to-file'],
 
   setup(c): void {
     ctx = c

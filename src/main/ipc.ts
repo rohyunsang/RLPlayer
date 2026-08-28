@@ -16,6 +16,7 @@ import { setVideoRegion } from './core/window/windows'
 import { notifyVideoRegion } from './core/window/index.ts'
 import { commandRegistry, resolvedKeybinds, setBinding, setPreset } from './core/input/index.ts'
 import { messageCatalog, t } from './core/i18n/index.ts'
+import { mpvBus } from './core/mpv/bus.ts'
 import type { SettingsRegistry } from './core/settings/registry.ts'
 import type { FileFilter, SettingDescriptor, SettingSection, SettingType } from '@shared/feature-api'
 import type { LegacyBridge } from './core/legacy-bridge.ts'
@@ -235,6 +236,10 @@ export function registerCoreIpc(deps: CoreIpcDeps): void {
       return res.canceled ? null : (res.filePaths[0] ?? null)
     }
   )
+
+  // Ownership refusals, for the stats overlay. Empty in a dev build, because
+  // there a foreign write throws instead.
+  ipcMain.handle('core-mpv:refusals', () => mpvBus.refusals())
 
   // The catalog, flattened. Both renderer windows fetch it once at boot so
   // `ctx.t()` is synchronous by the time a module builds its DOM.

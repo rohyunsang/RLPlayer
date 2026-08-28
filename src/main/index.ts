@@ -102,6 +102,11 @@ if (!gotLock) {
   })
 
   app.whenReady().then(main).catch((e: Error) => {
+    // stderr FIRST. `showErrorBox` is modal and blocks the main process
+    // outright, so a boot failure with only a dialog behind it looks exactly
+    // like a hang — the window is up, the CDP endpoint stops answering, and
+    // there is nothing in any log to say why.
+    console.error('[boot] RLPlayer failed to start:', e.stack ?? e.message)
     dialog.showErrorBox(t('core.startFailed'), e.stack ?? e.message)
     app.quit()
   })
@@ -130,11 +135,11 @@ function pushState(): void {
   const ui = getUiWindow()
   if (!ui) return
   const video = getVideoWindow()
-  const s = mpvBus.manager.state
+  const s = mpvBus.playerState
   s.fullscreen = video?.isFullScreen() ?? false
   s.maximized = video?.isMaximized() ?? false
   s.alwaysOnTop = video?.isAlwaysOnTop() ?? false
-  s.layoutMode = mpvBus.manager.state.layoutMode
+  s.layoutMode = mpvBus.playerState.layoutMode
   ui.webContents.send('player:state', s)
   setPlaying(!s.paused && !s.idle)
 }
@@ -205,7 +210,7 @@ async function main(): Promise<void> {
   })
 
   const legacy = new LegacyBridge(commandRegistry, osd)
-  setLegacyVolumeReader(() => mpvBus.manager.state.volume)
+  setLegacyVolumeReader(() => mpvBus.playerState.volume)
 
   registerCoreCommands({
     commands: commandRegistry,
@@ -225,6 +230,19 @@ async function main(): Promise<void> {
     toast
   })
 
+  /**
+   * The core IPC handlers go up BEFORE the modules load, and long before
+   * `showWindows`.
+   *
+   * `createWindows()` has already told both renderers to load their URL, so the
+   * overlay can reach `core-i18n:messages` within a few hundred milliseconds.
+   * Registering these at the end of boot -- after `mpvBus.start()`, which waits
+   * on a child process and a named pipe -- lost that race every time, and the
+   * only symptom was labels rendering as their message keys. Nothing about
+   * these handlers needs mpv to be running.
+   */
+  registerCoreIpc({ legacy, menu, osd, settings, pushState })
+
   // --- the mpv bus: core args, then every module's contributions ---
   mpvBus.attachHost({
     hwnd: () => {
@@ -240,8 +258,8 @@ async function main(): Promise<void> {
   // adding a directory. Nothing here names one.
   await registry.loadAll(collectFeatureModules())
 
-  mpvBus.manager.on('state', pushState)
-  mpvBus.manager.on('crashed', (code: number, detail: string) => {
+  mpvBus.onManager('state', pushState)
+  mpvBus.onManager('crashed', (code: number, detail: string) => {
     toast(`재생 엔진이 종료되었습니다 (code ${code}). ${detail.split('\n')[0] ?? ''}`.trim(), 'error')
   })
   mpvBus.afterFileLoaded((file) => perFile?.onFileLoaded(file))
@@ -254,7 +272,20 @@ async function main(): Promise<void> {
     return
   }
 
-  registerCoreIpc({ legacy, menu, osd, settings, pushState })
+  /**
+   * §3.5 rule 5 keeps its leniency: in a SHIPPED build a foreign property write
+   * is dropped and counted rather than thrown, because one misbehaving module
+   * must not black-screen the player. What changes is that the refusal is no
+   * longer invisible. `refusalCount` was never read anywhere in src/, so the
+   * "surfaced in stats" comment on the owner map was simply false and a
+   * corrupted-state bug looked exactly like a working build.
+   *
+   * The first refusal now shows a toast the user can quote in a bug report, and
+   * every refusal reaches the stats overlay through `core-mpv:refusals`.
+   */
+  mpvBus.onFirstRefusal((moduleId) => {
+    toast(t('core.ownershipRefused', { id: moduleId }), 'error')
+  })
 
   showWindows(cfg.window.maximized)
   registry.fireReady()
@@ -264,7 +295,18 @@ async function main(): Promise<void> {
   if (portableFallback()) toast(t('core.portableFallback'), 'error')
 
   const files = filesFromArgv(process.argv)
-  if (files.length > 0) await commandRegistry.invoke('playlist.openPaths', files)
+  if (files.length > 0) {
+    // Isolated deliberately. In dev an ownership violation THROWS, and until
+    // this catch existed one bad write on the open path escaped all the way to
+    // main()'s handler, where `showErrorBox` blocks the main process — so the
+    // symptom was a window that came up, painted once, and then answered
+    // nothing at all, with no log line anywhere. Opening a file is not part of
+    // starting the app.
+    await commandRegistry.invoke('playlist.openPaths', files).catch((e: Error) => {
+      console.error('[boot] opening the command-line files failed:', e.stack ?? e.message)
+      toast(e.message, 'error')
+    })
+  }
 }
 
 /**

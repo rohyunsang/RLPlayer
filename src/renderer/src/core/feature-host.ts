@@ -117,6 +117,36 @@ export function registerRendererMessages(m: Record<string, string>): void {
   for (const [k, v] of Object.entries(m)) messages.set(k, v)
 }
 
+/**
+ * Fetch the catalog, with a few retries.
+ *
+ * Both windows start loading the moment `createWindows()` runs, which is before
+ * main has finished wiring its IPC handlers, so the very first invoke can lose
+ * a race it did not know it was in. Main registers the core handlers early now,
+ * but "early" is not "synchronously with window creation": the honest fix is
+ * for the renderer to accept that main comes up too, and to retry briefly
+ * rather than render every label as its own message key for the session.
+ */
+export async function fetchMessages(
+  invoke: (channel: string) => Promise<unknown>,
+  attempts = 10,
+  delayMs = 100
+): Promise<boolean> {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const m = (await invoke('core-i18n:messages')) as Record<string, string>
+      if (m && Object.keys(m).length > 0) {
+        registerRendererMessages(m)
+        return true
+      }
+    } catch {
+      /* main is not up yet */
+    }
+    await new Promise((r) => setTimeout(r, delayMs))
+  }
+  return false
+}
+
 export function t(key: string, params?: Record<string, string | number>): string {
   const raw = messages.get(key) ?? key
   if (!params) return raw

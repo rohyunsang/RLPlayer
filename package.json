@@ -15,10 +15,16 @@
     "start": "electron-vite preview",
     "dist": "npm run build && electron-builder --win --publish never",
     "test": "node --test \"src/**/*.test.ts\"",
+    "test:property-ownership": "node --test \"src/main/core/mpv/ownership.test.ts\" \"src/main/core/mpv/guards.test.ts\"",
+    "test:reserved-args": "node --test \"src/main/core/mpv/reserved.test.ts\" \"src/main/core/mpv/arg-owner.test.ts\"",
+    "test:renderer-hosts": "node --test \"src/renderer/src/core/*.test.ts\"",
     "verify:sort": "node scripts/verify-natural-sort.mjs",
     "make:icon": "electron scripts/make-icon.js",
     "check:forbidden": "node scripts/check-forbidden.mjs",
-    "verify": "npm run typecheck && npm run test && npm run verify:sort && npm run check:forbidden"
+    "check:partition": "node scripts/check-partition.mjs",
+    "check:network": "node scripts/check-network.mjs",
+    "verify": "npm run typecheck && npm run test && npm run verify:sort && npm run check:forbidden && npm run check:partition",
+    "e2e:overlay": "node scripts/e2e-overlay.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.4.0",

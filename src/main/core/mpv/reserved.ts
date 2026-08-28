@@ -143,10 +143,52 @@ function isCoreReserved(name: string): boolean {
 }
 
 /**
+ * "An option follows its property's owner" (§4 of the module author's guide),
+ * as code rather than as prose.
+ *
+ * Until now this rule was documented and unimplemented, and the gap had a
+ * name: M05 (video-hdr, V33) and M06 (video-scaler, V36) BOTH declare
+ * `requestsProperties: ['d3d11-output-format']` — a property M07 owns — and
+ * both need it set before the first frame, so both would have reached for
+ * `contributeArgs('--d3d11-output-format=...')`. The duplicate check would
+ * then have thrown at boot and the app would have hard-refused to start the
+ * day the second of them landed. Nobody would have found that in review,
+ * because each module is correct on its own.
+ *
+ * With the owner map wired in, the failure moves to whichever of the two adds
+ * the contribution FIRST, at that module's own boot, with M07 named — and the
+ * fix (ask M07's arbiter) is in the message.
+ */
+export type OptionOwnerLookup = (option: string) => string | null
+
+/**
+ * mpv options whose name is not literally their property's name. Small and
+ * explicit: guessing a mapping is how you end up refusing a legitimate flag.
+ */
+const OPTION_PROPERTY_ALIASES: Record<string, string> = {
+  // `--vf-add` / `--af-add` are the chains' own; the property is `vf` / `af`.
+  'vf-add': 'vf',
+  'af-add': 'af',
+  'vf-append': 'vf',
+  'af-append': 'af'
+}
+
+function propertyForOption(name: string): string {
+  return OPTION_PROPERTY_ALIASES[name] ?? name
+}
+
+/**
  * The boot check. Throws `ContributionError` naming both contributors, or the
  * flag and its Electron replacement, so the build fails rather than the user.
+ *
+ * `ownerOf` is the property owner map. It is optional only so the reserved-args
+ * suite can exercise the other three rules in isolation; the bus always passes
+ * it.
  */
-export function validateArgContributions(contributions: readonly ArgContribution[]): void {
+export function validateArgContributions(
+  contributions: readonly ArgContribution[],
+  ownerOf?: OptionOwnerLookup
+): void {
   const seen = new Map<string, string>()
   for (const c of contributions) {
     const local = new Set<string>()
@@ -174,6 +216,24 @@ export function validateArgContributions(contributions: readonly ArgContribution
             `mpv accepts it, reports success and does nothing, because it does not own the window. ` +
             `Use ${advice} instead.`
         )
+      }
+
+      // §4: an option follows its property's owner. Checked BEFORE the
+      // additive exemption, because `--vf-append` is additive as an option and
+      // still belongs to the chain that owns `vf`.
+      if (c.ownerId !== 'core/mpv/bus' && ownerOf) {
+        const property = propertyForOption(name)
+        const owner = ownerOf(property)
+        if (owner !== null && owner !== c.ownerId) {
+          throw new ContributionError(
+            `module '${c.ownerId}' contributes '${arg}', but the '${property}' property is ` +
+              `owned by '${owner}' (§3.7). An option follows its property's owner: a spawn arg ` +
+              `is a property write that happens before the first frame, and letting a ` +
+              `non-owner set one is exactly the silent last-one-wins race the owner map ` +
+              `exists to stop. Ask ${owner} through ctx.mpv.requestSet('${property}', …) or ` +
+              `its mediator command, and let ${owner} contribute the arg.`
+          )
+        }
       }
 
       if (ADDITIVE_OPTIONS.includes(name)) continue

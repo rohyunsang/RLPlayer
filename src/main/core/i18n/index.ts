@@ -161,7 +161,11 @@ export function registerCoreMessages(): void {
     'core.keybindPreset.mpv': 'mpv 호환',
     'core.keybindHint':
       '개별 단축키는 설정 파일의 keybinds 항목에서 바꿀 수 있습니다. 프리셋 위에 덮어쓰는 방식이라 바꾸고 싶은 키만 적으면 됩니다.',
-    'core.toggleStats': '재생 정보 표시'
+    'core.toggleStats': '재생 정보 표시',
+    'core.ownershipRefused':
+      '{id} 기능이 다른 기능의 설정을 바꾸려다 차단되었습니다. 재생 정보(I)에서 자세한 내용을 볼 수 있습니다.',
+    'core.refusals': '차단된 쓰기',
+    'core.refusalsNone': '없음'
   })
   registerMessages(null, 'en', {
     'core.startFailed': 'RLPlayer failed to start',
@@ -212,6 +216,10 @@ export function registerCoreMessages(): void {
     'core.keybindPreset.mpv': 'mpv compatible',
     'core.keybindHint':
       'Individual shortcuts live under `keybinds` in the settings file. They layer on top of the preset, so you only list the keys you want to change.',
-    'core.toggleStats': 'Show playback statistics'
+    'core.toggleStats': 'Show playback statistics',
+    'core.ownershipRefused':
+      '{id} tried to change another feature’s state and was blocked. Press I for details.',
+    'core.refusals': 'Blocked writes',
+    'core.refusalsNone': 'none'
   })
 }

@@ -57,6 +57,19 @@ export interface FeatureModule {
    */
   readonly ownsProperties?: readonly string[]
 
+  /**
+   * mpv COMMANDS only this module may issue. Same syntax, same duplicate
+   * detection and same runtime guard as `ownsProperties`.
+   *
+   * This exists because `sub-reload` was declared in M17's `ownsProperties`,
+   * where it did precisely nothing: it is not a property (mpv answers
+   * "property not found"), it is a command, and nothing stopped M18 or M19
+   * from calling `ctx.mpv.command(['sub-reload'])` straight past the owner map.
+   * A command that reloads another module's tracks needs an owner exactly as
+   * much as the property behind it does.
+   */
+  readonly ownsCommands?: readonly string[]
+
   /** Properties this module may touch only via `ctx.mpv.requestSet()`. */
   readonly requestsProperties?: readonly string[]
 

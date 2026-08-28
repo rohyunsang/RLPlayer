@@ -136,6 +136,7 @@ interface ManifestModule {
   id: string
   path: string
   ownedProperties: string[]
+  ownedCommands: string[]
 }
 
 function manifest(): ManifestModule[] {
@@ -144,14 +145,22 @@ function manifest(): ManifestModule[] {
   ) as ManifestModule[]
 }
 
-/** Declared properties, read out of the module source rather than imported —
+/** Declared names, read out of the module source rather than imported —
  *  importing a module would drag Electron in. */
-function declaredProperties(dir: string): string[] {
+function declaredList(dir: string, field: 'ownsProperties' | 'ownsCommands'): string[] {
   const src = fs.readFileSync(path.join(repo, 'src', 'main', 'features', dir, 'index.ts'), 'utf8')
-  const m = /ownsProperties:\s*\[([\s\S]*?)\]/.exec(src)
+  const m = new RegExp(`${field}:\\s*\\[([\\s\\S]*?)\\]`).exec(src)
   if (!m) return []
-  return [...(m[1] ?? '').matchAll(/'([^']+)'/g)].map((x) => x[1] as string)
+  // Comments FIRST. These arrays are exactly where a module author explains why
+  // it owns something, and an English apostrophe ("loadfile's options map")
+  // reads as a quoted string to a naive scraper -- which is a test that fails
+  // on a comment, i.e. the most annoying kind of false positive there is.
+  const body = (m[1] ?? '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+  return [...body.matchAll(/'([^']+)'/g)].map((x) => x[1] as string)
 }
+
+const declaredProperties = (dir: string): string[] => declaredList(dir, 'ownsProperties')
+const declaredCommands = (dir: string): string[] => declaredList(dir, 'ownsCommands')
 
 function covers(declared: readonly string[], property: string): boolean {
   return declared.some((d) => (d.endsWith('*') ? property.startsWith(d.slice(0, -1)) : d === property))
@@ -187,6 +196,60 @@ test('every implemented module agrees with modules.json in both directions', () 
       assert.ok(
         listed,
         `${entry.id} (${dir}): the module declares '${p}' but modules.json does not list it`
+      )
+    }
+
+    // ownsCommands gets the same cross-check, in both directions. `sub-reload`
+    // is exactly why: it was declared as a PROPERTY, where the guard never
+    // fired, and the manifest happily agreed with the mistake.
+    assert.deepEqual(
+      [...declaredCommands(dir)].sort(),
+      [...(entry.ownedCommands ?? [])].sort(),
+      `${entry.id} (${dir}): ownsCommands and modules.json ownedCommands disagree`
+    )
+  }
+})
+
+test('no module claims one of mpv’s COMMANDS as a property', () => {
+  // `sub-reload` is a command -- it is in --input-cmdlist, and mpv answers
+  // "property not found" when you read it. Declaring it in ownsProperties
+  // enforced precisely nothing while M18 and M19 could call it at will.
+  const featuresDir = path.join(repo, 'src', 'main', 'features')
+  const commandNames = new Set([
+    'sub-reload',
+    'sub-add',
+    'sub-remove',
+    'audio-add',
+    'audio-remove',
+    'audio-reload',
+    'video-add',
+    'video-remove',
+    'video-reload',
+    'ao-reload',
+    'rescan-external-files',
+    'screenshot',
+    'screenshot-to-file',
+    'screenshot-raw',
+    'loadfile',
+    'loadlist',
+    'stop',
+    'quit',
+    'frame-step',
+    'frame-back-step',
+    'ab-loop',
+    'drop-buffers',
+    'revert-seek',
+    'show-progress',
+    'playlist-shuffle',
+    'playlist-clear'
+  ])
+  for (const d of fs.readdirSync(featuresDir, { withFileTypes: true })) {
+    if (!d.isDirectory()) continue
+    for (const p of declaredProperties(d.name)) {
+      assert.ok(
+        !commandNames.has(p),
+        `${d.name} declares '${p}' in ownsProperties, but it is a COMMAND. ` +
+          `Move it to ownsCommands, which is where the guard actually fires.`
       )
     }
   }

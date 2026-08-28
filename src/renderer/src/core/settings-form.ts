@@ -1,7 +1,7 @@
 import './settings.css'
 import {
+  fetchMessages,
   onContributionsChanged,
-  registerRendererMessages,
   settingsComponents,
   settingsSections,
   t
@@ -444,13 +444,7 @@ export async function bootSettingsWindow(loadFeatures: () => void): Promise<void
   const root = document.getElementById('settingsRoot')
   if (!root) throw new Error('missing #settingsRoot')
 
-  try {
-    registerRendererMessages(
-      (await bridge.invoke('core-i18n:messages')) as Record<string, string>
-    )
-  } catch (e) {
-    console.warn('[settings] message catalog unavailable:', e)
-  }
+  await fetchMessages((ch) => bridge.invoke(ch))
 
   // Modules register their settingsSection()s and settingsComponent()s during
   // setup, so they must be loaded BEFORE the first render.

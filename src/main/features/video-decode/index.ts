@@ -14,6 +14,27 @@ import { loadConfig, saveConfig } from '../../services/config.ts'
 
 let ctx: FeatureContext
 
+/**
+ * Who currently holds each mediated d3d11 surface option, and at what value.
+ * `null` means nobody has asked yet and mpv's default stands.
+ */
+const surface: Record<'d3d11-output-format' | 'd3d11-output-csp', {
+  value: string | null
+  holder: string | null
+}> = {
+  'd3d11-output-format': { value: null, holder: null },
+  'd3d11-output-csp': { value: null, holder: null }
+}
+
+/**
+ * The tie-break, written down rather than left to whoever calls last.
+ * HDR passthrough (V33) outranks dither depth (V36) because rgba16f is a
+ * superset of rgb10_a2; anything else is a first-come-first-served draw.
+ */
+function rank(moduleId: string): number {
+  return moduleId === 'video-hdr' ? 2 : moduleId === 'video-scaler' ? 1 : 0
+}
+
 const mod: FeatureModule = {
   id: 'video-decode',
   ownsProperties: [
@@ -109,7 +130,16 @@ const mod: FeatureModule = {
       // V52: mpv's default letterbox fill is a checkerboard, which looks like a
       // rendering fault on a 2.35:1 film in a 16:9 window.
       '--background=color',
-      '--background-color=#FF000000'
+      '--background-color=#FF000000',
+      // The mediated surface options. M07 contributes them because M07 owns
+      // them; M05 and M06 ask through the arbiter above. That is the whole of
+      // "an option follows its property's owner" in practice.
+      ...(surface['d3d11-output-format'].value
+        ? [`--d3d11-output-format=${surface['d3d11-output-format'].value}`]
+        : []),
+      ...(surface['d3d11-output-csp'].value
+        ? [`--d3d11-output-csp=${surface['d3d11-output-csp'].value}`]
+        : [])
     ])
 
     ctx.commands.register([
@@ -138,6 +168,48 @@ const mod: FeatureModule = {
         }
       }
     ])
+
+    /**
+     * The V33 / V36 arbitration, and the reason this module exists as an owner
+     * rather than as a settings page.
+     *
+     * M05 (video-hdr) needs `d3d11-output-format=rgba16f` for HDR passthrough
+     * (V33). M06 (video-scaler) wants `rgb10_a2` for 10-bit dithering (V36).
+     * Both declare it in `requestsProperties`; neither owns it; it is
+     * spawn-scoped, so before the option -> owner rule was implemented both
+     * would have reached for `contributeArgs('--d3d11-output-format=...')` and
+     * the app would have HARD-REFUSED TO BOOT the day the second of them
+     * landed. Each module is correct on its own, which is why review would not
+     * have caught it.
+     *
+     * The two values are mutually exclusive and one of them is strictly better:
+     * `rgba16f` is a 16-bit float surface, so it carries everything `rgb10_a2`
+     * carries and the HDR range besides. M07 therefore holds HDR above dither
+     * and says so in the refusal, rather than letting last-writer-win decide it
+     * silently. `requestRestart` because mpv cannot change the swapchain format
+     * in place.
+     */
+    for (const property of ['d3d11-output-format', 'd3d11-output-csp'] as const) {
+      ctx.mpv.arbitrate(property, async (value, req) => {
+        const want = String(value)
+        const current = surface[property]
+        if (current.value === want) return { ok: true }
+        if (current.holder !== null && rank(current.holder) > rank(req.from)) {
+          return {
+            ok: false,
+            reason:
+              `${current.holder} holds ${property} at '${current.value}' and outranks ` +
+              `${req.from}: a 16-bit float surface carries everything a 10-bit one does, ` +
+              `plus the HDR range, so dropping it would break V33.`
+          }
+        }
+        surface[property] = { value: want, holder: req.from }
+        ctx.log.info(`${property} -> ${want} for ${req.from}: ${req.reason}`)
+        // Restart-scoped: the swapchain format is fixed when the VO comes up.
+        ctx.mpv.requestRestart(`${property} = ${want}`)
+        return { ok: true }
+      })
+    }
 
     // The stats overlay's decoder row, contributed through ctx.statsSection()
     // from this module's renderer half. Nothing in main.ts knows it exists.
