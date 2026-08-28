@@ -1,0 +1,52 @@
+/*
+ * M27 nav-thumbnails, renderer half. Owned by this module and imported by its
+ * index.ts, exactly as M25's chapter ticks and M28's playlist panel are.
+ *
+ * `.seek-hover` is core's BOX and `.seek-tip-time` is core's fragment inside it;
+ * everything below is this module's own fragment. None of it goes anywhere near
+ * `src/renderer/src/styles.css`, which is `core-renderer`'s file and sits in the
+ * mustNotTouch list of 40 of the 55 rows in docs/parity/modules.json — the
+ * collision §6.3 sets up by putting chapter ticks (M25), bookmark pins (M26) and
+ * this preview (M27) on one bar.
+ */
+
+.rl-thumb-tip {
+  display: block;
+  /* Core's box is `white-space: nowrap` for its timecode; a caption under a
+     288 px image needs to wrap inside it. */
+  white-space: normal;
+  max-width: 480px;
+}
+
+.rl-thumb-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* The intrinsic size is the frame's, set in JS; this only keeps a very wide
+     preview from pushing the tooltip past the window edge. */
+  max-width: 480px;
+  margin: 2px 0;
+  border-radius: 3px;
+  background: #000;
+  image-rendering: auto;
+}
+
+.rl-thumb-canvas[hidden] {
+  display: none;
+}
+
+/*
+ * N37's caption. M25 already contributes a chapter title when the pointer is
+ * within `tolerancePx` of one of its ticks, so this one is suppressed inside
+ * that band rather than printing the same title twice (see preview-state.ts).
+ */
+.rl-thumb-chapter {
+  display: block;
+  font-size: 11px;
+  opacity: 0.85;
+  text-align: center;
+}
+
+.rl-thumb-chapter[hidden] {
+  display: none;
+}
