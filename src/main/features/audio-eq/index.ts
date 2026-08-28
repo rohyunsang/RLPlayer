@@ -396,6 +396,7 @@ const mod: FeatureModule = {
         labelKey: 'audio-eq.toggle',
         category: 'audio',
         menuPath: 'audio',
+        menuOrder: 30,
         // PotPlayer opens its equaliser from the same chord; mpv has no EQ of
         // its own, so its preset gets nothing rather than an invention.
         defaults: { default: ['Ctrl+KeyE'], potplayer: ['Ctrl+KeyE'] },
