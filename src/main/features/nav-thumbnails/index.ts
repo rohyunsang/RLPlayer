@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { FeatureContext, FeatureModule } from '@shared/feature-api'
+import type { ThumbFrame, ThumbStatus } from '@shared/features/nav-thumbnails/wire'
 import { PosterCache } from './poster.ts'
 import { Thumbnailer } from './thumbnailer.ts'
 import {
@@ -62,23 +63,15 @@ function frameCacheFor(g: ThumbGeometry): LruMap<CachedFrame> {
   return new LruMap<CachedFrame>(Math.max(16, Math.floor(FRAME_CACHE_BYTES / frameBytes(g))))
 }
 
-interface CachedFrame {
-  readonly key: string
-  readonly time: number
-  readonly width: number
-  readonly height: number
-  readonly exact: boolean
-  readonly rgba: Uint8Array
-}
-
-interface ThumbStatus {
-  readonly enabled: boolean
-  readonly available: boolean
-  readonly width: number
-  readonly height: number
-  /** Seconds per cache bucket, so the overlay asks once per bucket, not per px. */
-  readonly stepSec: number
-}
+/**
+ * The cached frame IS the wire payload, and both halves now read one definition
+ * of it. `CachedFrame` and `ThumbStatus` were declared here and again in
+ * `src/renderer/src/features/nav-thumbnails/index.ts`, because the two halves
+ * share no compilation unit -- so adding a field to one side was a silent
+ * `undefined` on the wire rather than a type error. See the header of
+ * `src/shared/features/nav-thumbnails/wire.ts`.
+ */
+type CachedFrame = ThumbFrame
 
 let thumbnailer: Thumbnailer | null = null
 let posters: PosterCache | null = null

@@ -1,6 +1,16 @@
 import './nav-thumbnails.css'
 import type { RendererFeatureModule } from '../../../../shared/renderer-api.ts'
 import type { Chapter } from '../../../../shared/types.ts'
+/**
+ * ONE definition of each wire type, checked at BOTH ends.
+ *
+ * `ThumbStatus` and `ThumbFrame` were declared here and again in this module's
+ * main half. A module's two halves share no compilation unit
+ * (`tsconfig.web.json` excludes `src/main`), so the compiler could not compare
+ * them and a field added on one side arrived as `undefined` on the other.
+ * `src/shared/features/<id>/` is in both configs and is owned by this module.
+ */
+import type { ThumbFrame, ThumbStatus } from '../../../../shared/features/nav-thumbnails/wire.ts'
 import { bucketTime, chapterAt, LruMap } from './preview-state.ts'
 
 /**
@@ -38,22 +48,6 @@ import { bucketTime, chapterAt, LruMap } from './preview-state.ts'
 const MOVE_THROTTLE_MS = 50
 const SETTLE_MS = 150
 
-interface ThumbStatus {
-  enabled: boolean
-  available: boolean
-  width: number
-  height: number
-  stepSec: number
-}
-
-interface ThumbFrame {
-  key: string
-  time: number
-  width: number
-  height: number
-  exact: boolean
-  rgba: Uint8Array
-}
 
 const mod: RendererFeatureModule = {
   id: 'nav-thumbnails',
