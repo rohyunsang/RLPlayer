@@ -34,6 +34,7 @@ function label(t: Track): string {
 
 const mod: FeatureModule = {
   id: 'subs-tracks',
+  dependsOn: ['core-mpv-bus', 'subs-formats'],
   ownsProperties: [
     'sid',
     'secondary-sid',
