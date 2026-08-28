@@ -1,0 +1,55 @@
+/*
+ * M22 capture-still — the module's own stylesheet.
+ *
+ * Every selector here is private to this module and lives in this directory,
+ * which is the rule `check:partition` enforces symbol by symbol: M25's
+ * `.seek-chapter-tick` used to sit in core's `styles.css`, a file named in the
+ * mustNotTouch list of 40 of the 55 manifest rows. Core owns the <button> and
+ * its `icon-btn` class; what is inside it is ours.
+ */
+
+.cap-burst-badge {
+  position: absolute;
+  right: 1px;
+  bottom: 0;
+  padding: 0 3px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #ffd479;
+  font-size: 9px;
+  line-height: 12px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+/* The transport button core created is positioned static; the badge needs a
+ * containing block, and giving it one is a change to OUR subtree only. */
+.cap-bursting {
+  position: relative;
+  color: #ffd479;
+}
+
+.cap-legend {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 10px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.cap-legend dt {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  opacity: 0.9;
+  white-space: nowrap;
+}
+
+.cap-legend dd {
+  margin: 0;
+  opacity: 0.75;
+}
+
+.cap-legend-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  opacity: 0.7;
+}
