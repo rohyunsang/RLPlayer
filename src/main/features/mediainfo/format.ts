@@ -146,6 +146,16 @@ function gcd(a: number, b: number): number {
  */
 export function formatAspect(w: unknown, h: unknown): string {
   if (!isNum(w) || !isNum(h) || w <= 0 || h <= 0) return UNKNOWN
+  /**
+   * The named ratios, and one thing to know about `21:9`: almost no real
+   * ultrawide file matches it. `21/9` is 2.3333; a 2560x1080 file is exactly
+   * 64:27 (2.3704) and a 3440x1440 file is 43:18 (2.3889), both outside the
+   * 0.01 tolerance. So real ultrawide content falls to the reduced-pair branch
+   * and renders as `64:27`, which is what the container actually declares.
+   * That is deliberate: `21:9` is a marketing name for two different ratios,
+   * and a media-info panel that prints a marketing name instead of the
+   * declared one is the same defect as printing `24 fps` for 23.976.
+   */
   const known: ReadonlyArray<[number, number]> = [
     [16, 9],
     [4, 3],
@@ -227,7 +237,27 @@ export function codecLabel(desc: unknown, codec: unknown, profile: unknown): str
   const p = str(profile)
   const base = d ?? c
   if (!base) return UNKNOWN
-  const withCodec = d && c && !d.toLowerCase().includes(c.toLowerCase()) ? `${d} [${c}]` : base
+  /**
+   * "Does the description already name the codec?" compared with a plain
+   * `includes()` on the lower-cased strings, and got the answer wrong for the
+   * single most common codec there is. The pinned mpv answers
+   * `current-tracks/video/codec-desc` = `H.264 / AVC / MPEG-4 AVC` and
+   * `.../codec` = `h264`, and `'h.264 / avc / mpeg-4 avc'.includes('h264')` is
+   * FALSE -- the punctuation is between the letter and the digits. So every
+   * H.264 file rendered as
+   *
+   *     H.264 / AVC / MPEG-4 AVC [h264], High
+   *
+   * i.e. the redundant tag this branch exists to suppress, on the codec it
+   * matters most for. The same holds for `H.265 / HEVC` vs `hevc` and
+   * `MPEG-4 part 2` vs `mpeg4`.
+   *
+   * Compared on alphanumerics only, `h264avcmpeg4avc` contains `h264` and the
+   * tag is dropped, while a genuinely different desc (`Dolby Vision` vs
+   * `hevc`) still gets it -- which is the case the branch is FOR.
+   */
+  const squash = (v: string): string => v.toLowerCase().replace(/[^a-z0-9]/g, '')
+  const withCodec = d && c && !squash(d).includes(squash(c)) ? `${d} [${c}]` : base
   // L24: "`codec-profile` only exists once the track has been decoded", so the
   // profile is additive and never load-bearing.
   return p ? `${withCodec}, ${p}` : withCodec

@@ -27,12 +27,9 @@ const M: Readonly<Record<string, Pair>> = {
   'mediainfo.density.full': ['전체', 'Full'],
   'mediainfo.density.short': ['간략', 'Short'],
   'mediainfo.density.misc': ['기타', 'Misc'],
-  'mediainfo.expand': ['자세히', 'Details'],
   'mediainfo.selectedTrack': ['선택됨', 'selected'],
   'mediainfo.artAlt': ['앨범 아트', 'Album art'],
   'mediainfo.embeddedArt': ['내장 앨범 아트 있음', 'Embedded cover art present'],
-  'mediainfo.noArt': ['앨범 아트를 찾을 수 없습니다', 'No cover art found'],
-  'mediainfo.probing': ['정보를 읽는 중…', 'Reading media info…'],
   'mediainfo.approxNote': [
     '프레임 번호는 추정값입니다',
     'Frame numbers are estimates'
@@ -51,6 +48,10 @@ const M: Readonly<Record<string, Pair>> = {
   'mediainfo.shellPropertiesCmd': ['Windows 파일 속성', 'Windows file properties'],
   'mediainfo.mpvStatsToggle': ['mpv 내장 통계 표시', 'Toggle mpv built-in stats'],
   'mediainfo.mpvStatsNextPage': ['mpv 통계 다음 페이지', 'mpv stats: next page'],
+  'mediainfo.mpvStatsPage': ['mpv 통계 페이지', 'mpv stats page'],
+  'mediainfo.mpvStatsTitle': ['mpv 내장 통계', 'mpv built-in stats'],
+  'mediainfo.menuTitle': ['미디어 정보', 'Media info'],
+  'mediainfo.probeFile': ['파일 정보 읽기', 'Read file info'],
 
   // --- toasts --------------------------------------------------------------
   'mediainfo.copied': ['미디어 정보를 클립보드에 복사했습니다', 'Media info copied to clipboard'],
@@ -64,6 +65,10 @@ const M: Readonly<Record<string, Pair>> = {
   'mediainfo.mpvStatsHint': [
     'mpv 통계는 영상 위에 직접 그려집니다',
     'mpv draws its stats inside the video surface'
+  ],
+  'mediainfo.mpvStatsUnavailable': [
+    'mpv 내장 통계 스크립트를 사용할 수 없습니다',
+    "mpv's built-in stats script is not available"
   ],
 
   // --- settings ------------------------------------------------------------
@@ -98,7 +103,6 @@ const M: Readonly<Record<string, Pair>> = {
   'mediainfo.group.chapters': ['챕터', 'Chapters'],
   'mediainfo.group.tracks': ['트랙', 'Tracks'],
   'mediainfo.group.diagnostics': ['진단 정보', 'Diagnostics'],
-  'mediainfo.group.file': ['파일', 'File'],
 
   // --- fields --------------------------------------------------------------
   'mediainfo.f.filename': ['파일 이름', 'File name'],

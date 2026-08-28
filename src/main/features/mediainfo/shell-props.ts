@@ -64,9 +64,22 @@ export function splitForShell(p: string): { dir: string; name: string } | null {
   const norm = p.replace(/\//g, '\\')
   const slash = norm.lastIndexOf('\\')
   if (slash < 0) return null
-  const dir = norm.slice(0, slash) || norm.slice(0, slash + 1)
   const name = norm.slice(slash + 1)
   if (name.length === 0) return null
+  /**
+   * A DRIVE ROOT KEEPS ITS SEPARATOR, and this is not cosmetic.
+   *
+   * `D:\a.mkv` splits at index 2, so the naive `norm.slice(0, slash)` is
+   * `'D:'` -- and to Windows `D:` is *the current directory on drive D*, not
+   * `D:\`. `Shell.Application.Namespace('D:')` therefore resolves against
+   * whatever directory the process happens to be sitting in, and the dialog
+   * either fails or opens on the wrong object. The original spelling here was
+   * `slice(0, slash) || slice(0, slash + 1)`, whose fallback can only fire when
+   * the first character is the separator, so the drive-root case it was
+   * evidently written for never reached it.
+   */
+  let dir = norm.slice(0, slash)
+  if (dir.length === 0 || /^[A-Za-z]:$/.test(dir)) dir = norm.slice(0, slash + 1)
   return { dir, name }
 }
 

@@ -57,7 +57,7 @@ import {
   textOr,
   UNKNOWN
 } from './format.ts'
-import type { InfoGroup, InfoRow, MediaInfoState, TrackRow } from './wire.ts'
+import type { InfoGroup, InfoRow, InfoTab, MediaInfoState, TrackRow } from './wire.ts'
 
 export type Props = Readonly<Record<string, unknown>>
 
@@ -602,6 +602,7 @@ function miscRows(p: Props): InfoRow[] {
 export interface SnapshotOptions {
   open: boolean
   density: MediaInfoState['density']
+  tab: InfoTab
   showApproxFrames: boolean
   artUrl: string | null
   properties: MediaInfoState['properties']
@@ -636,6 +637,7 @@ export function buildState(p: Props, o: SnapshotOptions): MediaInfoState {
   return {
     open: o.open,
     density: o.density,
+    tab: o.tab,
     available,
     path: typeof p['path'] === 'string' ? (p['path'] as string) : null,
     filename: textOr(p['filename']) === UNKNOWN ? '' : (p['filename'] as string),

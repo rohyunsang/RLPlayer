@@ -2,32 +2,28 @@
  * M29 mediainfo -- the payloads that cross this module's own IPC boundary.
  *
  * ---------------------------------------------------------------------------
- * WHY THIS FILE IS HERE AND NOT IN `src/shared/features/mediainfo/`
+ * THIS FILE IS A HAND-MAINTAINED DUPLICATE, AND THAT IS A REPORTED DEFECT
  * ---------------------------------------------------------------------------
- * It should be there. docs/parity/02-wave0-api.md section 10 is explicit:
+ * The body below is BYTE FOR BYTE identical to
+ * `src/main/features/mediainfo/wire.ts` from the first `export` down. It has to
+ * be, and `wire-parity.test.ts` in the main half asserts it, because
+ * `docs/parity/02-wave0-api.md` section 10's answer to this --
+ * `src/shared/features/<your id>/`, compiled by BOTH tsconfigs -- is not
+ * available to M29:
  *
- *   "Your two halves DO have a file they both compile:
- *    `src/shared/features/<your id>/`. Declare every payload that crosses your
- *    own IPC there, once. ... the directory is listed in your row's ownedFiles"
+ *   $ node -e "...modules.json... M29.ownedFiles"
+ *   [ 'src/main/features/mediainfo/', 'src/renderer/src/features/mediainfo/' ]
  *
- * For M29 it is NOT listed. `docs/parity/modules.json`'s M29 row owns exactly
- * two directories, `src/main/features/mediainfo/` and
- * `src/renderer/src/features/mediainfo/`, and `npm run check:partition` fails
- * the build for any file under `src/` that no row claims -- untracked files
- * included (it lists with `git ls-files --cached --others`). M12 audio-eq,
- * M26 nav-bookmarks and M27 nav-thumbnails each have the third entry; the three
- * rows that got it are the three pilots that needed it.
+ * M12 audio-eq, M26 nav-bookmarks and M27 nav-thumbnails each have the third
+ * entry; M29 does not, and `npm run check:partition` fails the build for any
+ * file under `src/` no row claims. Adding one line to the M29 row deletes this
+ * file and its parity test.
  *
- * So the sanctioned location is unavailable to this module without editing
- * `modules.json`, which is not this module's file. The types are therefore
- * duplicated in `src/renderer/src/features/mediainfo/wire.ts`, BYTE FOR BYTE
- * below the header -- which is precisely the defect the shared directory exists
- * to prevent ("five wire types were hand-duplicated ... adding a field on one
- * side is a silent `undefined` on the wire rather than a type error").
- *
- * Reported rather than worked around: adding `"src/shared/features/mediainfo/"`
- * to the M29 row is a one-line manifest change and this file then moves there
- * unchanged.
+ * Until then the guide's own measurement applies to this module too: "adding a
+ * field on one side is a silent `undefined` on the wire rather than a type
+ * error". The parity test is the substitute, and it compares BYTES rather than
+ * shapes, because a test that compared shapes would need the two files in one
+ * compilation unit -- which is the thing that does not exist.
  *
  * Wire-only: no DOM, no `node:*`, no Electron, no behaviour.
  */
