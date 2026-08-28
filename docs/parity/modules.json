@@ -1303,7 +1303,8 @@
     ],
     "ownedFiles": [
       "src/main/features/audio-eq/",
-      "src/renderer/src/features/audio-eq/"
+      "src/renderer/src/features/audio-eq/",
+      "src/shared/features/audio-eq/"
     ],
     "features": [
       "A01",

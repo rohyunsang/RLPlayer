@@ -17,13 +17,22 @@
  *    reinitialise the chain.
  */
 
-/** A01. Centres in Hz, low to high. PotPlayer's ten bands. */
-export const BAND_FREQ: readonly number[] = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
-
-/** A01. Filter widths in Hz, one per band. Measured, not computed. */
-export const BAND_WIDTH: readonly number[] = [22, 44, 88, 175, 350, 700, 1400, 2800, 5600, 11000]
-
-export const BAND_COUNT = 10
+/**
+ * A01's band table now lives in `@shared/features/audio-eq/wire`, which is the
+ * one file BOTH halves of this module compile, and is re-exported here so every
+ * existing importer (and `eq.test.ts`, which asserts the literals) is unchanged.
+ *
+ * It moved because `EqState`'s own comment used to read "the renderer CANNOT
+ * import them: the two halves of a module have no file they both own". They do
+ * now, it is owned by M12, and `src/shared/**` is in both tsconfigs.
+ */
+export {
+  BAND_COUNT,
+  BAND_FREQ,
+  BAND_WIDTH,
+  GAIN_LIMIT
+} from '@shared/features/audio-eq/wire'
+import { BAND_COUNT, BAND_FREQ, BAND_WIDTH, GAIN_LIMIT } from '@shared/features/audio-eq/wire'
 
 /**
  * Declare c0-c7 once and never touch the channel count again.
@@ -35,8 +44,6 @@ export const BAND_COUNT = 10
  */
 export const CHANNEL_COUNT = 8
 
-/** A01: `g` is in dB, matching PotPlayer's +/-12 dB range. */
-export const GAIN_LIMIT = 12
 
 /** The lavfi FILTER NAME — the fourth argument of `af-command` (A27). Not the
  *  label, not 'all': both of those fail. */

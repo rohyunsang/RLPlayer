@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { FeatureContext, FeatureModule, Unsubscribe } from '@shared/feature-api'
+import type { EqState } from '@shared/features/audio-eq/wire'
 import {
   BAND_COUNT,
   BAND_FREQ,
@@ -60,35 +61,6 @@ import {
  * 3. NOT `superequalizer` (A48): linear multipliers, a 0-20 range, and no
  *    `af-command` at all. `anequalizer` is the one the spec verified.
  */
-
-interface PresetWire {
-  id: string
-  builtIn: boolean
-  gains: number[]
-}
-
-interface EqState {
-  enabled: boolean
-  gains: number[]
-  autoPreamp: boolean
-  manualPreamp: number
-  /** What is actually on `@rlpre` right now. */
-  preamp: number
-  presets: PresetWire[]
-  /** The preset the current curve equals, or null for a hand-shaped curve. */
-  presetId: string | null
-  /**
-   * The band centres and the dB limit, sent rather than duplicated.
-   *
-   * The renderer needs them to label and bound the sliders, and it CANNOT
-   * import them: `eq.ts` lives in this module's main directory, `tsconfig.web`
-   * is `composite`, and a composite project rejects a file outside its
-   * `include`. The two halves of a module have no file they both own — see the
-   * report. Sending the table keeps one copy of the verified numbers.
-   */
-  freqs: number[]
-  limit: number
-}
 
 let ctx: FeatureContext
 /** The live curve. Diverges from the stored setting only during a drag. */

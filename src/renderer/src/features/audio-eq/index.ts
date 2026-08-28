@@ -1,4 +1,10 @@
 import './audio-eq.css'
+/**
+ * ONE definition of each wire type, checked at BOTH ends. `EqState` and
+ * `PresetWire` were declared here and again in this module's main half, on
+ * opposite sides of `audio-eq:state`, with nothing comparing them.
+ */
+import type { EqState, PresetWire } from '../../../../shared/features/audio-eq/wire.ts'
 import type { RendererFeatureModule } from '../../../../shared/renderer-api.ts'
 
 /**
@@ -22,24 +28,6 @@ import type { RendererFeatureModule } from '../../../../shared/renderer-api.ts'
  * an EQ change from a keybind (Ctrl+E, next-preset) would leave this page
  * stale. That is what `audio-eq:state` is for.
  */
-
-interface PresetWire {
-  id: string
-  builtIn: boolean
-  gains: number[]
-}
-
-interface EqState {
-  enabled: boolean
-  gains: number[]
-  autoPreamp: boolean
-  manualPreamp: number
-  preamp: number
-  presets: PresetWire[]
-  presetId: string | null
-  freqs: number[]
-  limit: number
-}
 
 /**
  * The value of the synthetic "Custom" option in the preset <select>.
