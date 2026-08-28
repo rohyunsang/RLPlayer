@@ -161,22 +161,77 @@ export function forbiddenFor(row) {
  * @param {string | null} actorName  the declared actor, or null
  * @returns {{ problems: string[], attributed: Array<[string, string]>, actor: string | null }}
  */
-export function evaluate(files, actorName) {
+export function evaluate(files, actorName, opts = {}) {
   const problems = []
+  // Advisory lines are kept OUT of `problems`, because a count that mixes
+  // "someone edited a file they do not own" with "this script had to guess" is
+  // the kind of number that gets discounted wholesale on the second read.
+  const notes = []
   const scoped = files.filter((f) => f.startsWith('src/'))
   const attributed = scoped.map((f) => {
     const owners = [...new Set(ownersOf(f))]
     return [f, owners.length === 1 ? owners[0] : owners.length === 0 ? '(nobody)' : owners.join('+')]
   })
 
-  const declared = resolveRow(actorName)
-  if (actorName && !declared) {
-    problems.push(
-      `--as '${actorName}' names no row in docs/parity/modules.json. Use a row id (M03), a ` +
-        `module directory (video-enhance) or a core row id (core-renderer).`
-    )
-    return { problems, attributed, actor: null }
+  /**
+   * ONE ASSIGNMENT CAN SPAN MORE THAN ONE ROW, and a name that does not resolve
+   * MUST NOT switch the rules off.
+   *
+   * Both halves of this were measured on the Wave-1 integration tree.
+   *
+   *   Multi-row actors. One agent implemented M35 `stream-open` AND M36
+   *   `stream-ytdl`. `--as M35` flagged every M36 file and `--as M36` flagged
+   *   every M35 file, so the only way to read either run was by hand. `--as`
+   *   now takes a comma-separated list and a file is fine if ANY declared row
+   *   owns it, which is exactly RULE B's contract for an actor that is two rows.
+   *
+   *   An unresolvable actor used to skip EVERY RULE. This function pushed one
+   *   problem about the flag and `return`ed before rule A or rule B ran. The
+   *   Wave-1 tree carried a `Module: WIP` trailer on its recovery commit, so
+   *   `detectActor()` resolved the actor to `WIP`, which names no row — and with
+   *   a `src/renderer/src/main.ts` edit planted alongside nine modules' files,
+   *   the script reported `found 1 violation(s)` and that one violation was
+   *   about the flag. `grep -c 'RULE A|RULE B'` on the output: 0. Exit was 1
+   *   either way, which is what hid it: a red check whose message is "your flag
+   *   is wrong" gets the flag fixed, not the shared-file edit found.
+   *
+   * So: an EXPLICIT `--as` typo stays a hard error, because silently downgrading
+   * a flag someone typed is how a run gets misread as authoritative. An actor
+   * that was AUTO-DETECTED from a commit trailer or a branch name falls back to
+   * rule A with the reason stated out loud, because auto-detection guessing
+   * wrong must not be able to disarm the check.
+   */
+  const names = String(actorName ?? '')
+    .split(',')
+    .map((n) => n.trim())
+    .filter(Boolean)
+  const declaredRows = []
+  const unresolved = []
+  for (const n of names) {
+    const row = resolveRow(n)
+    if (row) declaredRows.push(row)
+    else unresolved.push(n)
   }
+  if (unresolved.length > 0) {
+    const detail =
+      `${unresolved.map((n) => `'${n}'`).join(', ')} names no row in docs/parity/modules.json. ` +
+      `Use a row id (M03), a module directory (video-enhance), a core row id (core-renderer), ` +
+      `or a comma-separated list (M35,M36).`
+    if (opts.actorWasExplicit) {
+      problems.push(`--as ${detail}`)
+      return { problems, notes, attributed, actor: null }
+    }
+    // Auto-detected and wrong: say so, then check anyway under rule A.
+    notes.push(
+      `NOTE (not a violation): the actor was auto-detected as ${detail}
+` +
+        `    Falling back to RULE A, because an actor this script cannot resolve must not be ` +
+        `able to
+    switch every rule off. Pass --as explicitly to get RULE B.`
+    )
+    declaredRows.length = 0
+  }
+  const declared = declaredRows[0] ?? null
 
   /** Report one file against one row's rules. */
   const check = (row, file, ruleName) => {
@@ -208,19 +263,117 @@ export function evaluate(files, actorName) {
     )
   }
 
-  if (declared) {
-    // RULE B. Every changed file must be the actor's.
-    for (const f of scoped) check(declared, f, 'RULE B (declared actor)')
+  if (declaredRows.length > 0) {
+    // RULE B. Every changed file must be owned by one of the declared rows.
+    const ids = new Set(declaredRows.map((r) => r.id))
+    for (const f of scoped) {
+      if (ownersOf(f).some((o) => ids.has(o))) continue
+      // Report against the row whose own mustNotTouch names the file, so the
+      // message names the contribution point rather than an arbitrary row.
+      const blamed =
+        declaredRows.find((r) => forbiddenFor(r).rules.some((rule) => rule.test(f))) ??
+        declaredRows[0]
+      check(blamed, f, `RULE B (declared actor${ids.size > 1 ? 's' : ''})`)
+    }
   } else {
     // RULE A. Any feature row in the set claims the whole set.
     const featureActors = modules.filter(
       (row) => isFeatureRow(row) && scoped.some((f) => ownersOf(f).includes(row.id))
     )
+
+    /**
+     * ONE LINE PER FILE, not one line per (actor x file) PAIR.
+     *
+     * Detection is unchanged — every (row, file) pair rule A found before is
+     * still found, and the exit code is identical. What changes is that the
+     * output is readable, and that is not cosmetic. MEASURED on this
+     * integration tree, where nine agents' work shares one worktree:
+     *
+     *   node scripts/check-ownership.mjs   ->  731 RULE A lines
+     *   ... of which the ONE real finding  ->  a planted src/renderer/src/main.ts
+     *                                          edit, appearing 19 times
+     *
+     * All eight Wave-1 module authors reported this run independently (68, 69,
+     * 70 and 721 violations depending on when they looked) and every one of them
+     * described it the same way: unreadable, all of it somebody else's file.
+     * M18's report says a module author running it here "would either ignore it
+     * or panic". A check whose output is discounted wholesale enforces nothing —
+     * which is this repository's own recurring lesson, arriving this time as
+     * volume rather than as a wrong assertion.
+     *
+     * The two buckets are separated for the same reason: "a file nobody in this
+     * change set owns" is the SHARED-FILE EDIT shape — the exact defect rule A
+     * was written for, and the pilot round's 8-edits-across-6-core-rows — while
+     * "cross-module" is the weaker claim that two modules appear together. The
+     * first is the finding; the second is mostly an artefact of a shared tree.
+     */
+    const shared = new Map() // file -> Set<blaming row id>
+    const crossed = new Map()
+    const push = (map, file, rowId) => {
+      if (!map.has(file)) map.set(file, new Set())
+      map.get(file).add(rowId)
+    }
+
     for (const row of featureActors) {
-      for (const f of scoped) check(row, f, 'RULE A (cross-attribution)')
+      for (const f of scoped) {
+        if (ownersOf(f).includes(row.id)) continue
+        const owners = ownersOf(f)
+        const ownedByAFeatureActorInTheSet = featureActors.some((r) => owners.includes(r.id))
+        push(ownedByAFeatureActorInTheSet ? crossed : shared, f, row.id)
+      }
+    }
+
+    // Any `mustNotTouch` entry this script cannot read is still a failure of
+    // this script, reported once rather than once per actor per file.
+    for (const row of featureActors) {
+      for (const entry of forbiddenFor(row).unreadable) {
+        problems.push(
+          `${row.id}'s mustNotTouch entry '${entry}' is neither a path under src/ nor a rule this ` +
+            `script knows how to read. A rule that cannot be read is a rule that reports clean; ` +
+            `either make it a path or teach scripts/check-ownership.mjs about it.`
+        )
+      }
+    }
+
+    for (const [file, rows] of shared) {
+      const blamed = [...rows]
+      const named = featureActors.find((r) =>
+        forbiddenFor(r).rules.some((rule) => rule.test(file))
+      )
+      const why = named ? forbiddenFor(named).rules.find((r) => r.test(file))?.why : null
+      problems.push(
+        `RULE A (cross-attribution): ${file}\n` +
+          `    is owned by ${ownersOf(file).join(', ') || '(nobody)'} and by no module in this ` +
+          `change set,\n` +
+          `    which contains work from ${blamed.length} feature row(s): ${blamed.join(', ')}.\n` +
+          (why ? `    Their mustNotTouch lists name it as '${why}'.\n` : '') +
+          `    THIS IS THE SHARED-FILE EDIT SHAPE. Use the contribution point instead:\n` +
+          `    ${hintFor(file)}`
+      )
+    }
+
+    if (crossed.size > 0) {
+      const byOwner = new Map()
+      for (const [file] of crossed) {
+        const o = ownersOf(file).join('+') || '(nobody)'
+        byOwner.set(o, [...(byOwner.get(o) ?? []), file])
+      }
+      problems.push(
+        `RULE A (cross-attribution): ${crossed.size} file(s) across ` +
+          `${byOwner.size} module row(s) appear in ONE change set.\n` +
+          [...byOwner]
+            .sort()
+            .map(([o, list]) => `      ${o}: ${list.length} file(s)`)
+            .join('\n') +
+          `\n    Rule A assumes a change set has one actor, so with ${featureActors.length} ` +
+          `feature rows present it cannot\n` +
+          `    say which of them wrote what. If this is one author, that is a violation. If it is\n` +
+          `    an INTEGRATION change set, declare the rows: --as ` +
+          `${featureActors.map((r) => r.id).join(',')}`
+      )
     }
   }
-  return { problems, attributed, actor: declared?.id ?? null }
+  return { problems, notes, attributed, actor: declared?.id ?? null }
 }
 
 /** What to do instead. Specific per shared file, because "use the API" is not help. */
@@ -315,7 +468,16 @@ function changedFiles(base) {
  */
 function detectActor(base) {
   const explicit = flag('as') ?? process.env['RL_MODULE']
-  if (explicit) return { name: explicit, from: explicit === flag('as') ? '--as' : '$RL_MODULE' }
+  // `--as` and `$RL_MODULE` were both typed by a human on purpose, so a name
+  // that does not resolve is their typo and stays a hard error. Everything
+  // below this line is a guess, and a guess may not disarm the check.
+  if (explicit) {
+    return {
+      name: explicit,
+      from: explicit === flag('as') ? '--as' : '$RL_MODULE',
+      wasExplicit: true
+    }
+  }
 
   let trailer = null
   try {
@@ -428,9 +590,65 @@ function selfTest() {
     }
   ]
 
+  cases.push(
+    {
+      name: 'one agent, two rows: --as M35,M36 over a change set spanning both',
+      files: [
+        'src/main/features/stream-open/index.ts',
+        'src/main/features/stream-ytdl/index.ts',
+        'src/renderer/src/features/stream-ytdl/stream-ytdl.css'
+      ],
+      actor: 'M35,M36',
+      explicit: true,
+      expect: 'pass',
+      because:
+        'this was the Wave-1 M35+M36 assignment; --as M35 flagged every M36 file and vice ' +
+        'versa, so neither run could be read'
+    },
+    {
+      name: 'a multi-row actor still does not get to touch a THIRD row',
+      files: ['src/main/features/stream-open/index.ts', 'src/main/features/mediainfo/index.ts'],
+      actor: 'M35,M36',
+      explicit: true,
+      expect: 'fail',
+      because: 'a list of actors widens the actor, never the permission'
+    },
+    {
+      name: 'an EXPLICIT --as that names no row is the callers typo',
+      files: ['src/main/features/stream-open/index.ts'],
+      actor: 'M35,M36,M99zz',
+      explicit: true,
+      expect: 'fail',
+      because: 'silently downgrading a flag someone typed makes the run misread as authoritative'
+    },
+    {
+      name: 'an AUTO-DETECTED actor that names no row must not disarm rule A',
+      files: ['src/main/features/video-enhance/index.ts', 'src/renderer/src/main.ts'],
+      actor: 'WIP',
+      explicit: false,
+      expect: 'fail',
+      needle: 'RULE A',
+      because:
+        'MEASURED on the Wave-1 tree: the recovery commit carried a `Module: WIP` trailer, ' +
+        'detectActor resolved the actor to WIP, evaluate() pushed one problem about the flag ' +
+        'and RETURNED — so a planted src/renderer/src/main.ts edit alongside nine modules ' +
+        'files produced `found 1 violation(s)`, that one being about the flag, and ' +
+        '`grep -c RULE` on the output was 0'
+    }
+  )
+
   const failures = []
   for (const c of cases) {
-    const { problems } = evaluate(c.files, c.actor)
+    const { problems } = evaluate(c.files, c.actor, { actorWasExplicit: c.explicit === true })
+    // A fixture that expects a failure and gets one for the WRONG REASON is the
+    // shape of check this repo keeps finding, so the reason is asserted too.
+    if (c.needle && !problems.some((pr) => pr.includes(c.needle))) {
+      failures.push(
+        `${c.name}
+      expected a problem mentioning '${c.needle}', got: ` +
+          (problems.join(' | ') || '(none)')
+      )
+    }
     const got = problems.length > 0 ? 'fail' : 'pass'
     if (got !== c.expect) {
       failures.push(
@@ -485,7 +703,9 @@ if (base !== null && files.length === 0) {
   process.exit(1)
 }
 const actor = detectActor(base)
-const { problems, attributed } = evaluate(files, actor.name)
+const { problems, notes, attributed } = evaluate(files, actor.name, {
+  actorWasExplicit: actor.wasExplicit === true
+})
 
 const inSrc = attributed.length
 console.log(
@@ -503,6 +723,8 @@ if (inSrc > 0) {
     console.log('  %s: %s', owner, list.join(', '))
   }
 }
+
+for (const n of notes ?? []) console.log('\ncheck:ownership %s', n)
 
 if (problems.length > 0) {
   console.error('\ncheck:ownership found %d violation(s):\n', problems.length)
