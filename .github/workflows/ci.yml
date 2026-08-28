@@ -70,10 +70,27 @@ jobs:
         run: npm run verify:sort
 
       # No UserChoice hijack, no updater, NO NETWORK API, no module importing a
-      # shared core file or another module.
+      # shared core file or another module. `--self-test` runs the rules against
+      # the exact escalations they failed to catch before -- a dynamic
+      # `import("../../core/mpv/bus.ts")`, `const F = fetch`, `import
+      # "node:dns/promises"` -- so a rule that stops catching its own regression
+      # fails here rather than printing "clean".
       - name: 'check:forbidden'
         if: '!cancelled()'
         run: npm run check:forbidden
+
+      # Command ownership against the pinned binary's own --input-cmdlist, and
+      # the spec's prose cross-checked against modules.json. `seek` belonged to
+      # nobody until this existed.
+      - name: 'test:command-ownership'
+        if: '!cancelled()'
+        run: npm run test:command-ownership
+
+      # Every window disables the spellchecker, the session policy keeps all
+      # four of its layers, and the host allowlist is still empty.
+      - name: 'test:no-network'
+        if: '!cancelled()'
+        run: npm run test:no-network
 
       # Every tracked file under src/ has exactly one owner in modules.json.
       # This is the check that makes "thirty-eight modules in parallel" true
@@ -87,6 +104,46 @@ jobs:
       - name: Build
         if: '!cancelled()'
         run: npm run build
+
+  # THE NETWORK JOB. This is the one that would have caught the leak.
+  #
+  # It has to build the PACKAGED app, because the regression only exists there:
+  # `scripts/watch-network.mjs` drove the DEV build and reported "5 launches x
+  # 30 s, 0 outbound" on runs whose packaged netlog shows a completed download to
+  # redirector.gvt1.com. And it has to read Chromium's own `--log-net-log`,
+  # because a socket poll can only see connections that were ESTABLISHED -- an
+  # attempt that the DNS blackhole turns into a failure is invisible to it, and
+  # the attempt is the bug.
+  #
+  # It needs mpv (the app will not start without it) and a desktop session, so it
+  # is a separate job and it is allowed to be slow.
+  network:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      # No --ignore-scripts here: the postinstall fetches the pinned mpv, and the
+      # app refuses to start without it.
+      - name: Install (with mpv)
+        run: npm ci
+      - name: Package
+        run: npm run build && npx electron-builder --win --dir
+      # Three cold launches, fresh profile each, asserting on URL_REQUEST and
+      # HOST_RESOLVER events in the netlog. Fails on the first attempted request,
+      # whether or not it succeeded, and fails if a launch had to be force-killed.
+      - name: 'check:network'
+        run: npm run check:network -- --launches=3 --seconds=10
+      # And again with the DNS blackhole switched OFF. A clean run here is the
+      # difference between "the request is gone" and "the request is blackholed",
+      # and the second one is not a guarantee -- it is one deleted line away from
+      # leaking the user's IP.
+      - name: 'check:network (blackhole disabled)'
+        if: '!cancelled()'
+        run: npm run check:network -- --launches=2 --seconds=10 --no-blackhole
 
   # A second, deliberately dumb job. `check:forbidden` skips comment lines so it
   # can explain what we do NOT do; this one does not, so a commented-out

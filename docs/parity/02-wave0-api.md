@@ -16,10 +16,19 @@
 > src/renderer/src/settings.ts src/renderer/src/styles.css src/renderer/src/core/**
 > ```
 >
-> The API below exists so you do not have to. `npm run check:forbidden` greps
-> for the imports, and `npm run check:partition` **fails the build if any
-> tracked file under `src/` is not owned by exactly one row of `modules.json`** —
-> so an unowned shared file cannot quietly appear again.
+> The API below exists so you do not have to — and it is no longer only a grep
+> that stops you. `core/mpv/bus.ts` **exports no bus**. It exports
+> `createMpvBus()`, which throws on a second call, and `src/main/index.ts` makes
+> the one. So `await import('../../core/mpv/bus.ts')` from a module gets a
+> factory that refuses instead of a singleton with a public `createService()`;
+> the service you hold is minted for you by the registry with **your** id baked
+> in, and asking for `{ privileged: true }` under any id but core's throws.
+>
+> `npm run check:forbidden` still greps — now including dynamic `import()`,
+> `require()` and computed specifiers, none of which it matched before — and
+> `npm run check:partition` **fails the build if any tracked file under `src/`
+> is not owned by exactly one row of `modules.json`**, and now also if a
+> feature's CSS selector is sitting in a core stylesheet.
 >
 > The renderer files are on that list for the first time, and that is the
 > headline change: `ctx.panel()`, `ctx.statsSection()`, `ctx.settingsSection()`
@@ -27,7 +36,7 @@
 > module with any UI had no choice but to edit `index.html`, `main.ts` and
 > `styles.css`. They render now (§10, §7).
 >
-> Last updated: 2026-08-28 (post-audit)
+> Last updated: 2026-08-28 (second repair round)
 
 ---
 
@@ -67,11 +76,24 @@ That is the whole contract. The registry finds the directory with
 the owner map, sets you up in dependency order, and hands you a
 `FeatureContext`. Nothing about your module is written down anywhere else.
 
-**Run `npm run verify` before you push.** It is typecheck + 150 tests + the
+**Run `npm run verify` before you push.** It is typecheck + ~190 tests + the
 natural-sort differential (27,225 pairs against the real `StrCmpLogicalW`) + the
-forbidden-pattern grep + the file-partition check. CI runs all of it on every
-push. `npm run e2e:overlay` drives the real app with real keypresses and needs a
-desktop session, so it is not in CI — run it before you tag.
+forbidden-pattern grep (which now self-tests against the escalations it once
+missed) + the file-partition check (now content-granular for CSS). CI runs all
+of it on every push, plus `check:network` against a freshly PACKAGED build.
+
+Two things need a desktop session and a build, so run them before you tag:
+
+```
+npm run build && npx electron-builder --win --dir
+npm run e2e:overlay -- --packaged     # real keypresses, real settings window, real quit
+npm run check:network                 # packaged cold launches, asserting on Chromium's netlog
+```
+
+Use `--packaged` for anything you intend to call evidence. The dev build and the
+packaged build do not behave the same, and the previous round's "0 outbound
+connections over 5 launches" was measured on the dev build while the packaged
+one was completing a download to Google.
 
 ---
 
@@ -88,6 +110,10 @@ desktop session, so it is not in CI — run it before you tag.
 | `usesVideoFilters?` / `usesAudioFilters?` | Grants `ctx.vf` / `ctx.af`. Without the flag the field is `undefined`. |
 | `setup(ctx)` | Called once, in dependency order, before the first window is shown. May be async. |
 | `dispose?()` | Called on quit. |
+
+`ownsCommands` is not optional in spirit any more: if your module issues an mpv
+command that mutates state, it has to be listed, and §2.2's side-effect table
+plus `npm run test:command-ownership` will tell you if it is not.
 
 **Isolation, and its deliberate asymmetry.** A *collision* — duplicate property,
 duplicate command id, duplicate IPC channel, a namespace violation, a spawn-arg
@@ -189,13 +215,57 @@ runtime guard. Currently owned:
 
 | Commands | Owner |
 |---|---|
+| `seek` `revert-seek` `frame-step` `frame-back-step` | **M24** — it owns seeking. §3.6 already said "N51 seeks through M24's command, it does not own seeking"; that sentence had no encoding, so `assertCommand('nav-chapters','seek')` returned **true** for everybody |
+| `sub-seek` `sub-step` | M20 — §1.5 keeps the confusable pair with one owner on purpose |
+| `ab-loop` `ab-loop-align-cache` | M26 — it owns `ab-loop-a`/`-b`, so it owns the command that writes them |
+| `dump-cache` `ab-loop-dump-cache` | M23 — capture owns everything that writes media to disk |
 | `loadfile` `loadlist` `stop` `playlist-*` | M28 — mpv's own playlist must always hold exactly one entry (§7.6) |
-| `sub-reload` `sub-add` `sub-remove` | M17 — it owns `sid` and the external-track set |
+| `sub-reload` `sub-add` `sub-remove` `rescan-external-files` | M17 — it owns `sid` and the external-track set |
+| `audio-add` `audio-remove` `audio-reload` `video-add` `video-remove` `video-reload` | M11 — it owns `aid` and `vid` outright |
+| `ao-reload` | M15 — it owns every AO-reinit round-trip |
 | `screenshot` `screenshot-to-file` | M22 — traps 3 and 4 are its problem to get right once |
-| `quit` `quit-watch-later` `run` `subprocess` `keybind` `keypress` `keydown` `keyup` `enable-section` `disable-section` `define-section` `load-config-file` `load-input-conf` `load-script` | core — the process and the input layer |
+| `quit` `quit-watch-later` `run` `subprocess` `keybind` `keypress` `keydown` `keyup` `enable-section` `disable-section` `define-section` `load-config-file` `load-input-conf` `load-script` `show-text` `show-progress` `print-text` `write-watch-later-config` `delete-watch-later-config` | core — the process, the input layer, the OSD and mpv's own resume file |
 
-If you need one of those, call the owner's mediator. A test fails the build if
-any module lists a known command name in `ownsProperties`.
+If you need one of those, call the owner's mediator.
+
+**Three checks keep this table honest**, and all three are new:
+
+- every command name here exists in the **pinned binary's own
+  `--input-cmdlist`** (captured to `docs/parity/mpv-commands.json` by
+  `npm run dump:mpv-commands`), so a typo guards nothing silently;
+- every command with a side effect has **exactly one owner**;
+- **the spec's prose is cross-checked against `modules.json`.** Where a §1.5 or
+  §3.6 row says a module owns a command, the manifest has to encode it, or
+  `npm run test:command-ownership` fails. Prose that nothing enforces is exactly
+  how `seek` ended up owned by nobody.
+
+### 2.2 Commands that write a property WITHOUT naming it
+
+This is the trap that cost the most. The guard only understood commands whose
+second argument is a property name, so from an unrelated module every one of
+these landed with **no throw, no refusal counted and nothing in the log** —
+measured against the pinned binary, before and after:
+
+| Command | What it actually wrote |
+|---|---|
+| `['frame-step']`, `['frame-back-step']` | core-owned **`pause`**: `false → true` |
+| `['ab-loop']` | M26's **`ab-loop-a`**: `"no" → 2.466667` |
+| `['apply-profile','fast']` | M06's **`scale`**: `lanczos → bilinear` |
+| `['seek', …]`, `['sub-seek', 1]` | `time-pos` — i.e. seeking, which is M24's |
+
+`COMMAND_SIDE_EFFECTS` in `core/mpv/ownership.ts` now maps each of these to the
+properties it mutates, and `ctx.mpv.command()` checks them the same way it checks
+`['set', …]`. **`apply-profile` is banned outright**: the set of properties a
+profile touches lives inside mpv, so there is no way to police it. Apply your own
+properties instead.
+
+The prefix forms reach the table too: `['no-osd','frame-step']` is a `pause`
+write. And a correction to what the guide used to say — **mpv accepts MORE THAN
+ONE prefix.** `['async','no-osd','set','speed','1.5']` returns `error: success`
+and writes; so do `['osd-msg','raw',…]` and `['async','async',…]`. The old
+comment claimed that form was `invalid parameter`, which would have made
+stripping a *run* of prefixes look like unnecessary caution to the next person
+simplifying the loop.
 
 ### Getting at a property you do not own
 
@@ -226,8 +296,18 @@ const r = await ctx.mpv.requestSet('aid', 2, 'user picked a track in my panel')
 if (!r.ok) ctx.log.warn('refused:', r.reason)   // refusal is a NORMAL outcome
 ```
 
-`requestSet` refuses with `'no-arbiter'` rather than falling through to a raw
-write, so a missing arbiter is visible instead of silently racing. **Refusal is
+`requestSet` refuses rather than falling through to a raw write, so a missing
+arbiter is visible instead of silently racing — and the refusal now **names the
+owner and says what to do**, because a bare `'no-arbiter'` sent people back to
+the same call in a loop. The OwnershipError hint is honest about it too: it only
+tells you to call `requestSet` when an arbiter is **actually registered**, and
+otherwise points you at the mediator. It used to promise "the owner's arbiter
+will answer" regardless, while `requestSet` answered `'no-arbiter'`.
+
+There is a real call site now, which there was not before: **M15** re-asserts the
+audio track through M11's arbiter after an audio-device switch reopens the
+output (`src/main/features/audio-devices/index.ts`). Read it as the worked
+example. **Refusal is
 a normal outcome and your caller must handle it** — M11's arbiter refuses `aid`
 outright while its own per-file restore is in flight, because that race picks
 the wrong dub on a dual-audio release. If **you** own a property others need,
@@ -728,6 +808,30 @@ The renderer context also gives you `panel()`, `statsSection()`,
 `settingsSection()`, `settingsComponent()`, `t()` and `osd.show()`. Each of the
 first four now has a host that renders it; see below.
 
+### Your layer's CSS lives in YOUR directory
+
+Core creates the element your layer paints into and owns its class
+(`.seek-layer`); everything **inside** it is yours. Import your own stylesheet
+from your renderer half, exactly as M28's playlist panel does:
+
+```ts
+import './nav-chapters.css'          // src/renderer/src/features/nav-chapters/
+```
+
+This is not a style preference. M25's `.seek-chapter-tick` and
+`.seek-tip-chapter` were in `src/renderer/src/styles.css` — a file owned by
+`core-renderer` and named in the `mustNotTouch` list of **40 of the 55 rows** —
+because the layer had to build its own container and therefore had to know
+core's class name. §6.3 requires this same bar to carry chapter ticks, bookmark
+pins and the A-B region at once, so M20, M26 and M27 were each one commit from
+following the precedent in. That is the `#playlist` collision again, moved from
+the panel path to the seek-bar path.
+
+`npm run check:partition` is **content-granular for CSS** now: a selector defined
+in a core stylesheet that only one feature's code ever mentions fails the build,
+and so does the same selector being defined by two modules. File-granular
+checking passed this repo happily while the collision sat in it.
+
 ### The interactive seek-bar layer
 
 ```ts
@@ -824,6 +928,48 @@ and `t()` picks the particle from the preceding word's final consonant.
 
 ---
 
+## 11.5 `ctx.network` — and why it will say no
+
+RLPlayer reaches **zero hosts**. Not "no telemetry": zero. `ctx.network` is how
+a module that genuinely needs one (R05's yt-dlp, M21's subtitle providers) finds
+out whether it may — and it cannot grant itself permission:
+
+```ts
+if (!ctx.network.allowed('api.example.com')) return   // grey the feature out
+ctx.network.assertAllowed('api.example.com', 'subtitle search')  // or throw
+```
+
+The allowlist is a table in `src/main/core/no-network.ts`, it is **empty**, and
+adding a row is a deliberate edit to a core file that shows up in review. It is
+not a runtime `allowHost()` call on purpose: that would make the policy a
+function of load order, and "what can this build reach?" would need a running
+app to answer. `RLPlayer.exe --print-network-policy` prints the whole thing.
+
+Four layers enforce it, and the ordering is the point:
+
+1. nothing makes a request;
+2. `session.webRequest.onBeforeRequest` cancels every non-local URL;
+3. the proxy is `direct` and `--no-proxy-server` is set (WPAD emitted two
+   `wpad` host resolutions on both HEAD and the released 0.1.0);
+4. **only then** the `MAP * ~NOTFOUND` DNS rule.
+
+That DNS rule used to be layers 1 through 4. Every cold launch of the packaged
+build fetched Chromium's spellcheck dictionary from `redirector.gvt1.com`, and it
+failed `-105` **only** because of that one line; with it removed the download
+completed and the 302 carried the user's public IPv6 back in `mip=`. `grep
+spellcheck src/` returned zero hits. The fix is
+`session.setSpellCheckerEnabled(false)` — measured to be the ONLY layer that
+works, in preference to the two obvious ones: `webPreferences.spellcheck: false`
+alone and `--disable-spell-checking` alone were both measured **insufficient**.
+
+`npm run check:network` proves it, and it proves it the only way that means
+anything: it drives the **packaged** app with `--log-net-log` and asserts on
+`URL_REQUEST` and `HOST_RESOLVER` events, so an **attempt** fails the check
+whether or not it succeeded. `--no-blackhole` runs it again with the DNS rule
+switched off, which is the difference between "gone" and "blackholed".
+
+---
+
 ## 12. Paths and lifecycle
 
 ```ts
@@ -899,6 +1045,28 @@ current state.
 | 15 | "an option follows its property's owner" was prose | a boot error naming the owner; M05/M06/M07 resolved (§4) |
 | 16 | 30 of 78 files under `src/` had no owner | all owned; `check:partition` fails the build otherwise |
 
+### What the SECOND audit changed
+
+Four verifiers audited the repair. Runtime passed; partition, ownership-bypass
+and network all failed, with measurements. This is what moved.
+
+| # | Was | Is |
+|---|---|---|
+| 17 | **every cold launch of the packaged build fetched `redirector.gvt1.com/edgedl/chrome/dict/ko-3-0.bdic`** — Chromium's spellchecker, activated by the text inputs Wave 0's settings form added. It failed `-105` only because of the DNS blackhole; without that one line the download completed and the 302 returned the user's public IPv6 in `mip=` | `session.setSpellCheckerEnabled(false)` — **measured to be the only layer that works**; `webPreferences.spellcheck: false` alone and `--disable-spell-checking` alone were each measured insufficient. All three are applied and the two that do not work say so |
+| 18 | WPAD: two `HOST_RESOLVER_MANAGER_REQUEST`s for `wpad` on HEAD *and* on 0.1.0 | `--no-proxy-server` plus `session.setProxy({ mode: 'direct' })` |
+| 19 | the `MAP * ~NOTFOUND` DNS rule WAS the guarantee, with a comment saying it must be "revisited deliberately" when R05/M21 land | demoted to layer four of four. The opt-in exists now: an empty, auditable per-host `ALLOWLIST`, reached through `ctx.network` (§11.5), printable with `--print-network-policy` |
+| 20 | `scripts/watch-network.mjs` launched the **dev** build, slept 1500 ms, then polled sockets at 1 Hz. The episode it hunted lasts 390 ms, and a poll can only see connections that were *established* | `scripts/check-network.mjs`: the **packaged** build, fresh profile per launch, asserting on `--log-net-log`'s `URL_REQUEST` / `HOST_RESOLVER` events, so an **attempt** fails whether or not it succeeded. `--no-blackhole` proves the leak is gone rather than blackholed. It is a CI job |
+| 21 | `check:forbidden`'s "any network request" rule matched none of `import dns`, `await import("node:https")`, `net.connect({host,port})`, `session.resolveHost(...)` or `const F = fetch`, and exempted all of `src/preload/index.ts` for nothing | all of them fail now; the exemption is gone; `--self-test` runs the rules against those exact strings so a rule that stops catching its own regression fails the build |
+| 22 | **`mpvBus` was an exported singleton.** `createService('victim')`, `createService('core/mpv/bus')`, `{privileged:true}`, `setOwnerMap(...)` (which disarmed all 38 hardened attacks at once), `contributeArgs('core/mpv/bus', …)` and `chainExec(['vf','set','hflip'])` each landed a write from a feature module | **there is no bus to import.** `createMpvBus()` throws on a second call; `src/main/index.ts` makes the one; the registry mints your service with your id baked in; `privileged` belongs to three hard-coded core ids; `setOwnerMap` and `chainExec` are unreachable |
+| 23 | the only barrier was a grep, and the grep was static-import-only, so `await import('../../core/mpv/bus.ts')` escalated fully while `check:forbidden` printed "clean (90 files scanned)" | `import()`, `require()` and bare side-effect imports all match, and a **computed** specifier in a feature module is refused outright |
+| 24 | feature modules were imported with `{ eager: true }`, so their top-level code ran during `src/main/index.ts`'s own evaluation — before core was wired | lazy glob; `collectFeatureModules()` is awaited from `main()`, after the bus exists and after the session network policy is applied |
+| 25 | no command → side-effect table: `['frame-step']` flipped core's `pause`, `['ab-loop']` set M26's `ab-loop-a`, `['apply-profile','fast']` rewrote M06's `scale`, all with no refusal counted | `COMMAND_SIDE_EFFECTS` (§2.2), checked against the pinned binary's `--input-cmdlist`; `apply-profile` is banned |
+| 26 | `seek`, `frame-step`, `frame-back-step`, `revert-seek`, `sub-seek` had **no owner**, so §3.6's "M25 seeks through M24's command" enforced nothing | owners assigned, and a check fails when a spec row claims command ownership `modules.json` does not encode |
+| 27 | `requestSet` had zero call sites, and the hint promised an arbiter without checking one existed | M15 uses it for real after an audio-device switch; the hint and the refusal both tell the truth |
+| 28 | M25's `.seek-chapter-tick` / `.seek-tip-chapter` lived in core's `styles.css`, with M20, M26 and M27 heading for the same file | core owns the layer's container; the layer's look lives in its own directory; `check:partition` is content-granular for CSS |
+| 29 | closing the player with the settings window open never quit (still running after 16 s, 2/2), and `e2e-overlay` then did a silent `child.kill()` and printed "clean" | the player is the app: closing it quits. `before-quit` takes control, runs the shutdown to completion and then `app.exit(0)`, with a watchdog. The harness fails loudly on a force-kill and reports the quit time |
+| 30 | `MpvManager.dispose()` was `setTimeout(() => proc.kill(), 300)` inside `before-quit`, which almost never fired | an awaited escalation — IPC `quit`, `kill()`, `taskkill /T /F`, each verified by re-polling the pid — plus a synchronous `process.on('exit')` reaper that cannot be skipped |
+
 Two smaller notes:
 
 - **`--volume-max` is 150, not the 100 §5.3 asks for.** v0.1 shipped a 0–150
@@ -930,8 +1098,14 @@ Two smaller notes:
 - [ ] Every state-changing command fires an OSD message.
 - [ ] Per-file state goes through a slice, never through your own JSON file.
 - [ ] No import of `windows.ts`, `ipc.ts`, `preload/index.ts`, `core/mpv/*`,
-      the renderer core, another feature module, or Electron's `dialog`.
-      `npm run check:forbidden` proves it.
+      the renderer core, another feature module, or Electron's `dialog` — by
+      `from`, by `require()`, by `await import()`, or by a computed specifier.
+      `npm run check:forbidden` proves all four now; it only proved the first
+      one before, and that is how a one-line ownership bypass shipped.
+- [ ] No network API at all: no `fetch` (aliased or not), no `node:dns` /
+      `https` / `tls` / `dgram` / `http2`, no `resolveHost`. If your module is
+      the one that genuinely needs a host, add its `ALLOWLIST` row in
+      `src/main/core/no-network.ts` in the same PR and use `ctx.network`.
 - [ ] Your UI is a `ctx.panel()` / `ctx.statsSection()` / `ctx.seekbarLayer()` /
       `ctx.settingsSection()`, and your CSS is in your own directory. You did
       not touch `index.html`, `main.ts` or `styles.css`.
@@ -941,5 +1115,10 @@ Two smaller notes:
       BEFORE it subscribes (§10).
 - [ ] Your `dispose()` releases timers, watchers, sleep blockers and child
       processes.
-- [ ] `npm run verify` is green, `npm run e2e:overlay` is clean, and your §6.3
-      acceptance row is ticked in your module's `VERIFY.md`.
+- [ ] Any mpv command you issue that mutates state is in §2.2's table with an
+      owner, or you are calling the owner's mediator. `['frame-step']` writes
+      `pause`; `['ab-loop']` writes `ab-loop-a`; neither says so in its name.
+- [ ] `npm run verify` is green; `npm run e2e:overlay -- --packaged` is clean
+      **and reports a quit time rather than a force-kill**; `npm run
+      check:network` is clean on a packaged build; and your §6.3 acceptance row
+      is ticked in your module's `VERIFY.md`.
