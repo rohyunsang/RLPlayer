@@ -1,6 +1,6 @@
 {
   "name": "rlplayer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "RLPlayer - a free, ad-free, no-nag Windows video player powered by mpv",
   "main": "./out/main/index.js",
   "author": "rohyunsang",
