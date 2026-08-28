@@ -16,7 +16,7 @@
  *   2. drive real keypresses through the same path a user's keyboard takes;
  *   3. zero console errors in the N seconds AFTER them, too.
  *
- * Run:  node scripts/e2e-overlay.mjs [--packaged] [--keep] [--seconds=4]
+ * Run:  node scripts/e2e-overlay.mjs [--packaged] [--keep] [--seconds=4] [--presses=6]
  * Needs a desktop session (it opens real windows) so it is NOT part of CI;
  * `npm run verify` stays headless. Run it before you tag.
  */
@@ -32,6 +32,7 @@ const args = process.argv.slice(2)
 const KEEP = args.includes('--keep')
 const PACKAGED = args.includes('--packaged')
 const WINDOW_S = Number(args.find((a) => a.startsWith('--seconds='))?.split('=')[1] ?? 4)
+const PRESSES = Number(args.find((a) => a.startsWith('--presses='))?.split('=')[1] ?? 6)
 const PORT = 9333
 
 const sample = ['samples/bbb_long.mp4', 'samples/bbb.mp4']
@@ -279,24 +280,40 @@ async function main() {
   // The exact key the audit used, plus a few more bound ones. ArrowUp is
   // volume in the default preset; every one of these goes through the keydown
   // handler the stray call was spliced into.
-  console.log('driving keypresses...')
+  console.log(`driving ${PRESSES} keypresses...`)
   process.on('uncaughtException', (e) => {
     console.error('main process log so far:\n' + mainLog.join(''))
     console.error(e)
     child.kill()
     process.exit(1)
   })
-  await pressKey(s, 'ArrowUp', 'ArrowUp', 38)
-  await sleep(200)
-  await pressKey(s, 'ArrowDown', 'ArrowDown', 40)
-  await sleep(200)
-  await pressKey(s, 'ArrowRight', 'ArrowRight', 39)
-  await sleep(200)
-  await pressKey(s, 'ArrowLeft', 'ArrowLeft', 37)
-  await sleep(200)
-  await pressKey(s, 'KeyM', 'm', 77)
-  await sleep(200)
-  await pressKey(s, 'KeyM', 'm', 77)
+  /**
+   * `--presses=N` drives the same keys N times. The default of 6 catches the
+   * regression this file was written for -- one ArrowUp produced 32 errors in
+   * 4 s and ~8/s forever after -- but §6.3's release bar is "0 console errors
+   * over 300+ keypresses", and a leak that costs one error per hundred presses
+   * is invisible at six. `--presses=300` before a tag.
+   */
+  const KEYS = [
+    ['ArrowUp', 'ArrowUp', 38],
+    ['ArrowDown', 'ArrowDown', 40],
+    ['ArrowRight', 'ArrowRight', 39],
+    ['ArrowLeft', 'ArrowLeft', 37],
+    ['KeyM', 'm', 77],
+    ['KeyM', 'm', 77],
+    // Tab and the arrows now reach the seek-bar layer host (rule 4), so the
+    // focus walk is on the hot path and belongs in the soak.
+    ['Tab', 'Tab', 9],
+    ['ArrowRight', 'ArrowRight', 39],
+    ['Escape', 'Escape', 27]
+  ]
+  for (let i = 0; i < PRESSES; i++) {
+    const k = KEYS[i % KEYS.length]
+    await pressKey(s, k[0], k[1], k[2])
+    // Fast enough to be a soak, slow enough that the main process actually
+    // handles each one rather than coalescing them in the queue.
+    await sleep(PRESSES > 50 ? 20 : 200)
+  }
   await sleep(500)
 
   console.log(`after input: watching for ${WINDOW_S}s...`)
@@ -442,7 +459,7 @@ async function main() {
   console.log('\n--- results ---')
   console.log(`errors during startup       : ${started}`)
   console.log(`errors in ${WINDOW_S}s before input : ${before.length}`)
-  console.log(`errors in ${WINDOW_S}s after input  : ${after.length}`)
+  console.log(`errors in ${WINDOW_S}s after input  : ${after.length}  (after ${PRESSES} presses)`)
   console.log(`panels mounted              : ${dom.panels}`)
   console.log(`seek-bar layers registered  : ${dom.layers}`)
   console.log(`title / time                : ${dom.title} ${dom.time} / ${dom.duration}`)

@@ -135,12 +135,35 @@ jobs:
       # Three cold launches, fresh profile each, asserting on URL_REQUEST and
       # HOST_RESOLVER events in the netlog. Fails on the first attempted request,
       # whether or not it succeeded, and fails if a launch had to be force-killed.
+      #
+      # TWO THINGS CHANGED ABOUT WHAT A PASS MEANS HERE.
+      #
+      # It used to pass netlogs that recorded NOTHING. A header-only file yields
+      # zero events and zero violations, which is exactly the shape of a clean
+      # run; 7 of 36 observed netlogs were header-only and 2 of those exited
+      # reporting success, including the --no-blackhole step below. A pass now
+      # requires a minimum event count, two netlog event types that only a real
+      # session writes, and three markers the app prints -- [ready] after its
+      # windows are shown, [e2e] when the settings window opens, and [quit] only
+      # from the graceful shutdown path.
+      #
+      # And its orphan count used to be a machine-wide `tasklist`. This exact
+      # invocation reported "FAILED: 4 orphaned mpv.exe" on an unchanged tree, on
+      # four processes belonging to a different checkout, 3 runs out of 4. It is
+      # attributed by ParentProcessId now, so a runner with anything else running
+      # cannot red-light a clean build.
       - name: 'check:network'
         run: npm run check:network -- --launches=3 --seconds=10
       # And again with the DNS blackhole switched OFF. A clean run here is the
       # difference between "the request is gone" and "the request is blackholed",
       # and the second one is not a guarantee -- it is one deleted line away from
       # leaking the user's IP.
+      #
+      # This is also the step whose evidence was worthless: 2 of the header-only
+      # netlogs were from here. Every launch of it now opens the SETTINGS WINDOW,
+      # which is the app's only page with text inputs and the exact surface the
+      # gvt1.com leak lived on -- the check written to prevent that defect had
+      # never once exercised the page that caused it.
       - name: 'check:network (blackhole disabled)'
         if: '!cancelled()'
         run: npm run check:network -- --launches=2 --seconds=10 --no-blackhole

@@ -24,19 +24,22 @@
 > the service you hold is minted for you by the registry with **your** id baked
 > in, and asking for `{ privileged: true }` under any id but core's throws.
 >
-> `npm run check:forbidden` still greps — now including dynamic `import()`,
-> `require()` and computed specifiers, none of which it matched before — and
+> `npm run check:forbidden` no longer scans LINES — it lexes the file, so a
+> multi-line `await import()`, a `createRequire(import.meta.url)(…)` and a
+> multi-line computed specifier all fail, and none of the three did before — and
 > `npm run check:partition` **fails the build if any tracked file under `src/`
 > is not owned by exactly one row of `modules.json`**, and now also if a
-> feature's CSS selector is sitting in a core stylesheet.
+> feature's private symbol — a CSS selector **or an HTML element id** — is
+> sitting in a core file.
 >
 > The renderer files are on that list for the first time, and that is the
 > headline change: `ctx.panel()`, `ctx.statsSection()`, `ctx.settingsSection()`
 > and `ctx.settingsComponent()` had **no consumers at all** until now, so a
 > module with any UI had no choice but to edit `index.html`, `main.ts` and
-> `styles.css`. They render now (§10, §7).
+> `styles.css`. They render now (§10, §7), and `ctx.transportButton()` joins
+> them so the transport bar's button row stops being a shared file too.
 >
-> Last updated: 2026-08-28 (second repair round)
+> Last updated: 2026-08-28 (third repair round)
 
 ---
 
@@ -76,20 +79,31 @@ That is the whole contract. The registry finds the directory with
 the owner map, sets you up in dependency order, and hands you a
 `FeatureContext`. Nothing about your module is written down anywhere else.
 
-**Run `npm run verify` before you push.** It is typecheck + ~190 tests + the
+**Run `npm run verify` before you push.** It is typecheck + ~240 tests + the
 natural-sort differential (27,225 pairs against the real `StrCmpLogicalW`) + the
-forbidden-pattern grep (which now self-tests against the escalations it once
-missed) + the file-partition check (now content-granular for CSS). CI runs all
-of it on every push, plus `check:network` against a freshly PACKAGED build.
+forbidden-pattern check (a comment- and string-aware lexer now, not a line
+scanner — three multi-line escalations walked past the old one) + the
+file-partition check (content-granular for CSS, **HTML and TS**). CI runs all of
+it on every push, plus `check:network` against a freshly PACKAGED build.
 
-Two things need a desktop session and a build, so run them before you tag:
+Three things need a desktop session and a build, so run them before you tag:
 
 ```
 npm run build && npx electron-builder --win --dir
-npm run e2e:overlay -- --packaged     # real keypresses, real settings window, real quit
+npm run e2e:overlay -- --packaged --presses=300   # §6.3's soak: 0 console errors
 npm run e2e:resume                    # seek, quit, reopen — the v0.1 resume guarantee
 npm run check:network                 # packaged cold launches, asserting on Chromium's netlog
+npm run check:network -- --no-blackhole  # the same, with the DNS seatbelt REMOVED
 ```
+
+The last one is the only run that proves the leak is gone rather than merely
+blackholed, and it is the run whose evidence used to be worthless: 7 of 36
+observed netlogs were header-only — zero events, which is also the shape of a
+perfectly clean session — and 2 of those exited reporting success. A pass now
+needs a minimum event count, two netlog event types that only a real session
+writes, and three stdout markers from the app itself; and every launch opens the
+**settings window**, the one page with text inputs, which is the surface the
+0.1.0 leak was on and which this check had never once exercised.
 
 Use `--packaged` for anything you intend to call evidence. The dev build and the
 packaged build do not behave the same, and the previous round's "0 outbound
@@ -240,6 +254,45 @@ If you need one of those, call the owner's mediator.
   `npm run test:command-ownership` fails. Prose that nothing enforces is exactly
   how `seek` ended up owned by nobody.
 
+**…and the second of those three used to be blind in exactly the way it was
+written to prevent.** It iterated `Object.keys(COMMAND_SIDE_EFFECTS)` — a table
+somebody types by hand — so a command missing from that table was invisible to
+the check whose whole job is to find commands nobody thought about. Measured:
+
+```
+OwnerMap.assertCommand('nav-chapters', 'script-binding', strict) -> true
+commandOwnerOf('script-binding')                                 -> null
+commandOwnerOf('mouse')                                          -> null
+```
+
+Both are named in the spec (L45 and U06 give `script-binding` to M29), both
+mutate state, and neither had an owner.
+
+The universe comes from the **binary** now. Every one of the 86 commands in the
+pinned build's `--input-cmdlist` must be classified in one of five ways, and
+anything unclassified — including a command a future mpv adds — fails the build:
+
+| Classification | Meaning |
+|---|---|
+| owned | a module or a core piece declared it in `ownsCommands` |
+| property-writing | guarded through the property it NAMES (`set`, `cycle`, `add`, …) |
+| chain-reserved | only `core/vf-chain` and `core/af-chain` may issue it |
+| banned | nobody may issue it, whoever they are |
+| non-mutating | in `NON_MUTATING_COMMANDS`, **with a written reason** |
+
+Seventeen were unclassified and each got a decision rather than a default.
+`script-binding`, `script-message` and `script-message-to` → M29 (the only
+loadable scripts are the built-in stats and select overlays). `mouse` and
+`begin-vo-dragging` → core, input injection, the same family as the
+`keypress`/`keydown`/`keyup` it already owned. `osd-overlay`, `overlay-add`,
+`overlay-remove` → core, for the same reason as `show-text`: they draw inside
+mpv's video surface, under your overlay. `update-clipboard` → **banned**: every
+clipboard path here is Electron's, and mpv writing the same clipboard from the
+other side is a race with no owner and no benefit.
+
+If you need a command nobody owns yet, that is now a manifest edit and a review,
+which is the conversation it should have been all along.
+
 ### 2.2 Commands that write a property WITHOUT naming it
 
 This is the trap that cost the most. The guard only understood commands whose
@@ -368,6 +421,31 @@ re-embeds via `--wid` and restores the position. Use it for VO and
 exclusive-mode changes — anything mpv cannot do in place. Do not use it for
 anything a property write can achieve.
 
+### A command must LOOK like a command
+
+Every guard above funnels through one function that reads the command's verb, and
+that function used to answer "I do not recognise this" for any array whose head
+was not a primitive string — which every caller read as "nothing to check". So
+"unrecognised" meant "allowed", and §3.7 switched itself off for any shape it had
+not been taught. Nine of eleven probes landed and none threw:
+
+```ts
+ctx.mpv.command([new String('vf'), 'set', 'hflip'])   // JSON: ["vf","set","hflip"]
+ctx.mpv.command([new String('apply-profile'), 'fast'])// the BANNED command
+ctx.mpv.command(['set', new String('speed'), 4])      // verb fine, PROPERTY skipped
+```
+
+A boxed primitive is `typeof 'object'` and `JSON.stringify`s as a plain string,
+so mpv executed exactly what the guard refused to look at. The last one is the
+sharpest: the head was a real string, only the property name was boxed, and the
+"which properties does this write" step returned an empty list.
+
+**Every element of a command must now be a JSON value** — a string, a finite
+number, a boolean, `null`, or (for `loadfile`'s options argument) a flat object
+or array of those. Anything else is a hard error, for core as much as for you,
+and it is checked *above* the privileged early-out. In practice you will never
+notice; if you do, the message names the argument.
+
 ### Traps that were measured, not guessed
 
 1. **`loadfile` with an options map needs `-1`.** `['loadfile', p, 'replace', -1, {start: '5.5'}]`. Without the `-1` it **hard-errors** with `{"error":"invalid parameter"}` — it does not silently drop the map.
@@ -484,6 +562,14 @@ const { path } = await ctx.vf.command('rl-sharpen', 'strength', '0.55', 'cas')
   slider **without hardcoding the table**.
 - **`hasCpuFilter`** tells the stats overlay that hwdec frames are being copied
   back to system memory. Every lavfi filter does that.
+- **There is no `vfChain` to import any more.** It used to be an exported
+  singleton whose `exec` was a TypeScript `private` — which erases to an ordinary
+  enumerable property — so `Object.keys(vfChain)` listed it and
+  `vfChain.exec.command(['vf','set','hflip'])` landed a raw chain write from a
+  feature module, as did `vfChain.claim('attacker-module', ['rl-lut'])` on a
+  label whose owner does not exist yet. Fields are `#`-private, the class is not
+  exported, and `createVfChain()` builds one and throws on a second call. A
+  dynamic import gets a factory that refuses.
 
 Reserved labels (unregistered ones throw at boot):
 
@@ -764,7 +850,7 @@ forbidden list; a panel's look is the panel's business.
 > killed the rest of `setup()`, so its `seekbarLayer()` never registered, and it
 > left a permanently throwing subscriber behind. Declare first, subscribe last.
 
-### The four contribution points, and what each renders
+### The five contribution points, and what each renders
 
 They had no consumers at all until now — the arrays existed and nothing read
 them — which is why every module with UI had to edit a shared file.
@@ -791,7 +877,35 @@ ctx.settingsSection({ id, section: 'video', order: 6, titleKey, mount(host) {...
 
 // The renderer half of a { kind: 'custom' } descriptor (§7).
 ctx.settingsComponent('audio-devices.picker', (host, binding) => {...})
+
+// A control in the transport bar's button row. The <button>, its `icon-btn`
+// class and its position are core's; what is inside it is yours.
+ctx.transportButton({
+  id: 'nav-bookmarks.toggle',
+  order: 30,                       // left to right; core's own controls end at 100
+  labelKey: 'nav-bookmarks.togglePanel',   // tooltip AND accessible name
+  mount(el, api) {
+    el.appendChild(icon())
+    return ctx.state.subscribe((s) => api.pressed(isOpen(s)))   // aria-pressed
+  },
+  onClick: () => ctx.ipc.send('nav-bookmarks:togglePanel')
+})
 ```
+
+`transportButton` is new, and it exists for the same reason as `panel()`.
+`src/renderer/index.html` hard-coded `#subBtn` (M17's) and `#playlistBtn`
+(M28's), with their click handlers and their pressed-state rendering in
+`src/renderer/src/main.ts` — two core files in the `mustNotTouch` list of 40 of
+the 55 rows, carrying two modules' controls. M22 (capture), M26 (bookmarks),
+M27 (thumbnails) and M35 (open URL) all want the next button in that row and had
+a committed precedent to follow into the same file. Both have moved into their
+owning modules; `index.html` names neither.
+
+Note what `check:partition` could NOT do about that one: core's `main.ts` really
+did reference `#playlistBtn`, so the id had a legitimate core user and no
+ownership rule could fire. The fix was the host, not the detector. What the
+detector guarantees now is that it cannot come back as a **feature-only** symbol
+in a core file — see below.
 
 `refresh` exists so a stats block does not burn a wake-up a second for a value
 that changes once per file: `static` reads once when the panel opens, `onChange`
@@ -806,8 +920,8 @@ the preload is a shape check, not the security boundary: main only has a handler
 for channels a module actually registered under its own id.
 
 The renderer context also gives you `panel()`, `statsSection()`,
-`settingsSection()`, `settingsComponent()`, `t()` and `osd.show()`. Each of the
-first four now has a host that renders it; see below.
+`settingsSection()`, `settingsComponent()`, `transportButton()`, `t()` and
+`osd.show()`. Every one of them has a host that renders it; see below.
 
 ### Your layer's CSS lives in YOUR directory
 
@@ -828,10 +942,27 @@ pins and the A-B region at once, so M20, M26 and M27 were each one commit from
 following the precedent in. That is the `#playlist` collision again, moved from
 the panel path to the seek-bar path.
 
-`npm run check:partition` is **content-granular for CSS** now: a selector defined
-in a core stylesheet that only one feature's code ever mentions fails the build,
-and so does the same selector being defined by two modules. File-granular
-checking passed this repo happily while the collision sat in it.
+`npm run check:partition` is **content-granular for CSS, HTML and TS** now. The
+unit is a SYMBOL — a class or id a stylesheet defines, or an `id="…"` an HTML
+file declares — and a *use* is that symbol inside a **string literal** of a code
+file. A symbol defined in a core file and used only by features fails the build,
+whether by one feature or by three, and so does the same symbol being defined by
+two modules.
+
+The three holes that version had, each found by planting the violation and
+watching the check print "clean":
+
+* it gated on `featureUsers.length === 1`, so a selector used by **two** feature
+  modules passed — which is exactly the case §6.3 creates, since it puts M25's
+  ticks, M26's pins and M27's thumbnails on one bar;
+* a "use" was any substring hit anywhere in any core file, **comments included**,
+  so one word of prose in `util.ts` whitelisted a real violation;
+* only `.css` was scanned at all. There was no content check for HTML or TS.
+
+Comments are blanked (`scripts/lib/lex.mjs`) before anything is matched, an
+`id="x"` attribute is a declaration rather than a use, and a fifth rule asserts
+the extraction still finds symbols it is known to find — because a content check
+that quietly stops matching passes everything.
 
 ### The interactive seek-bar layer
 
@@ -851,6 +982,7 @@ ctx.seekbarLayer({
                                                           { which: e.handle, t: e.time }) },
   onHover:   (e) => showTip(e?.handle ?? null),          // hit-test independent
   tooltip:   (e) => ({ el: node, order: 20 }),           // merged into ONE tooltip
+  handles:   () => ['a', 'b'],                           // what Tab reaches
   onKey:     (e) => nudge(e.handle, e.key === 'ArrowLeft' ? -e.stepSec : e.stepSec)
 })
 ```
@@ -865,11 +997,35 @@ Four guarantees:
    `cancelled: true`.
 3. **`tolerancePx` defaults to 6** — it is the only reason a 2 px pin is
    grabbable.
-4. **Keyboard equivalence is mandatory** for an interactive layer. A bar you can
-   only drag is a bar some people cannot use.
+4. **Keyboard equivalence is mandatory** for an interactive layer, and it is now
+   *possible*. Declare `handles()` alongside `hitTest`; Tab walks every handle in
+   paint order, the arrows and Home/End reach `onKey()`, and
+   `ctx.focusedHandle` tells your `render()` which of your handles to draw a
+   focus ring on. A layer with `hitTest` and no `handles()` is logged once,
+   by name.
 
 `ctx.duration` is `0` for live streams — guard for it; `timeToX`/`xToTime`
 already do.
+
+**THIS HALF WAS DEAD CODE UNTIL NOW, and it is worth knowing why.** `tooltips()`,
+`key()` and `focusHandle()` were implemented on the host, documented in the four
+rules above, unit-tested and green — with **zero production call sites**. The
+overlay assigned its hover readout with a plain
+`seekHover.textContent = formatTime(…)` and returned early on every arrow key
+inside a range input, and the seek bar *is* a range input. So M25 wrote a
+`tooltip()` fragment against the documented contract and it never once ran, and
+rule 4 was unsatisfiable by construction: any author who implemented `onKey`
+would have watched it never fire.
+
+Two consequences for you. First, **your `tooltip()` fragment really is merged**:
+core's timecode is a fragment at order 0, so returning `{ el, order: 20 }` puts
+your chapter title under it in the same box rather than in a second floating one,
+and N37's thumbnail slots in at order 10 without anyone editing a shared file.
+Second, `npm test` now fails if any host method a module's contract depends on
+loses its last caller in shipped code, and `scripts/e2e-overlay.mjs` asserts in
+the **packaged build** that the tooltip composed ≥2 fragments and Tab reached a
+handle. A unit test structurally could not have caught this: the unit test was
+the only caller.
 
 **The ownership rule holds on both halves.** A renderer layer never writes an
 mpv property. It sends to its own main half, which owns the property.
@@ -976,7 +1132,7 @@ switched off, which is the difference between "gone" and "blackholed".
 ```ts
 ctx.paths.dataDir() / cacheDir() / subCacheDir() / thumbCacheDir() /
           sceneCacheDir() / logsDir() / tempJobDir(jobId)
-ctx.paths.isPortable() / ctx.paths.portableFallback
+ctx.paths.isPortable() / ctx.paths.portableFallback / ctx.paths.mpvBinary()
 ctx.lifecycle.onReady(cb) / onQuit(cb) / trackProcess(child)
 ```
 
@@ -987,14 +1143,76 @@ inside a lavfi option**. Stage your font/palette there and spawn with `cwd` set.
 even if your `dispose()` throws. An orphaned encoder holding a file handle is
 worse than a noisy log line.
 
+### `ctx.engine` — a second mpv, spawned and reaped for you
+
+Four Wave-1 features need one: N36 (seek thumbnails, M27), L22 (the headless
+metadata probe, M29), C09 and C16 (clip export and cache dump, M23). Until now
+the only resolver was `resolveMpvPath()` **inside `src/main/mpv/manager.ts`**,
+and `PathService` exposed no binary path at all — so M23 and M27 would each have
+edited `src/shared/feature-api.ts` *and* `src/main/core/paths.ts` before writing
+a line of their own feature. §2.6's L30 row already carried an explicit
+"**Overlap warning:** build ONE shared engine, not two", and there was nothing to
+build it with.
+
+```ts
+const engine = await ctx.engine.spawn({
+  purpose: 'thumbnail',                 // [a-z0-9-], names it in the log and the pipe
+  args: ['--vo=null', '--ao=null', '--hr-seek=yes'],
+  idleTimeoutMs: 60_000                 // §6.3's M27 criterion, implemented once
+})
+await engine.command(['loadfile', file, 'replace'])
+const dur = await engine.getProperty<number>('duration')
+await engine.close()                    // idempotent, and never required
+```
+
+Core always applies `--no-config --idle=yes --terminal=no --msg-level=all=no
+--load-scripts=no --ytdl=no` and a **random** `--input-ipc-server` pipe name per
+instance. Neither is tidiness: a `vf` in the user's `mpv.conf` would corrupt
+every thumbnail, "zero network at rest" is about every process this app starts,
+and mpv's IPC is documented as *explicitly insecure* and exposes the `run`
+command (L22 says so in as many words), so a guessable pipe name is a local
+command-execution surface.
+
+**Use this rather than `ctx.paths.mpvBinary()` + `child_process`.** Every engine
+minted here is registered, reaped on the quit path *before* the playing mpv, and
+covered by one synchronous `process.on('exit')` fallback — the same reasoning as
+`MpvManager`'s, and for the same measured reason: an async cleanup registered in
+`before-quit` almost never runs. "No orphan mpv on quit" is a v0.1 guarantee, and
+it has to mean all of them, not only the one with a window on it. A feature
+module importing `mpv/manager` or `mpv/client` now fails `check:forbidden`.
+
+`ctx.paths.mpvBinary()` remains, for the cases that want a path and not a
+process: a version string in a bug report, `--input-cmdlist` in a test.
+
+### Your users' 0.1.0 profiles are cleaned up for you
+
+`core/profile-cleanup` runs once, before `app.whenReady()`, and removes what the
+0.1.0 spellchecker leak left on disk: the downloaded dictionary, both
+`Network Persistent State` records, and the HTTP disk cache — which held the 302
+from Google's redirector with the user's public IP in its `mip=` parameter. It is
+a literal target list, it never throws, and a locked file leaves its marker
+unwritten so the next launch retries. Nothing else in the profile is touched.
+You will not interact with it; it is here so you know why a first launch after
+upgrade prints a `[cleanup]` line and reclaims ~25 MB.
+
 ---
 
 ## 13. Testing your module
 
 - Put `node:test` files next to the code as `*.test.ts`; `npm test` globs
-  `src/**/*.test.ts`, and CI runs it on every push. The named suites are
-  `npm run test:property-ownership`, `test:reserved-args` and
-  `test:renderer-hosts`; `npm run e2e:overlay` drives the real app.
+  `src/**/*.test.ts` **and `scripts/**/*.test.mjs`**, and CI runs it on every
+  push. The named suites are `npm run test:property-ownership`,
+  `test:reserved-args` and `test:renderer-hosts`; `npm run e2e:overlay` drives
+  the real app (add `--packaged --presses=300` before a tag).
+- **A harness is code, and it gets tests too.** Both orphan checks in this repo
+  counted `mpv.exe` machine-wide with `tasklist` and no attribution, and were
+  wrong in both directions: `check:network` reported "FAILED: 4 orphaned mpv.exe"
+  on an unchanged tree (all four belonged to a different checkout, 3 runs out of
+  4, and it was a hard red), while `e2e-overlay` computed
+  `countMpv() - (mpvBefore - 1)` — a delta, so an unrelated mpv exiting inside
+  the quit window cancelled a real orphan out. `scripts/lib/mpv-procs.mjs` tracks
+  the pids the app is an ancestor of, and its unit tests are those two measured
+  failures as fixtures.
 - **Your new file needs an owner.** `npm run check:partition` fails if any file
   under `src/` — including one you have not committed yet — is not in exactly
   one row's `ownedFiles` in `docs/parity/modules.json`. Your module's row claims
@@ -1069,6 +1287,32 @@ and network all failed, with measurements. This is what moved.
 | 31 | giving `seek` an owner **broke seeking**, and 192 tests, the greps and the partition check all stayed green: `['seek',…]` implies a `time-pos` write nobody owns, so M24 was refused its own command and M28's four resume seeks were dropped behind `.catch(() => undefined)` | a command's **implied** side effects belong to its owner (decided once in `modules.json`, checked by `commands.test.ts`); the properties it **names** are still checked for everyone, so `loadfile` being M28's never becomes "M28 may write anything". `npm run e2e:resume` drives the packaged app and asserts the position survives a real quit |
 | 30 | `MpvManager.dispose()` was `setTimeout(() => proc.kill(), 300)` inside `before-quit`, which almost never fired | an awaited escalation — IPC `quit`, `kill()`, `taskkill /T /F`, each verified by re-polling the pid — plus a synchronous `process.on('exit')` reaper that cannot be skipped |
 
+### What the THIRD audit changed
+
+Three verifiers audited the release. Runtime passed for the product and failed on
+the tooling; partition and ownership-bypass both failed, with measurements.
+Thirty-eight feature modules start immediately after this, so the ordering
+principle was "fix what will break a 38-way parallel build", not "fix what is
+theoretically reachable".
+
+| # | Was | Is |
+|---|---|---|
+| 32 | **three modules needed the same line.** `main.ts:364` assigned the seek tooltip with `seekHover.textContent = formatTime(…)`, so N37 (M27) and N13 (M26) each had to edit it — in a file all three of M25/M26/M27 list in `mustNotTouch`. Meanwhile `SeekbarHost.tooltips()`, `.key()` and `.focusHandle()` had **zero production call sites** and M25's shipped `tooltip()` fragment was dead code | the overlay composes the tooltip from `tooltips()`; core's timecode is a fragment at order 0 via a new `baseTooltip` dep. `npm test` fails if any host method a module's contract depends on loses its last shipped caller |
+| 33 | host rule 4 said "keyboard equivalence is **mandatory**" while `main.ts:464` returned early on every arrow key inside a range input — and the seek bar *is* a range input, so `key()` was unreachable by construction. A rule nothing can satisfy is worse than none | Tab drives `focusNext()` through the handles a layer declares in the new `handles()`; arrows and Home/End reach `onKey()`; `ctx.focusedHandle` lets a layer paint its own focus ring. When nothing is focused `key()` returns false and the native slider keeps its arrows exactly as before |
+| 34 | four Wave-1 features need a second mpv and the only resolver was `resolveMpvPath()` **inside `mpv/manager.ts`**; `PathService` had no binary path. M23 and M27 would each have edited `feature-api.ts` + `core/paths.ts` | `ctx.engine.spawn()` (§12): one spawner, registered children, reaped before the playing mpv, one synchronous exit reaper, an optional idle timeout, a random IPC pipe name. A feature importing `mpv/manager` or `mpv/client` now fails `check:forbidden` |
+| 35 | §2.6 line 601 gave **L30 to M27**, and M27's `features` array agreed — while the files that row edits are M28's `ownedFiles`. Two documents agreeing is not two sources of truth | split: the view mode is M28's, the thumbnail is M27's through a `nav-thumbnails.getThumb` mediator. A check requires every feature the spec assigns to one module to be claimed by that module, which also surfaced **12 rows claimed by nobody** |
+| 36 | `script-binding` and `mouse` are state-mutating, named in the spec, owned by nobody — and `commands.test.ts` could not see them because it iterated a hand-written table | the command universe comes from the pinned binary's `--input-cmdlist`; all 86 must be classified (§2.1). 17 were not; each got a decision |
+| 37 | `check:partition` gated on `featureUsers.length === 1` (so a selector used by **two** modules passed), counted a word in a **comment** as a use, and scanned `.css` only | symbol-granular over CSS **and** HTML ids, uses matched inside string literals only, comments lexed away, and a self-check that the extraction still finds what it is known to find |
+| 38 | `#playlistBtn` and `#subBtn` were feature controls in core's `index.html` and `main.ts` | `ctx.transportButton()` (§10). Both moved into their modules; `index.html` names neither. `check:partition` could not have caught these — core genuinely used the ids — which is why the fix is a host and not a rule |
+| 39 | `verbOf()` returned null for any non-string head, and every guard read null as "nothing to check". 9 of 11 boxed-primitive probes landed, 0 threw, including raw `vf`/`af` and the banned `apply-profile`; `['set', new String('speed'), 4]` skipped the property check with a perfectly good verb | `assertCommandShape()` refuses every value that is not a JSON primitive (or a flat object/array for `loadfile`'s options), inside `verbOf` — the one choke point all five guards share — and above the `privileged` early-out |
+| 40 | `vf-chain.ts` exported the `vfChain` singleton and `exec` was a TypeScript `private`, so `Object.keys(vfChain)` listed it; `vfChain.exec.command([...])` and `claim('attacker-module', …)` both landed. The test asserted `!/chainExec/` — a grep for a name the file never had | `#`-private fields, no exported instance, `createVfChain()` throws on a second call, and the test asserts on the **runtime object's own properties** and the module's export list |
+| 41 | `bus.ts` exempted core ids from the id check, so `createService('core/mpv/bus')` **without** the privileged flag was minted and wrote core's `pause` | naming yourself core is not a credential: every non-privileged id must be one the registry loaded |
+| 42 | `check-forbidden.mjs` iterated lines, so a multi-line `await import()`, a `createRequire(import.meta.url)(…)` and a multi-line computed import all passed — all three resolving at runtime to the same singleton | a comment- and string-aware lexer (`scripts/lib/lex.mjs`) and whole-file rules; `createRequire` is forbidden outright in a feature module, because no lexical rule can follow the binding once it is named |
+| 43 | both orphan checks counted `mpv.exe` **machine-wide**. `check:network` reported "FAILED: 4 orphaned" on an unchanged tree (all four another checkout's, 3 runs of 4, a hard red); `e2e-overlay` used a **delta**, so an unrelated mpv exiting cancelled a real orphan out | pids the app is an ancestor of, keyed by pid **and** creation time, with the two measured failures as unit-test fixtures |
+| 44 | a header-only netlog (0 events) is the same shape as a clean run, and the only liveness gate was a line printed at module scope **before** `app.whenReady()`. 7 of 36 netlogs were header-only; 2 exited reporting success | a pass needs ≥8 events, `PROXY_CONFIG_CHANGED` **and** `QUIC_SESSION_POOL_CLOSE_ALL_SESSIONS`, and three markers the app prints: `[ready]`, `[e2e]`, `[quit]` |
+| 45 | `check:network` only ever opened a sample video — never the **settings window**, the app's only page with text inputs and the exact surface the gvt1 leak lived on | every launch opens it, through an env-only hook with the same three rules as the DNS blackhole override, enforced by a test |
+| 46 | 0.1.1 told users to delete `%APPDATA%\RLPlayer\Dictionaries` **by hand**, and named none of the rest. The `Network Persistent State` records held the host, its round-trip time and the machine's public address; the HTTP disk cache held the 302 with `mip=<the user's public IPv6>` | `core/profile-cleanup` does it for them, once, before `app.whenReady()`, from a literal target list, never throwing, retrying a locked file next launch. Measured on a real profile: 5 artefacts, 25.1 MB, zero occurrences of the host left, user data byte-identical |
+
 Two smaller notes:
 
 - **`--volume-max` is 150, not the 100 §5.3 asks for.** v0.1 shipped a 0–150
@@ -1109,8 +1353,10 @@ Two smaller notes:
       the one that genuinely needs a host, add its `ALLOWLIST` row in
       `src/main/core/no-network.ts` in the same PR and use `ctx.network`.
 - [ ] Your UI is a `ctx.panel()` / `ctx.statsSection()` / `ctx.seekbarLayer()` /
-      `ctx.settingsSection()`, and your CSS is in your own directory. You did
-      not touch `index.html`, `main.ts` or `styles.css`.
+      `ctx.transportButton()` / `ctx.settingsSection()`, and your CSS is in your
+      own directory. You did not touch `index.html`, `main.ts` or `styles.css`.
+      `check:partition` is symbol-granular over HTML ids as well as CSS
+      selectors now, and a comment no longer counts as a use.
 - [ ] Your files are claimed by your row in `modules.json`.
       `npm run check:partition` proves it.
 - [ ] Your renderer half declares everything its state subscriber closes over
@@ -1120,8 +1366,20 @@ Two smaller notes:
 - [ ] Any mpv command you issue that mutates state is in §2.2's table with an
       owner, or you are calling the owner's mediator. `['frame-step']` writes
       `pause`; `['ab-loop']` writes `ab-loop-a`; neither says so in its name.
-- [ ] `npm run verify` is green; `npm run e2e:overlay -- --packaged` and
-      `npm run e2e:resume` are clean
-      **and reports a quit time rather than a force-kill**; `npm run
-      check:network` is clean on a packaged build; and your §6.3 acceptance row
-      is ticked in your module's `VERIFY.md`.
+      Every command in the pinned binary is classified (§2.1); if yours is not,
+      that is a `modules.json` edit and a review, not a shrug.
+- [ ] Every element of every command you send is a JSON value — string, finite
+      number, boolean, `null`, or a flat object/array for `loadfile`'s options.
+      An unrecognised shape used to disable every ownership check silently; it
+      is a hard error now.
+- [ ] You spawn a second mpv with `ctx.engine.spawn()`, never with
+      `child_process` and a path. An untracked child is how "no orphan mpv on
+      quit" stops being true.
+- [ ] If your seek-bar layer has a `hitTest`, it also has `handles()` and
+      `onKey()`. Rule 4 is enforceable now: a layer that is grabbable and not
+      Tab-reachable is logged by name.
+- [ ] `npm run verify` is green; `npm run e2e:overlay -- --packaged --presses=300`
+      and `npm run e2e:resume` are clean **and report a quit time rather than a
+      force-kill**; `npm run check:network` is clean on a packaged build **and
+      with `--no-blackhole`**; and your §6.3 acceptance row is ticked in your
+      module's `VERIFY.md`.
