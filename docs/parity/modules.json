@@ -207,6 +207,8 @@
       "src/main/core/mpv/arg-owner.test.ts",
       "src/main/core/mpv/bus.ts",
       "src/main/core/mpv/capability.test.ts",
+      "src/main/core/mpv/engine.test.ts",
+      "src/main/core/mpv/engine.ts",
       "src/main/core/mpv/reserved.test.ts",
       "src/main/core/mpv/reserved.ts",
       "src/main/core/transport.ts",

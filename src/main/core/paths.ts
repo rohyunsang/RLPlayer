@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
+import { resolveMpvPath } from '../mpv/manager'
 import type { PathService } from '@shared/feature-api'
 
 /**
@@ -142,7 +143,20 @@ export function filePath(name: string): string {
   return path.join(dataDir(), name)
 }
 
+/**
+ * The bundled engine binary.
+ *
+ * One resolver, in `src/main/mpv/manager.ts`, re-exported here so a module can
+ * reach it through `ctx.paths` instead of importing a file its row forbids. To
+ * RUN a second mpv, use `ctx.engine.spawn()` -- see the note on `mpvBinary` in
+ * `feature-api.ts` for why an untracked child process is the wrong answer.
+ */
+export function mpvBinary(): string {
+  return resolveMpvPath()
+}
+
 export const pathService: PathService = {
+  mpvBinary,
   dataDir,
   cacheDir,
   subCacheDir,

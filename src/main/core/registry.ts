@@ -1,6 +1,7 @@
 import { ContributionError } from './errors.ts'
 import { validateIds, topoSort, type DiscoveredModule } from './registry-order.ts'
 import { CORE_OWNERSHIP, OwnerMap } from './mpv/ownership.ts'
+import { createEngineService } from './mpv/engine.ts'
 import { createVfChain } from './mpv/vf-chain.ts'
 import { createAfChain } from './mpv/af-chain.ts'
 import type { MpvBus } from './mpv/bus.ts'
@@ -195,7 +196,10 @@ export class Registry {
       },
       window: createWindowService(id),
       dialog: createDialogService(),
-      network: createNetworkService(id)
+      network: createNetworkService(id),
+      // A second mpv, tracked and reaped. Minted per module the same way
+      // `ctx.mpv` is, so an engine always has an owner in the log.
+      engine: createEngineService(id)
     }
     // vf/af are granted only to modules that declared they need them, so an
     // accidental `ctx.vf!.set(...)` in a module that never declared it is a

@@ -228,7 +228,14 @@ function forbidNetwork(files) {
  * and allowing one would reopen the hole by another name.
  */
 const CORE_PATHS =
-  '(?:\\/ipc|\\/core\\/menu|\\/core\\/legacy-bridge|\\/core\\/mpv|\\/core\\/registry|\\/core\\/input|\\/core\\/osd|\\/core\\/state|\\/core\\/settings|\\/core\\/no-network|\\/core\\/window|preload\\/index|shared\\/keybinds)'
+  // `/mpv/manager` and `/mpv/client` are on this list because that is where
+  // `resolveMpvPath()` lives, and FOUR Wave-1 features need a second mpv (N36
+  // thumbnails, L22 probe, C09/C16 encode and cache dump). Without the rule,
+  // `import { resolveMpvPath } from '../../mpv/manager'` is the one-line route
+  // to an untracked child process, and "no orphan mpv on quit" stops being true
+  // the first time one of them uses it. The sanctioned path is
+  // `ctx.engine.spawn()`, which registers and reaps.
+  '(?:\\/ipc|\\/core\\/menu|\\/core\\/legacy-bridge|\\/core\\/mpv|\\/core\\/registry|\\/core\\/input|\\/core\\/osd|\\/core\\/state|\\/core\\/settings|\\/core\\/no-network|\\/core\\/window|\\/mpv\\/manager|\\/mpv\\/client|preload\\/index|shared\\/keybinds)'
 const CORE_IMPORT_RE = new RegExp(
   `(?:from|import|require|createRequire\\s*\\([^)]*\\))\\s*\\(?\\s*['"][^'"]*${CORE_PATHS}[^'"]*['"]`
 )
@@ -398,6 +405,11 @@ const MUST_CATCH = [
   ['core-import', `import { mpvBus } from '../../core/mpv/bus.ts'`],
   ['core-import', `import "../../core/registry.ts"`],
   ['core-import', `export { x } from '../../core/settings/store.ts'`],
+  // The route to the mpv BINARY. `resolveMpvPath()` lives in mpv/manager.ts and
+  // four Wave-1 features need a second mpv, so this is the import M23 and M27
+  // were both about to write.
+  ['core-import', `import { resolveMpvPath } from '../../mpv/manager'`],
+  ['core-import', `const { MpvClient } = await import('../../mpv/client.ts')`],
   // …and the three the LINE scanner missed, measured resolving at runtime to
   // the same core/mpv/vf-chain singleton.
   ['core-import', `const chain = await import(\n  "../../core/mpv/vf-chain.ts"\n)`],

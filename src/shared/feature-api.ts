@@ -112,6 +112,12 @@ export interface FeatureContext {
    * grant itself permission. See src/main/core/no-network.ts.
    */
   readonly network: NetworkService
+  /**
+   * A second mpv process, spawned and reaped for you (§5.3). Use this rather
+   * than `ctx.paths.mpvBinary()` + child_process: an untracked child is how
+   * "no orphan mpv on quit" stops being true.
+   */
+  readonly engine: EngineService
   /** Only granted to modules declaring `usesVideoFilters` / `usesAudioFilters`. */
   readonly vf?: FilterChainService
   readonly af?: FilterChainService
@@ -122,6 +128,58 @@ export interface FeatureContext {
  * a whim; it asks, and the answer comes from a static table in a core file that
  * a reviewer can read in one screen.
  */
+/**
+ * §5.3: ONE way to run a second mpv.
+ *
+ * N36 (seek thumbnails, M27), L22 (the headless metadata probe, M29) and
+ * C09/C16 (clip export and cache dump, M23) all need one, and §2.6 L30 already
+ * carried an explicit "**Overlap warning:** build ONE shared engine, not two".
+ * They have the same lifecycle problem, so they get the same lifecycle: every
+ * engine is tracked, reaped on quit whether or not its owner closed it, covered
+ * by one synchronous `process.on('exit')` fallback, and optionally idle-killed
+ * (§6.3's M27 row: "the thumbnailer process dies 60 s after the last hover").
+ */
+export interface SecondaryEngineOptions {
+  /**
+   * A short lowercase name for what this instance is FOR: 'thumbnail', 'probe',
+   * 'encode'. It appears in the log and in the pipe name, so "which mpv is
+   * that?" has an answer during a support call.
+   */
+  purpose: string
+  /**
+   * Extra mpv arguments. `--no-config`, `--idle=yes`, `--terminal=no`,
+   * `--msg-level=all=no`, `--load-scripts=no` and `--ytdl=no` are core's and are
+   * always applied; `--input-ipc-server` is core's and gets a random pipe name
+   * per instance, because mpv's IPC is documented as "explicitly insecure" and
+   * exposes the `run` command.
+   */
+  args?: readonly string[]
+  /** Kill the process this long after the last call. 0 (default) never does. */
+  idleTimeoutMs?: number
+}
+
+export interface SecondaryEngine {
+  /** null once it has been closed or has exited. */
+  readonly pid: number | null
+  readonly running: boolean
+  /**
+   * Raw JSON IPC to THIS process. Not ownership-checked, and it does not need to
+   * be: nothing else can observe or write this instance, so there is no other
+   * module's state to corrupt. The ownership map governs the PLAYING mpv.
+   */
+  command<T = unknown>(args: unknown[]): Promise<T>
+  getProperty<T = unknown>(name: string): Promise<T>
+  onEvent(event: string, cb: (msg: Record<string, unknown>) => void): Unsubscribe
+  /** Idempotent, and never required: the quit path reaps whatever is left. */
+  close(): Promise<void>
+}
+
+export interface EngineService {
+  spawn(opts: SecondaryEngineOptions): Promise<SecondaryEngine>
+  /** The bundled mpv.exe, for the cases that need the path and not a process. */
+  binaryPath(): string
+}
+
 export interface NetworkService {
   /** True when this module declared this exact host. Cheap; use it to grey a
    *  provider out rather than throwing at the user. */
@@ -131,6 +189,22 @@ export interface NetworkService {
 }
 
 export interface PathService {
+  /**
+   * The bundled mpv.exe.
+   *
+   * Exposed because four Wave-1 features need a second mpv (N36 seek
+   * thumbnails, L22 the headless probe, C09/C16 clip export and cache dump) and
+   * the only resolver was `resolveMpvPath()` inside `src/main/mpv/manager.ts` --
+   * a file in the `mustNotTouch` list of 40 of the 55 rows. Without this, M23
+   * and M27 would each have edited this file AND `core/paths.ts` to get at it.
+   *
+   * To RUN it, use `ctx.engine.spawn()` instead. A process started from this
+   * path is tracked by nobody, and "no orphan mpv on quit" is a v0.1 guarantee
+   * this app keeps with a process registry and a synchronous exit reaper. This
+   * accessor is for the cases that only need the path: a version string in a bug
+   * report, `--input-cmdlist` in a test.
+   */
+  mpvBinary(): string
   dataDir(): string
   cacheDir(): string
   subCacheDir(): string

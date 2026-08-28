@@ -38,6 +38,7 @@ import { flushConfig, loadConfig, onConfigProblem, settingsBacking } from './ser
 import { createStore } from './core/settings/store.ts'
 import { registerCoreMessages, resolveLanguage, setLanguage, t } from './core/i18n/index.ts'
 import { createMpvBus } from './core/mpv/bus.ts'
+import { disposeEngines } from './core/mpv/engine.ts'
 import { FeatureIpc } from './core/ipc.ts'
 import { MenuRegistry } from './core/menu.ts'
 import { OsdBus } from './core/osd/index.ts'
@@ -463,6 +464,14 @@ async function shutdown(): Promise<void> {
   perFile?.flush()
   flushConfig()
   flushKeybinds()
+  // Secondary mpv processes (thumbnails, probes, encodes) BEFORE the playing
+  // one: they are children of this process too, and "no orphan mpv on quit" has
+  // to mean all of them, not just the one with a window on it. A module never
+  // has to be trusted to close its own -- see core/mpv/engine.ts.
+  const engines = await disposeEngines()
+  if (engines.orphaned > 0) {
+    console.error(`[quit] ${engines.orphaned} secondary mpv process(es) could not be killed`)
+  }
   const { orphaned } = await mpvBus.shutdown()
   if (orphaned) console.error('[quit] mpv could not be killed; see the log above')
 }
