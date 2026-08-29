@@ -3,19 +3,39 @@
  *
  * WHY THIS IS A FILE AND NOT A PARAGRAPH IN A REPORT. Five of M35's eighteen
  * rows specify an mpv property that NO row of `docs/parity/modules.json` owns,
- * and `OwnerMap.assertWrite()` refuses a property whose owner is `null` exactly
- * as hard as it refuses another module's:
+ * so this module cannot write them TODAY:
  *
  *     assertWrite(moduleId, property, …):
  *       if (this.owns(moduleId, property)) return true
  *       const owner = this.ownerOf(property)      // null for every name below
  *       throw new OwnershipError(...)             // in dev; counted in prod
  *
- * So "nobody owns it" is not a free-for-all, it is a hard refusal for everyone
- * including this module. That is the right default — an unowned write is exactly
- * the collision the map exists to stop — but it means the affected rows are
- * unimplementable until the manifest gains the claim, and a module that quietly
- * omitted them would leave the gap invisible.
+ * WHAT THIS FILE USED TO SAY HERE WAS FALSE, and the correction is the whole
+ * reason the paragraph is worth reading. It said "nobody owns it" is "a hard
+ * refusal for everyone INCLUDING THIS MODULE". It is not. `OwnerMap` is built
+ * from CODE — `src/main/core/registry.ts:126` folds every loaded module's
+ * `ownsProperties` — so the first line of `assertWrite` is `this.owns(moduleId,
+ * property)`, and adding one string to this module's own array makes it true.
+ * MEASURED:
+ *
+ *     not declared:   assertWrite('stream-open','demuxer-lavf-format') -> THREW
+ *     self-declared:  assertWrite('stream-open','demuxer-lavf-format') -> true
+ *
+ * There is no runtime barrier here at all. What actually holds the line is the
+ * MANIFEST, cross-checked against the code in both directions by
+ * `src/main/core/mpv/ownership.test.ts` — and that check had a hole of its own
+ * big enough to walk this exact escalation through, because it read the
+ * declarations with a regex: `ownsProperties: [...forbiddenPropertyNames(), …]`
+ * granted this module every property below and the suite stayed green
+ * (1144 pass / 0 fail, verified). The reader is `scripts/lib/module-decl.mjs`
+ * now — the AST, with an unreadable declaration reported rather than treated as
+ * an empty one.
+ *
+ * So the honest statement of the constraint is: these rows are unimplementable
+ * until the MANIFEST gains the claim, which is a review, not a code edit — and a
+ * module that quietly omitted them would leave the gap invisible. That is the
+ * right default; an unowned write is exactly the collision the map exists to
+ * stop.
  *
  * `spec-gaps.test.ts` asserts that this module never writes any of these, so the
  * table and the code cannot drift apart: if a future edit reaches for

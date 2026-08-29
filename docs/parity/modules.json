@@ -2954,13 +2954,12 @@
     ],
     "ownedProperties": [],
     "ownedCommands": [],
-    "requestsProperties": [
-      "keepaspect",
-      "panscan"
-    ],
+    "requestsProperties": [],
     "arbitrates": [],
     "mediates": {},
-    "usesMediators": [],
+    "usesMediators": [
+      "video-geometry.setFitMode"
+    ],
     "ownedFilterLabels": [],
     "ownedOrders": {
       "settingsSection": [

@@ -17,10 +17,17 @@ import { MISSING_MEDIATORS, UNOWNED_PROPERTIES, forbiddenPropertyNames } from '.
  * in a descriptor's `mpvOption`, in the low-latency gap table — actually
  * writable by somebody?
  *
- * The answer for seven of them is no, and it is no for EVERY module, because
- * `OwnerMap.assertWrite()` refuses a property whose owner is `null` exactly as
- * hard as one owned by a stranger. Writing a table of gaps in a report would
+ * The answer for seven of them is no. Writing a table of gaps in a report would
  * rot; a test that reads the manifest cannot.
+ *
+ * This paragraph used to add "and it is no for EVERY module, because
+ * `OwnerMap.assertWrite()` refuses a property whose owner is `null` exactly as
+ * hard as one owned by a stranger", which was false and is deleted: the owner
+ * map is built from CODE, so a module that lists a property in its own
+ * `ownsProperties` is granted it (measured — see the header of `spec-gaps.ts`).
+ * The barrier is the manifest and the code-vs-manifest cross-check in
+ * `src/main/core/mpv/ownership.test.ts`, which is exactly what the tests below
+ * assert against, so nothing in this FILE relied on the wrong sentence.
  */
 
 interface Row {

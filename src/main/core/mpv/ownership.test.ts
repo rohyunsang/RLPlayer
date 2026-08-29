@@ -13,6 +13,11 @@ import {
   propertyWrittenBy
 } from './ownership.ts'
 import { VF_ORDER, AF_ORDER } from './chain.ts'
+import {
+  moduleDirs,
+  readModuleDeclaration,
+  type ModuleDeclaration
+} from '../../../../scripts/lib/module-decl.mjs'
 
 /**
  * test:property-ownership (§6.2).
@@ -227,6 +232,7 @@ interface ManifestModule {
   ownedProperties: string[]
   ownedCommands: string[]
   ownedFilterLabels?: string[]
+  requestsProperties?: string[]
 }
 
 function manifest(): ManifestModule[] {
@@ -235,56 +241,77 @@ function manifest(): ManifestModule[] {
   ) as ManifestModule[]
 }
 
-/** Declared names, read out of the module source rather than imported —
- *  importing a module would drag Electron in. */
 /**
- * Feature directories that have an `index.ts` to read.
+ * Declared names, read out of the module source rather than imported -- an
+ * import would drag Electron in.
  *
- * NOT `readdirSync(...).filter(isDirectory)`, and the difference is a check that
- * lied for real during Wave 1's parallel build. `declaredList()` did a bare
- * `readFileSync(<dir>/index.ts)`, so ONE directory without an index.ts -- a
- * reserved Wave-1 slot, or another agent's module half-written at that instant
- * -- threw ENOENT and took down all four manifest-vs-code tests before they
- * asserted anything about anybody. Measured: `mkdir src/main/features/zz-x`
- * turns `npm run test:property-ownership` red with an fs error, and the
- * flagship ownership gate is then simultaneously failing for the wrong reason
- * and blind to every module that IS there. `modules.json` reserves all forty
- * directories, so this was going to fire thirty-four more times.
+ * IT USED TO BE A REGEX, AND IT WAS BLIND THREE WAYS. The old helper stripped
+ * comments from the whole file first (a real fix for a real defect: a doc
+ * comment quoting `ownsCommands: []` matched first and the test believed it) and
+ * then did
  *
- * A directory with no `index.ts` is not an error -- it is a reservation. A
- * directory with an index.ts that disagrees with the manifest still is.
+ *     new RegExp(`${field}:\\s*\\[([\\s\\S]*?)\\]`).exec(src)
+ *
+ * over `<dir>/index.ts`. That reports AGREEMENT it never checked whenever:
+ *
+ *   1. the array is not all literals. `ownsProperties: [...forbiddenPropertyNames(),
+ *      'cache']` captures only the quoted names, so a module can claim any
+ *      number of properties the manifest never sees and BOTH directions pass.
+ *      Verified by planting exactly that on M35: 1144 tests, 0 failures, while
+ *      `OwnerMap` -- which is built from CODE, `registry.ts:126` -- hands the
+ *      module write access to every one of them;
+ *   2. there is no array. `ownsProperties: KNOWN` matches nothing, `exec`
+ *      returns null, the helper returns `[]`, and for a row whose manifest list
+ *      is also empty both directions pass vacuously;
+ *   3. the module object is not in `index.ts`. M22 and M23 already split a
+ *      `manifest.ts` out because their `index.ts` imports `electron` and is
+ *      therefore unloadable by any test.
+ *
+ * `scripts/lib/module-decl.mjs` parses instead, resolves the DEFAULT EXPORT
+ * wherever it lives, and reports a declaration it cannot read statically rather
+ * than returning an empty list -- which is the only honest answer, and is
+ * asserted below.
  */
-function moduleDirs(): string[] {
-  const featuresDir = path.join(repo, 'src', 'main', 'features')
-  return fs
-    .readdirSync(featuresDir, { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .map((d) => d.name)
-    .filter((name) => fs.existsSync(path.join(featuresDir, name, 'index.ts')))
-}
+const declFor = (dir: string): ModuleDeclaration | null =>
+  readModuleDeclaration(path.join(repo, 'src', 'main', 'features', dir))
 
-function declaredList(
-  dir: string,
-  field: 'ownsProperties' | 'ownsCommands' | 'ownsFilterLabels'
-): string[] {
-  const file = path.join(repo, 'src', 'main', 'features', dir, 'index.ts')
-  if (!fs.existsSync(file)) return []
-  const raw = fs.readFileSync(file, 'utf8')
-  // Comments are stripped from the WHOLE FILE before the field is located, not
-  // from the matched body afterwards. Stripping afterwards looks equivalent and
-  // is not: a doc comment above the field that quotes it -- "`ownsCommands: []`
-  // meant assertCommand returned true" is a real one in nav-seek -- matches
-  // first, captures nothing, and the test then cheerfully reports that the
-  // module declares no commands. It found `[]` in a comment and believed it.
-  const src = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
-  const m = new RegExp(`${field}:\\s*\\[([\\s\\S]*?)\\]`).exec(src)
-  if (!m) return []
-  return [...(m[1] ?? '').matchAll(/'([^']+)'/g)].map((x) => x[1] as string)
-}
+const declaredField = (dir: string, field: string): string[] => [
+  ...(declFor(dir)?.fields[field] ?? [])
+]
 
-const declaredProperties = (dir: string): string[] => declaredList(dir, 'ownsProperties')
-const declaredCommands = (dir: string): string[] => declaredList(dir, 'ownsCommands')
-const declaredLabels = (dir: string): string[] => declaredList(dir, 'ownsFilterLabels')
+const declaredProperties = (dir: string): string[] => declaredField(dir, 'ownsProperties')
+const declaredCommands = (dir: string): string[] => declaredField(dir, 'ownsCommands')
+const declaredLabels = (dir: string): string[] => declaredField(dir, 'ownsFilterLabels')
+
+/**
+ * A declaration this reader cannot read is a failure of the reader, not an
+ * absence. Without this, closing hole 1 and hole 2 above would only move them:
+ * a spread would become "the field is missing" instead of "the field is short".
+ */
+test('every module declaration is statically readable', () => {
+  const dirs = moduleDirs(repo)
+  assert.ok(dirs.length > 0, 'no feature modules found')
+  let read = 0
+  for (const dir of dirs) {
+    const decl = declFor(dir)
+    assert.ok(decl, `${dir} has an index.ts but no default-exported module object`)
+    assert.equal(
+      decl.id,
+      dir,
+      `${dir}: the module's own id is '${decl.id}'; id must equal the directory name`
+    )
+    assert.deepEqual(
+      decl.unreadable,
+      [],
+      `${dir} (${path.basename(decl.file)}) declares ${decl.unreadable
+        .map((u) => `${u.field}: ${u.text} (${u.why})`)
+        .join('; ')}. Every manifest cross-check below reads these fields; one it ` +
+        `cannot parse is one it reports clean. Use a plain array of string literals.`
+    )
+    read++
+  }
+  assert.equal(read, dirs.length)
+})
 
 function covers(declared: readonly string[], property: string): boolean {
   return declared.some((d) => (d.endsWith('*') ? property.startsWith(d.slice(0, -1)) : d === property))
@@ -292,7 +319,7 @@ function covers(declared: readonly string[], property: string): boolean {
 
 test('every implemented module agrees with modules.json in both directions', () => {
   const man = manifest()
-  const dirs = moduleDirs()
+  const dirs = moduleDirs(repo)
 
   assert.ok(dirs.length > 0, 'no feature modules found')
 
@@ -330,6 +357,42 @@ test('every implemented module agrees with modules.json in both directions', () 
   }
 })
 
+/**
+ * `requestsProperties`, the third declaration the manifest carries and the only
+ * one nothing compared against the code.
+ *
+ * `manifest.test.ts` checks it thoroughly WITHIN the manifest -- an entry the
+ * row also owns, an entry that is really a command, an entry nobody owns -- and
+ * `ownership.test.ts` checks what it DOES at runtime (it decides which fix-hint
+ * an OwnershipError gives, and `requestSet` refuses without it). Neither asked
+ * whether the row and the module agree, so a module could reach for
+ * `ctx.mpv.requestSet('aid', ...)` with no manifest entry, and the reviewer who
+ * reads the manifest to answer "who depends on M11's `aid`?" would get the wrong
+ * answer -- which is the whole reason the field is documented as existing "so
+ * the dependency is visible in review".
+ *
+ * Both directions, like properties and commands.
+ */
+test("every module agrees with modules.json on requestsProperties", () => {
+  const man = manifest()
+  let compared = 0
+  for (const dir of moduleDirs(repo)) {
+    const entry = man.find((m) => m.path === `src/main/features/${dir}/`)
+    assert.ok(entry, `module '${dir}' has no entry in docs/parity/modules.json`)
+    const declared = declaredField(dir, 'requestsProperties')
+    const listed = entry.requestsProperties ?? []
+    assert.deepEqual(
+      [...declared].sort(),
+      [...listed].sort(),
+      `${entry.id} (${dir}): requestsProperties and modules.json disagree -- code ` +
+        `[${declared.join(', ')}] vs manifest [${listed.join(', ')}]`
+    )
+    compared++
+  }
+  // A comparison that compared nothing is a failure, not a pass.
+  assert.ok(compared > 0, 'no module was compared')
+})
+
 test('no module claims one of mpv’s COMMANDS as a property', () => {
   // `sub-reload` is a command -- it is in --input-cmdlist, and mpv answers
   // "property not found" when you read it. Declaring it in ownsProperties
@@ -362,7 +425,7 @@ test('no module claims one of mpv’s COMMANDS as a property', () => {
     'playlist-shuffle',
     'playlist-clear'
   ])
-  for (const dir of moduleDirs()) {
+  for (const dir of moduleDirs(repo)) {
     for (const p of declaredProperties(dir)) {
       assert.ok(
         !commandNames.has(p),
@@ -382,7 +445,7 @@ test('the core pieces own the transport and the two filter properties', () => {
 })
 
 test('no property is owned twice across core plus every implemented module', () => {
-  const decls = moduleDirs().map((d) => ({ id: d, ownsProperties: declaredProperties(d) }))
+  const decls = moduleDirs(repo).map((d) => ({ id: d, ownsProperties: declaredProperties(d) }))
   // Constructing the map IS the assertion: it throws on any collision.
   const map = new OwnerMap([...CORE_OWNERSHIP, ...decls])
   assert.ok(map.entries().length > 100, 'expected a substantial owner map')
@@ -408,7 +471,7 @@ test('every module agrees with modules.json on ownsFilterLabels, and the labels 
   const man = manifest()
   const known = new Set([...VF_ORDER, ...AF_ORDER])
 
-  for (const dir of moduleDirs()) {
+  for (const dir of moduleDirs(repo)) {
     const entry = man.find((m) => m.path === `src/main/features/${dir}/`)
     assert.ok(entry, `module '${dir}' has no entry in docs/parity/modules.json`)
     const declared = declaredLabels(dir)
