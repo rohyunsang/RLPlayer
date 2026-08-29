@@ -45,6 +45,71 @@ test('zero padding: value first, then more padding sorts earlier', () => {
   ordered(['007.mkv', '7.mkv'])
 })
 
+/**
+ * THE FOUR FAMILIES THAT SHARE A SORT WEIGHT WITH A PLAINER CHARACTER.
+ *
+ * `ﬁle.mp4` (U+FB01) sat at index 21 in Explorer and 28 for us — eight
+ * positional divergences from one character — while the 27,225-pair
+ * differential printed "0 mismatches", because every name it generated was
+ * ASCII, Hangul or a Latin-1 accent. Each expectation here is the API's own
+ * answer, taken from `scripts/verify-natural-sort.mjs`'s corpus.
+ */
+test('ligatures compare EXACTLY as their expansion (the ﬁle.mp4 divergence)', () => {
+  assert.equal(naturalCompare('ﬁle.mp4', 'file.mp4'), 0)
+  assert.equal(naturalCompare('ﬂy.mkv', 'fly.mkv'), 0)
+  assert.equal(naturalCompare('ﬃx.mkv', 'ffix.mkv'), 0)
+  assert.equal(naturalCompare('ß.mkv', 'ss.mkv'), 0)
+  assert.equal(naturalCompare('æon.mkv', 'aeon.mkv'), 0)
+  assert.equal(naturalCompare('Ĳ.mkv', 'IJ.mkv'), 0)
+  // …and therefore lands between its neighbours rather than after every letter.
+  ordered(['fh.mkv', 'fi.mkv', 'ﬁle.mp4', 'fj.mkv'])
+})
+
+test('decomposed and precomposed Latin are the same name', () => {
+  assert.equal(naturalCompare('épisode.mkv', 'épisode.mkv'), 0)
+  assert.equal(naturalCompare('Änna.mkv', 'Änna.mkv'), 0)
+  // …and both fold onto the base letter for the primary comparison.
+  ordered(['anna.mkv', 'Änna.mkv', 'azna.mkv'])
+})
+
+test('full-width forms carry the ASCII weight and sort one tier later', () => {
+  assert.equal(sign(naturalCompare('ａ.mkv', 'a.mkv')), 1)
+  assert.equal(sign(naturalCompare('１.mkv', '1.mkv')), 1)
+  assert.equal(sign(naturalCompare('１.mkv', '2.mkv')), -1)
+  // The primary weight is real: a numeric run comparison happens through it.
+  assert.equal(sign(naturalCompare('ａ2.mkv', 'a10.mkv')), -1)
+  ordered(['a.mkv', 'ａ.mkv', 'b.mkv'])
+})
+
+test('Hangul: jamo and syllables, and the blocks around them', () => {
+  const jamoGa = '가'
+  // A jamo-spelled syllable is the same NAME, one tier below the precomposed
+  // form — measured, not assumed.
+  assert.equal(sign(naturalCompare(`${jamoGa}.mkv`, '가.mkv')), -1)
+  assert.equal(sign(naturalCompare(`${jamoGa}.mkv`, '가[.mkv')), -1)
+  assert.equal(sign(naturalCompare(`${jamoGa}.mkv`, '가1.mkv')), -1)
+  assert.equal(sign(naturalCompare(`${jamoGa}.mkv`, '각.mkv')), -1)
+  assert.equal(sign(naturalCompare(`${jamoGa}.mkv`, '시즌.mkv')), -1)
+  assert.equal(
+    sign(naturalCompare('한글.mkv', '한글.mkv')),
+    1
+  )
+})
+
+test('what LOOKS foldable and is not: Roman numerals and circled numbers', () => {
+  // A Roman numeral is not the letter it resembles: it sits between the digits
+  // and the letters, and orders by VALUE.
+  ordered(['9.mkv', 'Ⅰ.mkv', 'a.mkv'])
+  assert.equal(sign(naturalCompare('Ⅸ.mkv', 'ⅰv.mkv')), 1)
+  assert.equal(sign(naturalCompare('Ⅰ.mkv', '⑩.mkv')), 1)
+  // A single-digit circled number carries the digit's weight without being one.
+  ordered(['0.mkv', '①.mkv', '9.mkv'])
+  assert.equal(sign(naturalCompare('①.mkv', '1.mkv')), 1)
+  // A symbol sorts before the digits, where the old single non-ASCII bucket put
+  // it after every letter.
+  ordered(['~.mkv', '€.mkv', '0.mkv'])
+})
+
 test('letters compare case-insensitively', () => {
   assert.equal(naturalCompare('x.mkv', 'X.mkv'), 0)
   assert.equal(naturalCompare('ABC.mkv', 'abc.mkv'), 0)
