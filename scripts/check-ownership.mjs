@@ -42,8 +42,17 @@
  * to touch, here is the contribution point that exists instead", the other is
  * "this file belongs to someone else".
  *
+ *   RULE C — AN UNATTRIBUTED HOTSPOT EDIT. See `evaluate()`.
+ *
+ * THE DEFAULT MODE IS TWO CHANGE SETS. HEAD is judged against the `Module:`
+ * trailers HEAD's own message declares; the working tree is judged with no
+ * actor unless one was typed. Borrowing HEAD's trailers to excuse an
+ * uncommitted edit was the false negative that let `npm run verify` pass on a
+ * live `src/renderer/src/main.ts` change, and reading no commit at all was the
+ * one that let the same edit through once it was committed.
+ *
  * Usage:
- *   node scripts/check-ownership.mjs                    working tree vs HEAD
+ *   node scripts/check-ownership.mjs                    HEAD, and the worktree
  *   node scripts/check-ownership.mjs --base origin/main  a whole branch
  *   node scripts/check-ownership.mjs --as M03            declare the actor
  *   node scripts/check-ownership.mjs --self-test         the rules against fixtures
@@ -317,7 +326,18 @@ export function evaluate(files, actorName, opts = {}) {
      * not an attribution gap, it is a hole in the partition.
      */
     const ids = new Set(declaredRows.map((r) => r.id))
-    const integration = opts.actorWasExplicit !== true && declaredRows.length > 1
+    /**
+     * "Integration range" is a property of `--base`, not of the actor's SHAPE.
+     *
+     * This used to be `!explicit && rows > 1`, which meant a DEFAULT-mode run
+     * that had picked up several trailers from one commit message got the
+     * range's soft treatment: an undeclared owner became a note instead of a
+     * violation. On this tree HEAD carries six trailers, so every default run
+     * was in the soft mode — including the one with a live `main.ts` edit in
+     * the working tree. A range is a range because a range was asked for.
+     */
+    const integration =
+      opts.range === true && opts.actorWasExplicit !== true && declaredRows.length > 1
     /** owner id -> files, for the collapsed report. */
     const undeclared = new Map()
     for (const f of scoped) {
@@ -587,17 +607,60 @@ function resolveBase(raw) {
   process.exit(1)
 }
 
+/** The uncommitted half: worktree, index and untracked. */
+function uncommittedFiles() {
+  const lines = []
+  lines.push(...git(['diff', '--name-only', 'HEAD']).split('\n'))
+  lines.push(...git(['diff', '--name-only', '--cached']).split('\n'))
+  lines.push(...git(['ls-files', '--others', '--exclude-standard']).split('\n'))
+  return [...new Set(lines.map((l) => l.trim().replace(/\\/g, '/')).filter(Boolean))]
+}
+
+/**
+ * THE CHANGE SET, and in the DEFAULT mode it now includes the last COMMIT.
+ *
+ * MEASURED on this tree: three lines appended to `src/renderer/src/main.ts` —
+ * the exact edit this script's header says it exists to catch — and committed
+ * on their own gave
+ *
+ *     npm run check:ownership -> "0 changed file(s), 0 under src/", clean, EXIT 0
+ *
+ * because this function read the worktree, the index and the untracked files
+ * and never a commit. Committing is the ONE thing the script's own remedy tells
+ * you to do ("split it into its own commit"), so for the second time in this
+ * file's history the remedy was the evasion: rule C closed the uncommitted half
+ * and left the committed half wide open.
+ *
+ * `--base` is unaffected — it already spans a whole branch. The default mode now
+ * covers HEAD's own diff plus anything not yet committed, which is exactly what
+ * a module author is about to push.
+ */
 function changedFiles(base) {
   const lines = []
   if (base) {
     // `...` so a long-lived branch is compared against its merge base rather
     // than against whatever main has done since.
     lines.push(...git(['diff', '--name-only', `${base}...HEAD`]).split('\n'))
+  } else {
+    try {
+      lines.push(...git(['diff', '--name-only', 'HEAD~1', 'HEAD']).split('\n'))
+    } catch {
+      /* a root commit has no parent; the uncommitted half still counts */
+    }
   }
-  lines.push(...git(['diff', '--name-only', 'HEAD']).split('\n'))
-  lines.push(...git(['diff', '--name-only', '--cached']).split('\n'))
-  lines.push(...git(['ls-files', '--others', '--exclude-standard']).split('\n'))
+  lines.push(...uncommittedFiles())
   return [...new Set(lines.map((l) => l.trim().replace(/\\/g, '/')).filter(Boolean))]
+}
+
+/** Every `Module:` row HEAD's own commit message declares. */
+function headTrailers() {
+  try {
+    const log = git(['log', '-1', '--format=%B'])
+    const found = [...log.matchAll(/^Module:[ 	]*(\S+)[ 	]*$/gm)].map((m) => m[1])
+    return [...new Set(found.flatMap((t) => t.split(',').map((x) => x.trim())).filter(Boolean))]
+  } catch {
+    return []
+  }
 }
 
 /**
@@ -824,6 +887,7 @@ function selfTest() {
        * was attributed to whichever module committed last.
        */
       name: 'an integration range: the trailer union covers every row that changed',
+      range: true,
       files: [
         'src/main/features/stream-open/index.ts',
         'src/main/features/mediainfo/index.ts',
@@ -838,6 +902,7 @@ function selfTest() {
     },
     {
       name: 'an AUTO-DETECTED integration range still reports a file NOBODY owns',
+      range: true,
       files: ['src/main/features/stream-open/index.ts', 'src/main/brand-new-thing.ts'],
       actor: 'M35,M29',
       explicit: false,
@@ -848,6 +913,7 @@ function selfTest() {
     },
     {
       name: 'an undeclared OWNER in an auto-detected range is a note, not a violation',
+      range: true,
       files: ['src/main/features/stream-open/index.ts', 'src/main/core/paths.ts'],
       actor: 'M35,M29',
       explicit: false,
@@ -859,6 +925,7 @@ function selfTest() {
     },
     {
       name: 'the same range declared EXPLICITLY keeps the strict rule',
+      range: true,
       files: ['src/main/features/stream-open/index.ts', 'src/main/core/paths.ts'],
       actor: 'M35,M29',
       explicit: true,
@@ -866,6 +933,34 @@ function selfTest() {
       because:
         'a list somebody typed is a claim about the change set; this script does not soften ' +
         'those, exactly as it does not soften an explicit --as typo'
+    },
+    {
+      /**
+       * THE SOFT MODE IS FOR A RANGE, NOT FOR AN ACTOR THAT HAPPENS TO NAME
+       * SEVERAL ROWS. `integration` used to be `!explicit && rows > 1`, so a
+       * DEFAULT-mode run whose actor came from a commit message with six
+       * trailers -- which is what HEAD carries on this branch -- got the
+       * range's soft treatment and turned an undeclared owner into a note.
+       * That is half of why `npm run verify` passed on a live main.ts edit.
+       */
+      name: 'a multi-row actor WITHOUT a range keeps the strict rule',
+      files: ['src/main/features/stream-open/index.ts', 'src/renderer/src/main.ts'],
+      actor: 'M35,M29',
+      explicit: false,
+      range: false,
+      expect: 'fail',
+      needle: 'RULE B',
+      because:
+        'no --base was given, so this is one commit or one worktree, not an integration range'
+    },
+    {
+      name: 'the SAME set as a range is an attribution note, as before',
+      files: ['src/main/features/stream-open/index.ts', 'src/renderer/src/main.ts'],
+      actor: 'M35,M29',
+      explicit: false,
+      range: true,
+      expect: 'pass',
+      note: 'ATTRIBUTION GAP'
     },
     {
       name: 'an EXPLICIT --as that names no row is the callers typo',
@@ -894,7 +989,8 @@ function selfTest() {
   const failures = []
   for (const c of cases) {
     const { problems, notes } = evaluate(c.files, c.actor, {
-      actorWasExplicit: c.explicit === true
+      actorWasExplicit: c.explicit === true,
+      range: c.range === true
     })
     // A fixture that expects a failure and gets one for the WRONG REASON is the
     // shape of check this repo keeps finding, so the reason is asserted too.
@@ -956,37 +1052,110 @@ function selfTest() {
 if (SELF_TEST) selfTest()
 
 const base = resolveBase(flag('base'))
-const files = changedFiles(base)
-if (base !== null && files.length === 0) {
-  console.error(
-    `check:ownership: the diff ${base}...HEAD is empty, so nothing was checked. That is not a ` +
-      `pass. If this is intentional, run without --base.`
+
+/** One evaluated change set, printed and collected. */
+function run(label, files, actor) {
+  const { problems, notes, attributed } = evaluate(files, actor.name, {
+    actorWasExplicit: actor.wasExplicit === true,
+    range: actor.range === true
+  })
+  console.log(
+    'check:ownership [%s]: %d changed file(s), %d under src/%s',
+    label,
+    files.length,
+    attributed.length,
+    actor.name ? `, actor '${actor.name}' (from ${actor.from})` : ', no actor declared (rule A only)'
   )
-  process.exit(1)
-}
-const actor = detectActor(base)
-const { problems, notes, attributed } = evaluate(files, actor.name, {
-  actorWasExplicit: actor.wasExplicit === true
-})
-
-const inSrc = attributed.length
-console.log(
-  'check:ownership: %d changed file(s), %d under src/%s',
-  files.length,
-  inSrc,
-  actor.name ? `, actor '${actor.name}' (from ${actor.from})` : ', no actor declared (rule A only)'
-)
-if (inSrc > 0) {
-  const byOwner = new Map()
-  for (const [file, owner] of attributed) {
-    byOwner.set(owner, [...(byOwner.get(owner) ?? []), file])
+  if (actor.note) console.log('  %s', actor.note)
+  if (attributed.length > 0) {
+    const byOwner = new Map()
+    for (const [file, owner] of attributed) {
+      byOwner.set(owner, [...(byOwner.get(owner) ?? []), file])
+    }
+    for (const [owner, list] of [...byOwner].sort()) console.log('  %s: %s', owner, list.join(', '))
   }
-  for (const [owner, list] of [...byOwner].sort()) {
-    console.log('  %s: %s', owner, list.join(', '))
-  }
+  for (const n of notes ?? []) console.log('\ncheck:ownership %s', n)
+  return problems
 }
 
-for (const n of notes ?? []) console.log('\ncheck:ownership %s', n)
+const problems = []
+
+if (base !== null) {
+  const files = changedFiles(base)
+  if (files.length === 0) {
+    console.error(
+      `check:ownership: the diff ${base}...HEAD is empty, so nothing was checked. That is not a ` +
+        `pass. If this is intentional, run without --base.`
+    )
+    process.exit(1)
+  }
+  const actor = detectActor(base)
+  problems.push(...run(`${base}...HEAD + worktree`, files, { ...actor, range: true }))
+} else {
+  /**
+   * THE DEFAULT MODE IS TWO CHANGE SETS, NOT ONE, and separating them is what
+   * makes the fixed gate READABLE as well as correct.
+   *
+   * The commit at HEAD carries its own `Module:` trailers, and those are a claim
+   * about THAT commit. The working tree carries no trailers at all. Evaluating
+   * them together forces one of two lies: either HEAD's trailers get borrowed to
+   * excuse an uncommitted shared-file edit (the false negative this fixes), or
+   * the uncommitted edit's lack of an actor drags HEAD's perfectly legitimate
+   * multi-row commit into rule A and prints twenty-five lines about files
+   * nobody touched today. This repository has already learned, twice, that a
+   * gate whose output is discounted wholesale enforces nothing.
+   *
+   * So: HEAD is judged against what HEAD declares, the worktree is judged with
+   * no actor unless one was typed, and both must pass.
+   */
+  const committed = (() => {
+    try {
+      return [
+        ...new Set(
+          git(['diff', '--name-only', 'HEAD~1', 'HEAD'])
+            .split('\n')
+            .map((l) => l.trim().replace(/\\/g, '/'))
+            .filter(Boolean)
+        )
+      ]
+    } catch {
+      return []
+    }
+  })()
+  const dirty = uncommittedFiles()
+
+  if (committed.length > 0) {
+    // A commit's own trailers are as explicit as `--as`: somebody typed them
+    // into that message about those files.
+    const trailers = headTrailers()
+    problems.push(
+      ...run('HEAD', committed, {
+        name: trailers.length > 0 ? trailers.join(',') : null,
+        from: trailers.length > 0 ? `${trailers.length} Module: trailer(s) on HEAD` : null,
+        wasExplicit: trailers.length > 0,
+        range: false
+      })
+    )
+  }
+  if (dirty.length > 0) {
+    const explicit = flag('as') ?? process.env['RL_MODULE']
+    problems.push(
+      ...run('worktree', dirty, {
+        name: explicit ?? null,
+        from: explicit ? (explicit === flag('as') ? '--as' : '$RL_MODULE') : null,
+        wasExplicit: Boolean(explicit),
+        range: false,
+        note: explicit
+          ? null
+          : `no actor for the uncommitted half. HEAD's \`Module:\` trailers are NOT borrowed: ` +
+            `they describe the commit that carries them. Pass --as, or commit with a trailer.`
+      })
+    )
+  }
+  if (committed.length === 0 && dirty.length === 0) {
+    console.log('check:ownership: nothing changed at HEAD and nothing uncommitted.')
+  }
+}
 
 if (problems.length > 0) {
   console.error('\ncheck:ownership found %d violation(s):\n', problems.length)
