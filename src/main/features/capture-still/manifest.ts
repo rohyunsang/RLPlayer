@@ -319,6 +319,10 @@ export const KO: Record<string, string> = {
     'capture-still.savedFallback': '{name}{을/를} 저장했습니다 (화면 해상도를 쓸 수 없어 원본 해상도로 저장)',
     'capture-still.copied': '현재 프레임을 클립보드에 복사했습니다',
     'capture-still.failed': '캡처에 실패했습니다',
+    // C03. The clipboard write can be ACCEPTED and still not land (a policy or
+    // another process holding the clipboard open), so the failure has to be
+    // distinguishable from a capture that never produced a frame.
+    'capture-still.clipboardFailed': '클립보드에 복사하지 못했습니다: {reason}',
     'capture-still.relativeReply':
       '캡처 파일 경로를 확인할 수 없습니다. 저장 폴더 설정을 확인하세요.',
     'capture-still.burstStarted': '연속 캡처 {n}장 시작',
@@ -392,6 +396,7 @@ export const EN: Record<string, string> = {
     'capture-still.savedFallback': 'Saved {name} (no display surface — used source resolution)',
     'capture-still.copied': 'Frame copied to the clipboard',
     'capture-still.failed': 'Capture failed',
+    'capture-still.clipboardFailed': 'Could not copy to the clipboard: {reason}',
     'capture-still.relativeReply':
       'mpv reported a relative capture path; check the capture folder setting.',
     'capture-still.burstStarted': 'Consecutive capture: {n} frames',

@@ -427,11 +427,24 @@ async function captureClipboard(scope: CaptureScope, withSubs: boolean): Promise
       const decision = resizeDecision(resizeWidth(), img.width, 'png')
       if (decision.action === 'resize') payload = img.resize(decision.width).toPng()
     }
+    /**
+     * `copyImagePng` READS THE CLIPBOARD BACK now, and that is the whole point
+     * of awaiting it here. Measured on a box that denies clipboard access:
+     * `clipboard.write()` resolved, `clipboard.has('image/png')` was false, and
+     * this function still showed the success toast. A resolved promise is
+     * evidence that the call returned, not that the frame is on the clipboard.
+     */
     await ctx.shell.copyImagePng(payload)
     ctx.osd.toast({ kind: 'info', message: t('capture-still.copied') })
   } catch (e) {
-    ctx.log.error('clipboard capture failed:', (e as Error).message)
-    ctx.osd.toast({ kind: 'error', message: t('capture-still.failed') })
+    const message = (e as Error).message
+    ctx.log.error('clipboard capture failed:', message)
+    ctx.osd.toast({
+      kind: 'error',
+      message: /clipboard/i.test(message)
+        ? t('capture-still.clipboardFailed', { reason: message })
+        : t('capture-still.failed')
+    })
   } finally {
     fs.promises.rm(tmp, { force: true }).catch(() => undefined)
   }

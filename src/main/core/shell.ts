@@ -69,6 +69,45 @@ const ALLOWED: Record<AppPathName, Parameters<typeof app.getPath>[0]> = {
   exe: 'exe'
 }
 
+/**
+ * DID THE WRITE ACTUALLY LAND?
+ *
+ * `clipboard.write()` and `clipboard.writeText()` RESOLVE UNCONDITIONALLY.
+ * Measured on a box that denies clipboard access — `clip.exe` answers "Access
+ * denied" and `GetClipboardSequenceNumber` stays frozen at 1359 across writes —
+ * with the pinned Electron 44 and this exact code path:
+ *
+ *     clipboard.writeText('RLPLAYER-PROBE-…')  -> resolved
+ *     clipboard.readText()                     -> ""
+ *     clipboard.write([ClipboardItem png])     -> resolved
+ *     clipboard.has('image/png')               -> false
+ *     clipboard.read()                         -> [ { types: [] } ]
+ *
+ * and the app showed "클립보드에 복사했습니다". A success toast that fires on a
+ * resolved promise is not evidence about the clipboard; it is evidence that the
+ * call returned. So both paths read the clipboard back, and the failure message
+ * names the likely cause rather than saying "failed".
+ *
+ * The image check asks TWO independent questions because Electron 44 exposes no
+ * `availableFormats` and no `readImage` (its clipboard is
+ * `clear/has/read/readText/write/writeText` and nothing else): `has()` for the
+ * format, and `read()` for the item types. A working box needs only one of them
+ * to say yes; the denying box above answers no to both.
+ */
+async function clipboardHasPng(): Promise<boolean> {
+  try {
+    if (await clipboard.has('image/png')) return true
+  } catch {
+    /* `has` can refuse an unknown format name; the read below is the fallback */
+  }
+  try {
+    const items = (await clipboard.read()) as Array<{ types?: readonly string[] }>
+    return items.some((i) => (i.types ?? []).some((t) => /png|image/i.test(t)))
+  } catch {
+    return false
+  }
+}
+
 export function createShellService(ownerId: string): ShellService {
   return {
     showItemInFolder(fullPath: string): void {
@@ -82,6 +121,23 @@ export function createShellService(ownerId: string): ShellService {
     },
     async copyText(text: string): Promise<void> {
       await clipboard.writeText(text)
+      // READ IT BACK. See the note above `assertLanded`.
+      let back: string
+      try {
+        back = String(await clipboard.readText())
+      } catch (e) {
+        throw new Error(
+          `the clipboard could not be read back after writing (${(e as Error).message}), so ` +
+            `whether the copy landed is unknown. Reporting failure rather than success.`
+        )
+      }
+      if (back !== text) {
+        throw new Error(
+          `the clipboard write was accepted and did not land: ${text.length} character(s) were ` +
+            `written and the clipboard holds ${back.length}. On Windows this is normally ` +
+            `another process holding the clipboard open, or a policy denying access to it.`
+        )
+      }
     },
     async copyImagePng(png: Uint8Array): Promise<void> {
       // A fresh ArrayBuffer-backed copy: a Uint8Array that is a VIEW into a
@@ -89,7 +145,16 @@ export function createShellService(ownerId: string): ShellService {
       // contents on the clipboard.
       const bytes = new Uint8Array(png.length)
       bytes.set(png)
-      await clipboard.write([new ClipboardItem({ 'image/png': new Blob([bytes], { type: 'image/png' }) })])
+      await clipboard.write([
+        new ClipboardItem({ 'image/png': new Blob([bytes], { type: 'image/png' }) })
+      ])
+      if (!(await clipboardHasPng())) {
+        throw new Error(
+          `the clipboard accepted a ${png.length}-byte PNG and does not hold an image: neither ` +
+            `clipboard.has('image/png') nor clipboard.read() reports one. On Windows this is ` +
+            `normally another process holding the clipboard open, or a policy denying access.`
+        )
+      }
     },
     appPath(name: AppPathName): string {
       const key = ALLOWED[name]

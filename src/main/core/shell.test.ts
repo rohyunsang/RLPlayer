@@ -132,6 +132,81 @@ test('nothing in the tree calls the clipboard method Electron 44 does not have',
 })
 
 /**
+ * THE CLIPBOARD TOAST WAS NOT EVIDENCE.
+ *
+ * Measured with the pinned Electron 44 on a box that denies clipboard access
+ * (`clip.exe` answers "Access denied", `GetClipboardSequenceNumber` frozen at
+ * 1359 across writes), running the real code path:
+ *
+ *     clipboard.writeText('RLPLAYER-PROBE-…')  -> RESOLVED
+ *     clipboard.readText()                     -> ""
+ *     clipboard.write([ClipboardItem png])     -> RESOLVED
+ *     clipboard.has('image/png')               -> false
+ *     clipboard.read()                         -> [ { types: [] } ]
+ *
+ * and the app showed "클립보드에 복사했습니다". A resolved promise is evidence
+ * that the call returned, not that anything reached the clipboard. Both paths
+ * read it back now, and these assertions exist because the readback is the ONLY
+ * thing standing between a denied write and a success toast — deleting it would
+ * leave every test passing.
+ */
+test('copyText reads the clipboard back before it claims success', () => {
+  const src = read('src/main/core/shell.ts')
+  const body = src.slice(src.indexOf('async copyText'), src.indexOf('async copyImagePng'))
+  assert.match(body, /clipboard\.readText\(\)/, 'copyText must read the clipboard back')
+  assert.match(body, /back !== text/, 'copyText must compare what came back with what went in')
+  assert.match(body, /throw new Error/, 'a write that did not land must reject, not resolve')
+})
+
+test('copyImagePng asks TWO independent questions, because Electron 44 has no readImage', () => {
+  const src = read('src/main/core/shell.ts')
+  assert.match(src, /clipboard\.has\('image\/png'\)/)
+  assert.match(src, /clipboard\.read\(\)/)
+  const body = src.slice(src.indexOf('async copyImagePng'))
+  assert.match(body, /clipboardHasPng\(\)/, 'copyImagePng must verify before resolving')
+  assert.match(body, /throw new Error/)
+})
+
+test('the C03 caller shows a CLIPBOARD failure, not a generic capture failure', () => {
+  const src = read('src/main/features/capture-still/index.ts')
+  assert.match(src, /capture-still\.clipboardFailed/)
+  const manifest = read('src/main/features/capture-still/manifest.ts')
+  // Both catalogs, or the Korean user gets a raw key at the moment it fails.
+  assert.equal(
+    (manifest.match(/'capture-still\.clipboardFailed'/g) ?? []).length,
+    2,
+    'the clipboard failure message must exist in ko AND en'
+  )
+})
+
+/**
+ * The four §2 rows that name `clipboard.writeText` and read as synchronous.
+ *
+ * C03's note has said since last round that `clipboard.writeText` is a Promise
+ * in Electron 44 and that S39, L25, L26 and L34 all get it wrong — and all four
+ * rows still PRESCRIBED it, in the mapping cell a module author copies from.
+ * ~25 modules are about to be written from these tables; a correction that
+ * lives only in a neighbouring row's prose is a correction nobody applies.
+ */
+test('no §2 row prescribes the synchronous clipboard call', () => {
+  const spec = read('docs/parity/00-parity-spec.md')
+  const offenders: string[] = []
+  for (const line of spec.split('\n')) {
+    if (!/^\|\s*[A-Z]\d+\s*\|/.test(line)) continue
+    const cells = line.split('|').map((c) => c.trim())
+    const id = cells[1] ?? ''
+    const mapping = cells[7] ?? ''
+    if (/clipboard\.(?:writeText|writeImage|readImage)/.test(mapping)) offenders.push(id)
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `these rows still prescribe Electron's clipboard directly instead of ctx.shell.copyText, ` +
+      `which is async AND verifies: ${offenders.join(', ')}`
+  )
+})
+
+/**
  * The point of the whole exercise, asserted on the tree rather than described:
  * a feature module's `index.ts` is loadable.
  */
