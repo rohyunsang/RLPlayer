@@ -10,6 +10,10 @@
  * are structurally identical to Electron's and pass straight through.
  */
 
+import type { TrackSelectionProperty } from './mpv/tracks.ts'
+
+export type { TrackSelectionProperty }
+
 export type FeatureId = string // kebab-case, globally unique, e.g. 'video-color'
 export type CommandId = string // `${FeatureId}.${verb}`
 export type SettingId = string // `${FeatureId}.${key}`
@@ -253,6 +257,30 @@ export interface MpvService {
    * production so one bad module cannot black-screen the player.
    */
   set(name: string, value: unknown): Promise<void>
+
+  /**
+   * Write one of the four TRACK-SELECTION properties and return what mpv
+   * actually resolved it to.
+   *
+   * `sid`, `aid`, `vid` and `secondary-sid` hold an INDEX into a list mpv is
+   * free to renumber, and mpv answers `{"error":"success"}` to
+   * `set_property sid 1` when there is no track 1 — and then holds `false`. So
+   * `set()` returning without throwing proves only that the write was accepted,
+   * not that a track is selected. That exact shape lost every Korean subtitle
+   * on one press of Alt+C: `sub-reload` renumbered `kor.smi` from 1 to 3, mpv
+   * re-selected it correctly on its own, and the module wrote the captured 1
+   * back over it.
+   *
+   * Use this whenever the id you are writing was captured before an operation
+   * that can renumber (see `RENUMBERING_COMMANDS` in `@shared/mpv/tracks`), and
+   * re-resolve the track by IDENTITY first with `findByIdentity`. Plain `set()`
+   * still works and still reports a resolved-to-`false` write loudly, but it
+   * cannot hand you the answer.
+   */
+  selectTrack(
+    name: TrackSelectionProperty,
+    id: number | false | 'no'
+  ): Promise<number | false>
 
   /** The mediated path for a property another module owns. */
   requestSet(

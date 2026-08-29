@@ -236,7 +236,8 @@
       "src/main/core/mpv/reserved.ts",
       "src/main/core/transport.ts",
       "src/main/mpv/client.ts",
-      "src/main/mpv/manager.ts"
+      "src/main/mpv/manager.ts",
+      "src/shared/mpv/"
     ],
     "features": [],
     "mustNotTouch": [
