@@ -1,5 +1,6 @@
 import './capture-encode.css'
 import type { RendererFeatureModule } from '../../../../shared/renderer-api.ts'
+import type { JobsWire } from '../../../../shared/features/capture-encode/wire.ts'
 
 /**
  * M23 capture-encode, renderer half.
@@ -41,22 +42,6 @@ import type { RendererFeatureModule } from '../../../../shared/renderer-api.ts'
  * which `check:partition` fails; adding it to the row is a manifest edit this
  * module may not make. M22 wrote the same paragraph one directory over.
  */
-type JobState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
-
-interface JobWire {
-  id: string
-  kind: string
-  label: string
-  name: string
-  state: JobState
-  percent: number | null
-  error: string | null
-}
-
-interface JobsWire {
-  jobs: JobWire[]
-}
-
 /** What the quick-start row offers, as command ids the main half also exposes. */
 const QUICK_ACTIONS: ReadonlyArray<{ command: string; labelKey: string }> = [
   { command: 'capture-encode.exportClip', labelKey: 'capture-encode.exportClip' },

@@ -312,7 +312,14 @@ test('no forbidden import, and no core file reached by any spelling', () => {
         .filter(Boolean)
     : []
   assert.equal(imported.includes('dialog'), false, "imports Electron's dialog; use ctx.dialog")
-  assert.deepEqual(imported, ['clipboard', 'shell'])
+  /**
+   * NOTHING. This was `['clipboard', 'shell']`, and that pair was the whole
+   * reason this module's `index.ts` could not be loaded by any test.
+   * `ctx.shell` (§3.3.9) exists now -- `copyText` for L25 and
+   * `showItemInFolder` for L26 -- so the import is gone and the assertion is
+   * the strong one: a feature module imports Electron for NOTHING.
+   */
+  assert.deepEqual(imported, [])
   assert.equal(
     /\bdialog\.(?:show|showMessageBox|showOpenDialog|showSaveDialog)/.test(source),
     false
@@ -339,13 +346,29 @@ test('dispose releases the timers, the subscriptions, the probe and the child', 
 
 test('the row still claims the two directories this module writes, and nothing else', () => {
   assert.ok(row)
+  /**
+   * THE REPORTED GAP, CLOSED. This used to assert the row owned exactly two
+   * directories and that `src/shared/features/mediainfo/` was NOT among them —
+   * which is why a hand-maintained duplicate `wire.ts` and a
+   * `wire-parity.test.ts` comparing the two existed at all. All 40 rows carry
+   * the shared directory now, the payloads are declared once in
+   * `src/shared/features/mediainfo/wire.ts`, and the parity test is deleted
+   * because the compiler does its job.
+   */
   assert.deepEqual(row.ownedFiles, [
     'src/main/features/mediainfo/',
-    'src/renderer/src/features/mediainfo/'
+    'src/renderer/src/features/mediainfo/',
+    'src/shared/features/mediainfo/'
   ])
-  // The reported gap, asserted so it cannot be quietly "fixed" one side only:
-  // section 10's shared wire directory is not among them, which is why
-  // `wire-parity.test.ts` exists.
-  assert.equal(row.ownedFiles.includes('src/shared/features/mediainfo/'), false)
-  assert.equal(fs.existsSync(path.join(repo, 'src', 'shared', 'features', 'mediainfo')), false)
+  assert.equal(
+    fs.existsSync(path.join(repo, 'src', 'shared', 'features', 'mediainfo', 'wire.ts')),
+    true
+  )
+  for (const half of ['src/main/features/mediainfo', 'src/renderer/src/features/mediainfo']) {
+    assert.equal(
+      fs.existsSync(path.join(repo, half, 'wire.ts')),
+      false,
+      `${half}/wire.ts is a duplicate of the shared declaration`
+    )
+  }
 })

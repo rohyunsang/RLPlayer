@@ -462,6 +462,8 @@
     "ownedOrders": {},
     "ownedFiles": [
       "src/main/core/dialog.ts",
+      "src/main/core/shell.test.ts",
+      "src/main/core/shell.ts",
       "src/main/core/window/",
       "src/main/core/window/windows.ts"
     ],
@@ -596,7 +598,8 @@
     },
     "ownedFiles": [
       "src/main/features/video-color/",
-      "src/renderer/src/features/video-color/"
+      "src/renderer/src/features/video-color/",
+      "src/shared/features/video-color/"
     ],
     "features": [
       "V01",
@@ -688,7 +691,8 @@
     },
     "ownedFiles": [
       "src/main/features/video-geometry/",
-      "src/renderer/src/features/video-geometry/"
+      "src/renderer/src/features/video-geometry/",
+      "src/shared/features/video-geometry/"
     ],
     "features": [
       "V22",
@@ -771,7 +775,8 @@
     },
     "ownedFiles": [
       "src/main/features/video-enhance/",
-      "src/renderer/src/features/video-enhance/"
+      "src/renderer/src/features/video-enhance/",
+      "src/shared/features/video-enhance/"
     ],
     "features": [
       "V08",
@@ -831,7 +836,8 @@
     "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/video-deinterlace/",
-      "src/renderer/src/features/video-deinterlace/"
+      "src/renderer/src/features/video-deinterlace/",
+      "src/shared/features/video-deinterlace/"
     ],
     "features": [
       "V17",
@@ -902,7 +908,8 @@
     "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/video-hdr/",
-      "src/renderer/src/features/video-hdr/"
+      "src/renderer/src/features/video-hdr/",
+      "src/shared/features/video-hdr/"
     ],
     "features": [
       "V32",
@@ -998,7 +1005,8 @@
     "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/video-scaler/",
-      "src/renderer/src/features/video-scaler/"
+      "src/renderer/src/features/video-scaler/",
+      "src/shared/features/video-scaler/"
     ],
     "features": [
       "V36",
@@ -1087,7 +1095,8 @@
     },
     "ownedFiles": [
       "src/main/features/video-decode/",
-      "src/renderer/src/features/video-decode/"
+      "src/renderer/src/features/video-decode/",
+      "src/shared/features/video-decode/"
     ],
     "features": [
       "V49",
@@ -1151,7 +1160,8 @@
     },
     "ownedFiles": [
       "src/main/features/video-framerate/",
-      "src/renderer/src/features/video-framerate/"
+      "src/renderer/src/features/video-framerate/",
+      "src/shared/features/video-framerate/"
     ],
     "features": [
       "V41",
@@ -1206,7 +1216,8 @@
     "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/video-stereo360/",
-      "src/renderer/src/features/video-stereo360/"
+      "src/renderer/src/features/video-stereo360/",
+      "src/shared/features/video-stereo360/"
     ],
     "features": [
       "V37",
@@ -1273,7 +1284,8 @@
     },
     "ownedFiles": [
       "src/main/features/audio-volume/",
-      "src/renderer/src/features/audio-volume/"
+      "src/renderer/src/features/audio-volume/",
+      "src/shared/features/audio-volume/"
     ],
     "features": [
       "A06",
@@ -1371,7 +1383,8 @@
     },
     "ownedFiles": [
       "src/main/features/audio-tracks/",
-      "src/renderer/src/features/audio-tracks/"
+      "src/renderer/src/features/audio-tracks/",
+      "src/shared/features/audio-tracks/"
     ],
     "features": [
       "A10",
@@ -1489,7 +1502,8 @@
     "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/audio-loudness/",
-      "src/renderer/src/features/audio-loudness/"
+      "src/renderer/src/features/audio-loudness/",
+      "src/shared/features/audio-loudness/"
     ],
     "features": [
       "A04",
@@ -1544,7 +1558,8 @@
     "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/audio-channels/",
-      "src/renderer/src/features/audio-channels/"
+      "src/renderer/src/features/audio-channels/",
+      "src/shared/features/audio-channels/"
     ],
     "features": [
       "A13",
@@ -1618,7 +1633,8 @@
     },
     "ownedFiles": [
       "src/main/features/audio-devices/",
-      "src/renderer/src/features/audio-devices/"
+      "src/renderer/src/features/audio-devices/",
+      "src/shared/features/audio-devices/"
     ],
     "features": [
       "A18",
@@ -1674,7 +1690,8 @@
     "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/audio-effects/",
-      "src/renderer/src/features/audio-effects/"
+      "src/renderer/src/features/audio-effects/",
+      "src/shared/features/audio-effects/"
     ],
     "features": [
       "A28",
@@ -1769,7 +1786,8 @@
     },
     "ownedFiles": [
       "src/main/features/subs-tracks/",
-      "src/renderer/src/features/subs-tracks/"
+      "src/renderer/src/features/subs-tracks/",
+      "src/shared/features/subs-tracks/"
     ],
     "features": [
       "P52",
@@ -1855,7 +1873,8 @@
     },
     "ownedFiles": [
       "src/main/features/subs-formats/",
-      "src/renderer/src/features/subs-formats/"
+      "src/renderer/src/features/subs-formats/",
+      "src/shared/features/subs-formats/"
     ],
     "features": [
       "S03",
@@ -1980,7 +1999,8 @@
     },
     "ownedFiles": [
       "src/main/features/subs-style/",
-      "src/renderer/src/features/subs-style/"
+      "src/renderer/src/features/subs-style/",
+      "src/shared/features/subs-style/"
     ],
     "features": [
       "S17",
@@ -2048,7 +2068,8 @@
     "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/subs-sync/",
-      "src/renderer/src/features/subs-sync/"
+      "src/renderer/src/features/subs-sync/",
+      "src/shared/features/subs-sync/"
     ],
     "features": [
       "N34",
@@ -2101,7 +2122,8 @@
     "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/subs-browser/",
-      "src/renderer/src/features/subs-browser/"
+      "src/renderer/src/features/subs-browser/",
+      "src/shared/features/subs-browser/"
     ],
     "features": [
       "R32",
@@ -2183,7 +2205,8 @@
     },
     "ownedFiles": [
       "src/main/features/capture-still/",
-      "src/renderer/src/features/capture-still/"
+      "src/renderer/src/features/capture-still/",
+      "src/shared/features/capture-still/"
     ],
     "features": [
       "C01",
@@ -2272,7 +2295,8 @@
     },
     "ownedFiles": [
       "src/main/features/capture-encode/",
-      "src/renderer/src/features/capture-encode/"
+      "src/renderer/src/features/capture-encode/",
+      "src/shared/features/capture-encode/"
     ],
     "features": [
       "A46",
@@ -2337,7 +2361,8 @@
     "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/nav-seek/",
-      "src/renderer/src/features/nav-seek/"
+      "src/renderer/src/features/nav-seek/",
+      "src/shared/features/nav-seek/"
     ],
     "features": [
       "N24",
@@ -2436,7 +2461,8 @@
     },
     "ownedFiles": [
       "src/main/features/nav-chapters/",
-      "src/renderer/src/features/nav-chapters/"
+      "src/renderer/src/features/nav-chapters/",
+      "src/shared/features/nav-chapters/"
     ],
     "features": [
       "N01",
@@ -2700,7 +2726,8 @@
       "src/main/features/playlist/",
       "src/main/services/playlist.test.ts",
       "src/main/services/playlist.ts",
-      "src/renderer/src/features/playlist/"
+      "src/renderer/src/features/playlist/",
+      "src/shared/features/playlist/"
     ],
     "features": [
       "A40",
@@ -2846,7 +2873,8 @@
     },
     "ownedFiles": [
       "src/main/features/mediainfo/",
-      "src/renderer/src/features/mediainfo/"
+      "src/renderer/src/features/mediainfo/",
+      "src/shared/features/mediainfo/"
     ],
     "features": [
       "A45",
@@ -2909,7 +2937,8 @@
     "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/history/",
-      "src/renderer/src/features/history/"
+      "src/renderer/src/features/history/",
+      "src/shared/features/history/"
     ],
     "features": [
       "L39",
@@ -2979,7 +3008,8 @@
     },
     "ownedFiles": [
       "src/main/features/shell-window/",
-      "src/renderer/src/features/shell-window/"
+      "src/renderer/src/features/shell-window/",
+      "src/shared/features/shell-window/"
     ],
     "features": [
       "P25",
@@ -3054,7 +3084,8 @@
     "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/shell-taskbar/",
-      "src/renderer/src/features/shell-taskbar/"
+      "src/renderer/src/features/shell-taskbar/",
+      "src/shared/features/shell-taskbar/"
     ],
     "features": [
       "U26",
@@ -3106,7 +3137,8 @@
     "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/shell-system/",
-      "src/renderer/src/features/shell-system/"
+      "src/renderer/src/features/shell-system/",
+      "src/shared/features/shell-system/"
     ],
     "features": [
       "A39",
@@ -3164,7 +3196,8 @@
     "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/shell-associations/",
-      "src/renderer/src/features/shell-associations/"
+      "src/renderer/src/features/shell-associations/",
+      "src/shared/features/shell-associations/"
     ],
     "features": [
       "P26",
@@ -3291,7 +3324,8 @@
     },
     "ownedFiles": [
       "src/main/features/stream-open/",
-      "src/renderer/src/features/stream-open/"
+      "src/renderer/src/features/stream-open/",
+      "src/shared/features/stream-open/"
     ],
     "features": [
       "R01",
@@ -3381,7 +3415,8 @@
     },
     "ownedFiles": [
       "src/main/features/stream-ytdl/",
-      "src/renderer/src/features/stream-ytdl/"
+      "src/renderer/src/features/stream-ytdl/",
+      "src/shared/features/stream-ytdl/"
     ],
     "features": [
       "R05",
@@ -3439,7 +3474,8 @@
     "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/disc-devices/",
-      "src/renderer/src/features/disc-devices/"
+      "src/renderer/src/features/disc-devices/",
+      "src/shared/features/disc-devices/"
     ],
     "features": [
       "R25",
@@ -3487,7 +3523,8 @@
     "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/settings-ui/",
-      "src/renderer/src/features/settings-ui/"
+      "src/renderer/src/features/settings-ui/",
+      "src/shared/features/settings-ui/"
     ],
     "features": [
       "P01",
@@ -3540,7 +3577,8 @@
     "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/input-ui/",
-      "src/renderer/src/features/input-ui/"
+      "src/renderer/src/features/input-ui/",
+      "src/shared/features/input-ui/"
     ],
     "features": [
       "P17",
@@ -3588,7 +3626,8 @@
     "ownedOrders": {},
     "ownedFiles": [
       "src/main/features/transfer/",
-      "src/renderer/src/features/transfer/"
+      "src/renderer/src/features/transfer/",
+      "src/shared/features/transfer/"
     ],
     "features": [
       "P42",

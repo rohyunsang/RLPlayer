@@ -10,7 +10,7 @@ import {
   hasEmbeddedArt,
   type SnapshotOptions
 } from './snapshot.ts'
-import type { InfoGroupId, MediaInfoState } from './wire.ts'
+import type { InfoGroupId, MediaInfoState } from '@shared/features/mediainfo/wire'
 
 /**
  * The render model, driven with the property SHAPES the spec records for the

@@ -57,7 +57,7 @@ import {
   textOr,
   UNKNOWN
 } from './format.ts'
-import type { InfoGroup, InfoRow, InfoTab, MediaInfoState, TrackRow } from './wire.ts'
+import type { InfoGroup, InfoRow, InfoTab, MediaInfoState, TrackRow } from '@shared/features/mediainfo/wire'
 
 export type Props = Readonly<Record<string, unknown>>
 

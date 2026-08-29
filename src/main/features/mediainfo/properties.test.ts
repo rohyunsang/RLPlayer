@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { buildProperties, buildPropertiesFromProbe, splitPath } from './properties.ts'
 import { buildState, type SnapshotOptions } from './snapshot.ts'
-import type { MediaInfoState } from './wire.ts'
+import type { MediaInfoState } from '@shared/features/mediainfo/wire'
 
 /** L26 -- the file-properties view, with `fs.statSync` injected. */
 

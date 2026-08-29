@@ -1,34 +1,21 @@
 /**
- * M29 mediainfo -- the payloads that cross this module's own IPC boundary.
+ * M29 mediainfo -- the payloads that cross this module's own IPC boundary,
+ * DECLARED ONCE.
  *
- * ---------------------------------------------------------------------------
- * THIS FILE IS A HAND-MAINTAINED DUPLICATE, AND THAT IS A REPORTED DEFECT
- * ---------------------------------------------------------------------------
- * The body below is BYTE FOR BYTE identical to
- * `src/main/features/mediainfo/wire.ts` from the first `export` down. It has to
- * be, and `wire-parity.test.ts` in the main half asserts it, because
- * `docs/parity/02-wave0-api.md` section 10's answer to this --
- * `src/shared/features/<your id>/`, compiled by BOTH tsconfigs -- is not
- * available to M29:
+ * It used to live in `src/main/features/mediainfo/wire.ts` with a BYTE-FOR-BYTE
+ * copy in `src/renderer/src/features/mediainfo/wire.ts` and a
+ * `wire-parity.test.ts` comparing the two, because §10's sanctioned location --
+ * `src/shared/features/<id>/`, "listed in your row's ownedFiles" -- was listed
+ * for only 3 of the 40 feature rows, and adding it to M29's row is a manifest
+ * edit a module may not make. Seven modules independently reported the same
+ * wall; M23 wrote the same paragraph one directory over.
  *
- *   $ node -e "...modules.json... M29.ownedFiles"
- *   [ 'src/main/features/mediainfo/', 'src/renderer/src/features/mediainfo/' ]
- *
- * M12 audio-eq, M26 nav-bookmarks and M27 nav-thumbnails each have the third
- * entry; M29 does not, and `npm run check:partition` fails the build for any
- * file under `src/` no row claims. Adding one line to the M29 row deletes this
- * file and its parity test.
- *
- * Until then the guide's own measurement applies to this module too: "adding a
- * field on one side is a silent `undefined` on the wire rather than a type
- * error". The parity test is the substitute, and it compares BYTES rather than
- * shapes, because a test that compared shapes would need the two files in one
- * compilation unit -- which is the thing that does not exist.
- *
- * Wire-only: no DOM, no `node:*`, no Electron, no behaviour.
+ * All 40 rows carry the directory now, so the copy and its parity test are gone
+ * and the COMPILER is what keeps the two halves equal -- which is the difference
+ * between "adding a field on one side is a type error" and "adding a field on
+ * one side is a silent `undefined` on the wire".
  */
 
-/** One `label: value` line. `labelKey` is an i18n key, `value` is display-ready. */
 export interface InfoRow {
   labelKey: string
   value: string

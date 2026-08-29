@@ -8,7 +8,7 @@ import {
   type ProbeDeps,
   type ProbeEngine
 } from './probe.ts'
-import type { ProbeSummary } from './wire.ts'
+import type { ProbeSummary } from '@shared/features/mediainfo/wire'
 
 /**
  * L22's headless probe, driven with a fake engine.

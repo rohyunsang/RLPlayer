@@ -7,7 +7,7 @@ import type {
   InfoTab,
   MediaInfoState,
   TrackRow
-} from './wire.ts'
+} from '@shared/features/mediainfo/wire'
 
 /**
  * M29 mediainfo, renderer half.

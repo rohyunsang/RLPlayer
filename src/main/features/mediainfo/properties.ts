@@ -34,7 +34,7 @@ import {
   textOr,
   UNKNOWN
 } from './format.ts'
-import type { FileProperties, InfoRow, MediaInfoState } from './wire.ts'
+import type { FileProperties, InfoRow, MediaInfoState } from '@shared/features/mediainfo/wire'
 
 export interface StatResult {
   size: number

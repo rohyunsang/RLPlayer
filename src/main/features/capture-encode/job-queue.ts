@@ -18,9 +18,13 @@
  * that never spawns anything.
  */
 
-export type JobKind = 'clip' | 'audio' | 'gif' | 'webp' | 'burst' | 'sheet' | 'cut'
-
-export type JobState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
+/**
+ * Declared once, in `src/shared/features/capture-encode/wire.ts`, and re-exported
+ * here so nothing inside this module has to change its import. Both halves cross
+ * IPC with these, so the compiler — not a parity test — is what keeps them equal.
+ */
+import type { JobKind, JobState } from '@shared/features/capture-encode/wire'
+export type { JobKind, JobState }
 
 export interface JobResult {
   /** The file (or first file, for a burst) the job produced. */

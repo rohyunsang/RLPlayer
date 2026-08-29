@@ -38,7 +38,7 @@
  * Electron and no disk (docs/parity/02-wave0-api.md section 13).
  */
 import { formatBytes, formatDuration, formatFps, textOr, UNKNOWN } from './format.ts'
-import type { InfoRow, ProbeSummary } from './wire.ts'
+import type { InfoRow, ProbeSummary } from '@shared/features/mediainfo/wire'
 
 /** The slice of `SecondaryEngine` the probe uses. */
 export interface ProbeEngine {

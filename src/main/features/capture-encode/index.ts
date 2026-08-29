@@ -1,6 +1,5 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { app, shell } from 'electron'
 import type { FeatureContext, FeatureModule } from '@shared/feature-api'
 import {
   BURST_MAX_FRAMES,
@@ -23,7 +22,8 @@ import {
   type ClipPreset
 } from './encode-args.ts'
 import { EN, KO, descriptors } from './declarations.ts'
-import { JobQueue, type JobKind, type JobRunner, type JobState } from './job-queue.ts'
+import { JobQueue, type JobKind, type JobRunner } from './job-queue.ts'
+import type { JobsWire } from '@shared/features/capture-encode/wire'
 import { probeEncoder, runEncode } from './runner.ts'
 
 /**
@@ -68,7 +68,7 @@ const hardwareProbes = new Map<string, boolean>()
 
 function portableDir(kind: 'video' | 'audio'): string {
   // D-10, matching M22: portable mode keeps its output beside the exe.
-  return path.join(path.dirname(app.getPath('exe')), kind === 'video' ? 'Export' : 'Audio')
+  return path.join(path.dirname(ctx.shell.appPath('exe')), kind === 'video' ? 'Export' : 'Audio')
 }
 
 function canWrite(dir: string): boolean {
@@ -104,7 +104,7 @@ function targetDir(kind: 'video' | 'audio'): string {
   }
   if (ctx.paths.isPortable()) return portableDir(kind)
   try {
-    return path.join(app.getPath(kind === 'video' ? 'videos' : 'music'), 'RLPlayer')
+    return path.join(ctx.shell.appPath(kind === 'video' ? 'videos' : 'music'), 'RLPlayer')
   } catch {
     return portableDir(kind)
   }
@@ -218,7 +218,7 @@ function reveal(file: string): void {
     kind: 'info',
     message: ctx.i18n.t('capture-encode.finished', { name: path.basename(file) }),
     actionLabel: ctx.i18n.t('capture-encode.openFolder'),
-    onAction: () => shell.showItemInFolder(file)
+    onAction: () => ctx.shell.showItemInFolder(file)
   })
 }
 
@@ -257,29 +257,7 @@ function reveal(file: string): void {
  * editor.
  */
 
-/**
- * ONE JOB, AS THE PANEL SEES IT.
- *
- * DUPLICATED IN `src/renderer/src/features/capture-encode/index.ts`, AND THAT IS
- * A REPORTED DEFECT RATHER THAN A CHOICE. §10 says a module's two halves share
- * `src/shared/features/<id>/`, "listed in your row's ownedFiles" — but only 3 of
- * the 40 feature rows in docs/parity/modules.json list one, and M23's row does
- * not. Creating `src/shared/features/capture-encode/wire.ts` would be a file
- * owned by nobody, which `check:partition` fails and `check:ownership` reports;
- * adding it to the row is a manifest edit this module may not make. So the shape
- * is written twice — the exact defect the shared directory exists to prevent.
- */
-interface JobWire {
-  readonly id: string
-  readonly kind: JobKind
-  readonly label: string
-  readonly name: string
-  readonly state: JobState
-  readonly percent: number | null
-  readonly error: string | null
-}
-
-function jobWire(): { jobs: JobWire[] } {
+function jobWire(): JobsWire {
   return {
     jobs: queue.jobs().map((j) => ({
       id: j.id,
@@ -938,7 +916,7 @@ const mod: FeatureModule = {
      * implementation: `start` invokes the same command the menu and the keybind
      * editor invoke, so there is exactly one code path per feature.
      */
-    ctx.ipc.handle<undefined, { jobs: JobWire[] }>('capture-encode:getJobs', () => jobWire())
+    ctx.ipc.handle<undefined, JobsWire>('capture-encode:getJobs', () => jobWire())
     ctx.ipc.on<{ id: string }>('capture-encode:cancel', (req) => {
       if (typeof req?.id === 'string') queue.cancel(req.id)
     })

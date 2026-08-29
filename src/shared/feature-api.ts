@@ -105,6 +105,10 @@ export interface FeatureContext {
   readonly lifecycle: LifecycleService
   readonly window: WindowService
   readonly dialog: DialogService
+  /** §3.3.9. Explorer, the recycle bin, the clipboard and the OS folders. */
+  readonly shell: ShellService
+  /** §3.3.10. Decode / measure / resize / re-encode, for C07 and C03. */
+  readonly image: ImageService
   /**
    * The network allowlist (§1.3). RLPlayer reaches ZERO hosts by default, and
    * this service is how a module that genuinely needs one — R05's yt-dlp,
@@ -690,6 +694,97 @@ export interface TaskbarSurface {
 // ---------------------------------------------------------------------------
 // §3.3.8 DialogService
 // ---------------------------------------------------------------------------
+
+/**
+ * §3.3.9 `ctx.shell` — the OS surfaces a module is allowed to reach.
+ *
+ * WHY IT EXISTS, and it is a measurement rather than a preference. Four spec
+ * rows need Explorer or the recycle bin — C20 "reveal in folder", C23 "open the
+ * capture folder", C24 "delete to the recycle bin", L34 "copy path / reveal" —
+ * and two more need an OS folder: C05's default capture directory
+ * (`app.getPath('pictures')`) and P59's portable-mode sibling folder
+ * (`app.getPath('exe')`). `FeatureContext` had none of it, so M22 and M23 both
+ * wrote `import { app, shell } from 'electron'` at the top of their `index.ts`
+ * — and that ONE line makes the file unloadable outside Electron, which is why
+ * both then had to split a `manifest.ts` out purely so a test could read their
+ * declarations. Two modules paid that tax; twenty-five more were queued behind
+ * it, and `docs/parity/02-wave0-api.md` §3.3 claims FeatureContext is "the whole
+ * surface a module is allowed to touch".
+ *
+ * The same argument that put `ctx.dialog` here (M22, M28 and M40 all needed a
+ * picker), one round later and with the receipts.
+ */
+export type AppPathName =
+  | 'pictures'
+  | 'videos'
+  | 'music'
+  | 'downloads'
+  | 'documents'
+  | 'desktop'
+  | 'home'
+  | 'temp'
+  /** The running executable. `path.dirname()` of it is the portable root (P39). */
+  | 'exe'
+
+export interface ShellService {
+  /** Open Explorer with the file SELECTED. C20, C23, L34. */
+  showItemInFolder(fullPath: string): void
+  /** Open a path with its default handler. Resolves to '' on success, or the OS error. */
+  openPath(fullPath: string): Promise<string>
+  /** The RECYCLE BIN, never `fs.unlink`: C24 says the user can undo it. */
+  trashItem(fullPath: string): Promise<void>
+  /**
+   * Text on the system clipboard. S39, L25, L26, L34.
+   *
+   * ASYNC, and that is not a style choice: Electron 44's `clipboard.writeText`
+   * returns a Promise. A module that treats it as synchronous drops the
+   * rejection on the floor.
+   */
+  copyText(text: string): Promise<void>
+  /**
+   * A PNG on the system clipboard. C03.
+   *
+   * NOT `clipboard.writeImage`, which §2.4 C03 prescribed and which DOES NOT
+   * EXIST in Electron 44 — verified against the running binary, whose clipboard
+   * module is exactly `clear/has/read/readText/write/writeText/selection`.
+   * Following that row literally is a runtime "writeImage is not a function"
+   * past typecheck. The row is corrected; this method is the supported path.
+   */
+  copyImagePng(png: Uint8Array): Promise<void>
+  /** An OS folder, or the running executable. C05, P59. */
+  appPath(name: AppPathName): string
+}
+
+/**
+ * §3.3.10 `ctx.image` — decode, measure, resize, re-encode.
+ *
+ * The other half of M22's electron import. C07 resizes a capture to a maximum
+ * width, and it has to REFUSE rather than silently rewrite when the user's
+ * chosen format has no encoder — Electron ships exactly two (PNG and JPEG), so
+ * a `.webp` capture must be left at full size instead of being written as a PNG
+ * under a webp name. Exposing the decode surface is what lets that decision stay
+ * inside the module while the Electron dependency stays inside core.
+ */
+export interface DecodedImage {
+  readonly width: number
+  readonly height: number
+  /** Bilinear-ish, highest quality the backend offers; height follows the aspect. */
+  resize(width: number): DecodedImage
+  toPng(): Uint8Array
+  /** `quality` is 1-100. */
+  toJpeg(quality: number): Uint8Array
+}
+
+export interface ImageService {
+  /**
+   * Decode a file path or a buffer. `null` when the bytes are not a decodable
+   * image — an empty decode is a normal outcome for a capture that mpv has not
+   * finished writing, not an exception.
+   */
+  read(source: string | Uint8Array): DecodedImage | null
+  /** The formats `toPng`/`toJpeg` can actually produce. C07 asks this. */
+  readonly encodableFormats: readonly string[]
+}
 
 export interface DialogService {
   openFiles(o: {

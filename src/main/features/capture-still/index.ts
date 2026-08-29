@@ -1,6 +1,5 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { app, clipboard, ClipboardItem, nativeImage, shell } from 'electron'
 import type {
   CommandDescriptor,
   FeatureContext,
@@ -108,8 +107,8 @@ function targetDir(): string {
   if (chosen && chosen.trim().length > 0) return chosen.trim()
   // D-10: portable mode keeps captures beside the exe, matching the
   // leave-no-trace promise (and PotPlayer's own habit).
-  if (ctx.paths.isPortable()) return path.join(path.dirname(app.getPath('exe')), 'Capture')
-  return path.join(app.getPath('pictures'), 'RLPlayer')
+  if (ctx.paths.isPortable()) return path.join(path.dirname(ctx.shell.appPath('exe')), 'Capture')
+  return path.join(ctx.shell.appPath('pictures'), 'RLPlayer')
 }
 
 function ensureDir(dir: string): boolean {
@@ -154,12 +153,12 @@ function format(): string {
  */
 async function resizeInPlace(file: string): Promise<boolean> {
   const fmt = format()
-  const img = nativeImage.createFromPath(file)
-  if (img.isEmpty()) {
+  const img = ctx.image.read(file)
+  if (img === null) {
     ctx.log.warn('C07 resize: could not read back', file)
     return false
   }
-  const decision = resizeDecision(resizeWidth(), img.getSize().width, fmt)
+  const decision = resizeDecision(resizeWidth(), img.width, fmt)
   if (decision.action === 'skip') {
     if (decision.reason === 'not-encodable') {
       ctx.log.warn(
@@ -171,11 +170,11 @@ async function resizeInPlace(file: string): Promise<boolean> {
     return false
   }
   try {
-    const out = img.resize({ width: decision.width, quality: 'best' })
+    const out = img.resize(decision.width)
     const bytes =
       fmt === 'jpg'
-        ? out.toJPEG(Math.max(1, ctx.settings.get<number>('capture-still.jpegQuality')))
-        : out.toPNG()
+        ? out.toJpeg(Math.max(1, ctx.settings.get<number>('capture-still.jpegQuality')))
+        : out.toPng()
     await fs.promises.writeFile(file, bytes)
     return true
   } catch (e) {
@@ -285,7 +284,7 @@ function noteSaved(file: string, fellBack: boolean, resized = false): void {
     kind: 'info',
     message,
     actionLabel: t('capture-still.openFolder'),
-    onAction: () => shell.showItemInFolder(file)
+    onAction: () => ctx.shell.showItemInFolder(file)
   })
 }
 
@@ -422,14 +421,13 @@ async function captureClipboard(scope: CaptureScope, withSubs: boolean): Promise
      * for a user whose saved captures are WebP while the clipboard PNG in hand
      * is perfectly re-encodable.
      */
-    let payload = new Uint8Array(bytes)
-    const img = nativeImage.createFromBuffer(bytes)
-    const decision = resizeDecision(resizeWidth(), img.getSize().width, 'png')
-    if (decision.action === 'resize' && !img.isEmpty()) {
-      payload = new Uint8Array(img.resize({ width: decision.width, quality: 'best' }).toPNG())
+    let payload: Uint8Array = new Uint8Array(bytes)
+    const img = ctx.image.read(bytes)
+    if (img !== null) {
+      const decision = resizeDecision(resizeWidth(), img.width, 'png')
+      if (decision.action === 'resize') payload = img.resize(decision.width).toPng()
     }
-    const blob = new Blob([payload], { type: 'image/png' })
-    await clipboard.write([new ClipboardItem({ 'image/png': blob })])
+    await ctx.shell.copyImagePng(payload)
     ctx.osd.toast({ kind: 'info', message: t('capture-still.copied') })
   } catch (e) {
     ctx.log.error('clipboard capture failed:', (e as Error).message)
@@ -465,7 +463,7 @@ function stopBurst(reason: 'complete' | 'cancelled' | 'idle'): void {
       n: b.saved
     }),
     ...(last !== undefined
-      ? { actionLabel: t('capture-still.openFolder'), onAction: () => shell.showItemInFolder(last) }
+      ? { actionLabel: t('capture-still.openFolder'), onAction: () => ctx.shell.showItemInFolder(last) }
       : {})
   })
 }
@@ -599,7 +597,7 @@ async function deleteLast(): Promise<void> {
     // `shell.trashItem`, never `fs.unlinkSync`: this is recoverable by the user
     // from the Recycle Bin, and it only ever names a file THIS session reported
     // writing (C24).
-    await shell.trashItem(file)
+    await ctx.shell.trashItem(file)
     recent = rest
     ctx.osd.show({ kind: 'info', text: t('capture-still.deleted', { name: path.basename(file) }) })
   } catch (e) {
@@ -611,11 +609,11 @@ async function deleteLast(): Promise<void> {
 function openCaptureFolder(): void {
   const last = recent[0]
   if (last !== undefined) {
-    shell.showItemInFolder(last)
+    ctx.shell.showItemInFolder(last)
     return
   }
   const dir = targetDir()
-  if (ensureDir(dir)) void shell.openPath(dir)
+  if (ensureDir(dir)) void ctx.shell.openPath(dir)
 }
 
 // ---------------------------------------------------------------------------

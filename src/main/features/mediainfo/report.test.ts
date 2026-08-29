@@ -3,7 +3,7 @@ import test from 'node:test'
 import { EN, KO } from './i18n.ts'
 import { DIAGNOSTIC_PROPERTIES, renderInfoAsText } from './report.ts'
 import { buildState, type SnapshotOptions } from './snapshot.ts'
-import type { MediaInfoState } from './wire.ts'
+import type { MediaInfoState } from '@shared/features/mediainfo/wire'
 
 /**
  * L25 -- "copy media info to clipboard", and its one hard requirement.

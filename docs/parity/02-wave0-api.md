@@ -16,6 +16,11 @@
 > src/renderer/src/settings.ts src/renderer/src/styles.css src/renderer/src/core/**
 > ```
 >
+> And one thing you now declare rather than choose alone: every `order:` you
+> contribute belongs in your row's `ownedOrders` in `docs/parity/modules.json`
+> (§10). A duplicate `order` throws out of the contribution host and the app
+> does not start.
+>
 > The API below exists so you do not have to — and it is no longer only a grep
 > that stops you. `core/mpv/bus.ts` **exports no bus**. It exports
 > `createMpvBus()`, which throws on a second call, and `src/main/index.ts` makes
@@ -80,12 +85,17 @@ That is the whole contract. The registry finds the directory with
 the owner map, sets you up in dependency order, and hands you a
 `FeatureContext`. Nothing about your module is written down anywhere else.
 
-**Run `npm run verify` before you push.** It is typecheck + ~240 tests + the
+**Run `npm run verify` before you push.** It is typecheck + ~1150 tests + the
 natural-sort differential (27,225 pairs against the real `StrCmpLogicalW`) + the
 forbidden-pattern check (a comment- and string-aware lexer now, not a line
 scanner — three multi-line escalations walked past the old one) + the
-file-partition check (content-granular for CSS, **HTML and TS**). CI runs all of
-it on every push, plus `check:network` against a freshly PACKAGED build.
+file-partition check (content-granular for CSS, **HTML and TS**) + the
+**ordering-partition check**, which reads every contributed `order:` off the
+TypeScript AST and compares it with `modules.json` in both directions. CI runs
+all of it on every push, plus `check:network`, `e2e:overlay`, **`e2e:wave1`** and
+**`e2e:resume`** against a freshly PACKAGED build — the last two were absent
+from the workflow entirely, so the 24 checks that prove the modules work against
+mpv's own `get_property` ran only when somebody remembered.
 
 Three things need a desktop session and a build, so run them before you tag:
 
@@ -851,6 +861,79 @@ size and chrome are saved and restored as one unit.
 
 ---
 
+## 8.5 `ctx.shell` and `ctx.image` — Explorer, the clipboard, OS folders
+
+```ts
+ctx.shell.showItemInFolder(file)        // C20, C23, L34 — Explorer, file selected
+await ctx.shell.openPath(dir)           // resolves to '' on success, else the OS error
+await ctx.shell.trashItem(file)         // C24 — the RECYCLE BIN, never fs.unlink
+await ctx.shell.copyText(text)          // S39, L25, L26, L34
+await ctx.shell.copyImagePng(bytes)     // C03
+ctx.shell.appPath('pictures'|'videos'|'music'|'downloads'|'documents'|'desktop'|'home'|'temp'|'exe')
+
+const img = ctx.image.read(fileOrBytes) // null when the bytes are not an image
+img.width; img.height
+img.resize(640).toPng()                 // C07
+img.toJpeg(quality)
+ctx.image.encodableFormats              // ['png','jpg','jpeg'] — exactly two encoders
+```
+
+**A feature module may not `import 'electron'`, and `check:forbidden` now
+enforces it.** Three of the thirteen landed modules did, all three for this
+surface, and the cost is not stylistic: that one line makes `index.ts`
+unloadable by `node --test`, so M22 and M23 each split a `manifest.ts` out of
+`index.ts` purely to give a test something it could import, and any suite that
+wants to assert on the real module object had to give up. `ctx.shell`,
+`ctx.image`, `ctx.dialog` and `ctx.window` are the whole surface; there is
+nothing left to reach Electron for.
+
+That rule took three attempts, and the two rejected ones are worth knowing
+because they are this repository's two recurring failure shapes in one page:
+
+* `/(?:from|import|require)\s*\(?\s*['"]electron['"]/` over the `code` view
+  **false-positived** on two test files that assert this very rule with a regex
+  literal — `lex.mjs` keeps regex literals in `code` and `bare` on purpose,
+  because blanking them would hide a rule that greps for one;
+* the anchored `^\s*import…from 'electron'` **missed**
+  `import {\n  app,\n  shell\n} from 'electron'`. A line is not a unit of
+  syntax.
+
+What ships is the intersection of two views: it must look like a quoted
+specifier in `code` **and** still be there in `strings`, which is the one view
+where a regex literal's quotes were never string quotes.
+
+**`appPath` is a closed enum on purpose.** `app.getPath` also answers
+`'userData'`, `'sessionData'`, `'logs'` and `'crashDumps'`; a module reaching
+those would be routing around `ctx.paths`, which owns portable mode and the
+profile redirection (P36-P39). Ask for an OS folder here, ask for anything of
+ours from `ctx.paths`.
+
+**`copyText` is async and so is `copyImagePng`.** Electron 44's
+`clipboard.writeText` returns a Promise; every §2 row that names it (S39, L25,
+L26, L34) reads as synchronous. `await` it, or a clipboard failure becomes an
+unhandled rejection behind a toast that says "copied".
+
+**There is no `clipboard.writeImage` in Electron 44, whatever §2.4 C03 used to
+say.** Measured against the running binary, not its typings:
+
+```
+Object.getOwnPropertyNames(Object.getPrototypeOf(clipboard))
+  -> clear, has, read, readText, write, writeText   (+ selection)
+typeof clipboard.writeImage -> 'undefined'      typeof clipboard.readImage -> 'undefined'
+```
+
+Following that row literally is a runtime `writeImage is not a function` on the
+first Ctrl+C, past typecheck and past any test that mocks Electron. M22 hit it
+and worked around it; the row is corrected, `copyImagePng` is the supported
+path, and `core/shell.test.ts` fails if the row grows the old prescription back.
+
+**`ctx.image.encodableFormats` exists because C07 has to refuse.** There are two
+encoders. A `.webp` capture that would have to be re-encoded to honour a maximum
+width is left at full size and says so, rather than being written as a PNG under
+a `.webp` name.
+
+---
+
 ## 9. `ctx.perFile` — per-file state
 
 ```ts
@@ -1026,6 +1109,58 @@ ctx.transportButton({
 })
 ```
 
+**EVERY `order:` ON THIS PAGE IS A PARTITION KEY IN `docs/parity/modules.json`,
+and a duplicate is a boot failure.** `claimSlot()` and
+`MenuRegistry.contribute()` throw a `ContributionError`, the registry re-throws
+it rather than isolating it, and the app does not start. It collided twice in a
+single nine-module round — seek-bar layers at 10, menu sections at 45 — so
+ordering is partitioned exactly like `ownedProperties`:
+
+```json
+"ownedOrders": {
+  "panel":            [{ "id": "playlist", "order": 10 }],
+  "transportButton":  [{ "id": "playlist.toggle", "order": 20 }],
+  "menuSection":      [{ "id": "playlist.menuOpen", "order": 10, "tiesRoot": "playback" }],
+  "seekbarLayer":     [],
+  "statsSection":     [],
+  "settingsSection":  [{ "id": "video-color.help", "order": 8, "scope": "video" }],
+  "spawnArgPriority": [{ "order": 10 }]
+}
+```
+
+Seven namespaces. Six are **slots** — a tie throws. `spawnArgPriority` is a
+**band**: eight modules share 10 by design and the bus breaks ties by owner id,
+so what the partition buys there is that a module cannot move between bands
+unnoticed, which decides whose `--sub-codepage` wins. `scope` narrows the
+namespace exactly where the runtime does: a settings page, a menu parent.
+(`ctx.settings.define()`'s `order?` is the eighth candidate and is deliberately
+out: `SettingsRegistry` already sorts by `(order, id)`, so a tie is
+deterministic and nothing throws.)
+
+**`npm run check:ordering` cross-checks the manifest against the code in both
+directions**, so an undeclared contribution and a declared order nobody
+contributes both fail — and a collision is named from the manifest ALONE,
+without running anything:
+
+```
+ORDERING COLLISION — transportButton order 50:
+  'nav-chapters.skipPrompt' (M25) and 'stream-open.toggle' (M35).
+```
+
+Write your claim into your row. The failure message contains the JSON to paste.
+
+**Why this is not "a better regex".** The check that was supposed to catch this
+paired `id:` to `order:` with a 400-character window, and three shipped
+contributions fell outside it: `nav-chapters.skipPrompt` (60) and
+`nav-chapters.skipBands` (15), separated from their own `id:` by the eleven-line
+comment M25 wrote to document the *previous* collision, and `capture-still.menu`,
+whose order is the named constant `MENU_ORDER`. Restoring the duplicate gave
+`npm test` **1143 pass / 0 fail** while the runtime threw `duplicate transport
+button order 50`. The code side is read with the TypeScript AST now
+(`scripts/lib/ordering.mjs`), where a comment cannot separate two properties of
+one object literal, key order is irrelevant, and a named numeric constant
+resolves — including one imported from a sibling file.
+
 `transportButton` is new, and it exists for the same reason as `panel()`.
 `src/renderer/index.html` hard-coded `#subBtn` (M17's) and `#playlistBtn`
 (M28's), with their click handlers and their pressed-state rendering in
@@ -1056,6 +1191,23 @@ for channels a module actually registered under its own id.
 The renderer context also gives you `panel()`, `statsSection()`,
 `settingsSection()`, `settingsComponent()`, `transportButton()`, `t()` and
 `osd.show()`. Every one of them has a host that renders it; see below.
+
+**`src/shared/features/<your id>/` is in EVERY module row now.** §10 has always
+said your two halves share a file they both compile and that the directory is
+"listed in your row's `ownedFiles`" — and it was listed for 3 of 40 rows, the
+three pilots that needed it. Seven modules hit the wall independently: creating
+the directory anyway is a file no row owns, which `check:partition` fails, and
+adding it to your row is a manifest edit a module may not make. So M23 wrote
+`JobWire` twice and M29 shipped a byte-for-byte duplicate `wire.ts` with a
+`wire-parity.test.ts` standing in for the compiler — and the two `JobWire`
+copies had *already* drifted: `kind` was `JobKind` on the main side and `string`
+on the renderer side, so the renderer compiled against a value main can never
+send.
+
+All 40 rows carry it, reserved whether or not the directory exists yet (the
+manifest treats an absent `/features/` path as a reservation, exactly like an
+unimplemented module directory). Declare every payload that crosses your own IPC
+there, once, and let the compiler be the parity test.
 
 ### Your layer's CSS lives in YOUR directory
 
@@ -1594,11 +1746,23 @@ remaining 34 modules meet a fixed API instead of each writing the workaround.
 - [ ] Keybind defaults use **physical** codes for all three presets.
 - [ ] Every state-changing command fires an OSD message.
 - [ ] Per-file state goes through a slice, never through your own JSON file.
+- [ ] Every `order:` you contribute is in your row's `ownedOrders`, in the right
+      namespace, with the right `scope`. `npm run check:ordering` proves it in
+      both directions and names a collision from the manifest alone. A duplicate
+      `order` is a BOOT FAILURE, not a layout wobble, and it happened twice in
+      one round.
+- [ ] Payloads that cross your own IPC are declared once, in
+      `src/shared/features/<your id>/`. Every row owns that directory now; a
+      hand-duplicated wire type with a parity test is not the arrangement.
+- [ ] No import of `electron` — by `from`, by `require()`, by `await import()`,
+      or across line breaks. `ctx.shell` (§8.5), `ctx.image` (§8.5),
+      `ctx.dialog` and `ctx.window` are the whole surface, and the import is
+      what makes your `index.ts` unloadable by `node --test`.
 - [ ] No import of `windows.ts`, `ipc.ts`, `preload/index.ts`, `core/mpv/*`,
-      the renderer core, another feature module, or Electron's `dialog` — by
-      `from`, by `require()`, by `await import()`, or by a computed specifier.
-      `npm run check:forbidden` proves all four now; it only proved the first
-      one before, and that is how a one-line ownership bypass shipped.
+      the renderer core, or another feature module — by `from`, by `require()`,
+      by `await import()`, or by a computed specifier. `npm run check:forbidden`
+      proves all four now; it only proved the first one before, and that is how
+      a one-line ownership bypass shipped.
 - [ ] No network API at all: no `fetch` (aliased or not), no `node:dns` /
       `https` / `tls` / `dgram` / `http2`, no `resolveHost`. If your module is
       the one that genuinely needs a host, add its `ALLOWLIST` row in

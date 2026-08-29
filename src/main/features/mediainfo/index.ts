@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import { clipboard, shell } from 'electron'
 import { buildProperties, buildPropertiesFromProbe } from './properties.ts'
 import { EN, KO } from './i18n.ts'
 import { MediaProbe, type FileStat, type ProbeDeps, type ProbeEngine } from './probe.ts'
@@ -17,7 +16,7 @@ import {
 } from './snapshot.ts'
 import { textOr } from './format.ts'
 import type { FeatureContext, FeatureModule, Unsubscribe } from '@shared/feature-api'
-import type { InfoDensity, InfoTab, MediaInfoState, ProbeSummary } from './wire.ts'
+import type { InfoDensity, InfoTab, MediaInfoState, ProbeSummary } from '@shared/features/mediainfo/wire'
 
 /**
  * M29 mediainfo -- the media-info panel, the stats sections, the file-properties
@@ -382,14 +381,20 @@ function reportText(): string {
   })
 }
 
-function copyInfo(): void {
+/**
+ * L25. `async` because `ctx.shell.copyText` is: Electron 44's
+ * `clipboard.writeText` returns a Promise, and the un-awaited call this
+ * replaced would have swallowed a clipboard failure into an unhandled
+ * rejection while the toast said "copied".
+ */
+async function copyInfo(): Promise<void> {
   const s = state()
   if (!s.available) {
     ctx.osd.show({ kind: 'error', text: ctx.i18n.t('mediainfo.noFile') })
     return
   }
   try {
-    clipboard.writeText(reportText())
+    await ctx.shell.copyText(reportText())
     ctx.osd.toast({
       kind: 'info',
       message: ctx.i18n.t('mediainfo.copied')
@@ -705,10 +710,10 @@ const mod: FeatureModule = {
         push()
       }
     })
-    ctx.ipc.on('mediainfo:copy', () => copyInfo())
+    ctx.ipc.on('mediainfo:copy', () => void copyInfo())
     ctx.ipc.on('mediainfo:showInFolder', () => {
       const p = state().path
-      if (p !== null && !state().network) shell.showItemInFolder(p)
+      if (p !== null && !state().network) ctx.shell.showItemInFolder(p)
     })
     ctx.ipc.on('mediainfo:shellProperties', () => openShellProperties())
 
@@ -807,7 +812,7 @@ const mod: FeatureModule = {
         category: 'info',
         defaults: { default: ['Ctrl+Alt+KeyI'], potplayer: ['Ctrl+Alt+KeyI'] },
         enabledWhen: () => ctx.mpv.peek<boolean>('idle-active') !== true,
-        run: () => copyInfo()
+        run: () => void copyInfo()
       },
       {
         id: 'mediainfo.fileProperties',

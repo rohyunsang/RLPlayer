@@ -327,22 +327,40 @@ test('the renderer half only asks for commands that exist', () => {
 
 test('the two halves live only in files this row owns', () => {
   const owned = row?.ownedFiles ?? []
+  /**
+   * THE TRIPWIRE FIRED, AND THIS IS WHAT IT ASKED FOR.
+   *
+   * This assertion used to be `deepEqual(owned, [main, renderer])` plus
+   * "the row now owns a shared wire directory — move JobWire into it and delete
+   * the copy", because §10's `src/shared/features/<id>/` was listed for only 3
+   * of 40 rows and adding it was a manifest edit a module may not make. All 40
+   * rows carry it now, `JobWire`/`JobsWire` live in
+   * `src/shared/features/capture-encode/wire.ts`, and the duplicate is gone.
+   *
+   * The two copies had already drifted, which is the argument in one line: the
+   * main half typed `kind` as `JobKind` and the renderer half as `string`, so
+   * the renderer compiled happily against a value main can never send.
+   */
   assert.deepEqual(owned, [
     'src/main/features/capture-encode/',
-    'src/renderer/src/features/capture-encode/'
+    'src/renderer/src/features/capture-encode/',
+    'src/shared/features/capture-encode/'
   ])
-  // The shared wire directory §10 promises is NOT in this row, which is why the
-  // panel payload type is written twice. Asserted so the duplication is a
-  // recorded consequence rather than a habit: when the row gains the directory,
-  // this test fails and points at the two copies.
   assert.equal(
-    owned.includes('src/shared/features/capture-encode/'),
-    false,
-    'the row now owns a shared wire directory — move JobWire into it and delete the copy'
+    fs.existsSync(path.join(repo, 'src', 'shared', 'features', 'capture-encode', 'wire.ts')),
+    true,
+    'the row owns the shared wire directory; the payload types belong in it'
   )
-  assert.equal(
-    fs.existsSync(path.join(repo, 'src', 'shared', 'features', 'capture-encode')),
-    false,
-    'a shared directory exists that no manifest row owns'
-  )
+  // And the shape is declared ONCE: no `interface JobWire` in either half.
+  for (const half of [
+    'src/main/features/capture-encode/index.ts',
+    'src/renderer/src/features/capture-encode/index.ts'
+  ]) {
+    const src = fs.readFileSync(path.join(repo, half), 'utf8')
+    assert.equal(
+      /interface\s+Job(?:s)?Wire\b/.test(src),
+      false,
+      `${half} still declares its own copy of the wire type`
+    )
+  }
 })

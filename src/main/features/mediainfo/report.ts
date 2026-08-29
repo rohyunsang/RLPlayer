@@ -19,7 +19,7 @@
  * Pure: it takes the snapshot, a `t()` and the diagnostic map, and returns a
  * string.
  */
-import type { MediaInfoState } from './wire.ts'
+import type { MediaInfoState } from '@shared/features/mediainfo/wire'
 
 export type Translate = (key: string, params?: Record<string, string | number>) => string
 

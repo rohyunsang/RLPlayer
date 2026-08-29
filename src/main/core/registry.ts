@@ -13,6 +13,7 @@ import type { MpvBus } from './mpv/bus.ts'
 import { createI18nService, t } from './i18n/index.ts'
 import { createWindowService, releaseSleepBlocksFor } from './window/index.ts'
 import { createDialogService } from './dialog.ts'
+import { createImageService, createShellService } from './shell.ts'
 import { createNetworkService } from './no-network.ts'
 import { pathService } from './paths.ts'
 import type { SettingsRegistry } from './settings/registry.ts'
@@ -213,6 +214,10 @@ export class Registry {
       },
       window: createWindowService(id),
       dialog: createDialogService(),
+      // §3.3.9/§3.3.10. Minted per module for the same reason `ctx.mpv` is: the
+      // owner id is in the refusal when a module asks for a path it may not have.
+      shell: createShellService(id),
+      image: createImageService(),
       network: createNetworkService(id),
       // A second mpv, tracked and reaped. Minted per module the same way
       // `ctx.mpv` is, so an engine always has an owner in the log.
