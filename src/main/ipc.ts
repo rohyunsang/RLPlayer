@@ -17,7 +17,8 @@ import { notifyVideoRegion } from './core/window/index.ts'
 import { commandRegistry, resolvedKeybinds, setBinding, setPreset } from './core/input/index.ts'
 import { messageCatalog, t } from './core/i18n/index.ts'
 import type { SettingsRegistry } from './core/settings/registry.ts'
-import type { FileFilter, SettingDescriptor, SettingSection, SettingType } from '@shared/feature-api'
+import type { FileFilter, SettingId } from '@shared/feature-api'
+import { buildSettingRows, type SettingRow } from '@shared/settings-rows'
 import type { LegacyBridge } from './core/legacy-bridge.ts'
 import type { MenuRegistry } from './core/menu.ts'
 import type { OsdBus } from './core/osd/index.ts'
@@ -102,49 +103,6 @@ export interface CoreIpcDeps {
   pushState(): void
 }
 
-/**
- * One row of the generated settings form.
- *
- * Labels are resolved HERE, in main, where the catalogs live — the settings
- * window gets finished strings and never has to know which module contributed
- * which key. `component` carries a `custom` descriptor's renderer component
- * name so the form can look it up in `settingsComponents`.
- */
-export interface SettingRow {
-  id: string
-  section: SettingSection
-  group?: string
-  label: string
-  description?: string
-  type: SettingType
-  value: unknown
-  default: unknown
-  mpvOption?: string
-  requiresRestart?: boolean
-  advanced?: boolean
-  order?: number
-  keywords?: readonly string[]
-}
-
-function toRow(d: SettingDescriptor, value: unknown): SettingRow {
-  const row: SettingRow = {
-    id: d.id,
-    section: d.section,
-    label: t(d.labelKey),
-    type: d.type,
-    value,
-    default: d.default
-  }
-  if (d.group !== undefined) row.group = d.group
-  if (d.descriptionKey !== undefined) row.description = t(d.descriptionKey)
-  if (d.mpvOption !== undefined) row.mpvOption = d.mpvOption
-  if (d.requiresRestart !== undefined) row.requiresRestart = d.requiresRestart
-  if (d.advanced !== undefined) row.advanced = d.advanced
-  if (d.order !== undefined) row.order = d.order
-  if (d.keywords !== undefined) row.keywords = d.keywords
-  return row
-}
-
 export function registerCoreIpc(deps: CoreIpcDeps): void {
   const invoke = (id: string, arg?: unknown): void => {
     void commandRegistry.invoke(id, arg).catch((e: Error) => {
@@ -223,9 +181,16 @@ export function registerCoreIpc(deps: CoreIpcDeps): void {
   // knows nothing else. Every row below is a module's descriptor; adding a
   // setting means adding a descriptor in your own directory, and touching
   // neither this file nor `settings.html`.
-  ipcMain.handle('core-settings:list', () =>
-    deps.settings.snapshot().map(({ descriptor, value }) => toRow(descriptor, value))
-  )
+  const settingsRows = (): SettingRow[] => {
+    const get = <V,>(id: SettingId): V => deps.settings.get(id) as V
+    // `SettingRow`, `rowVisible` and `toRow` USED TO BE DECLARED HERE, and
+    // `SettingRow` was declared a second time in settings-form.ts with nothing
+    // comparing the two. They live in `@shared/settings-rows` now -- the one
+    // place both tsconfigs compile -- so the wire type has a single definition
+    // and `visibleWhen` is testable without Electron. It had no tests at all.
+    return buildSettingRows(deps.settings.snapshot(), get, t)
+  }
+  ipcMain.handle('core-settings:list', () => settingsRows())
   ipcMain.handle('core-settings:set', (_e, msg: { id: string; value: unknown }) => {
     if (!msg || typeof msg.id !== 'string' || !deps.settings.has(msg.id)) return null
     deps.settings.set(msg.id, msg.value)
@@ -237,7 +202,7 @@ export function registerCoreIpc(deps: CoreIpcDeps): void {
     for (const { descriptor } of deps.settings.snapshot()) {
       deps.settings.set(descriptor.id, descriptor.default)
     }
-    return deps.settings.snapshot().map(({ descriptor, value }) => toRow(descriptor, value))
+    return settingsRows()
   })
   ipcMain.handle(
     'core-settings:browse',

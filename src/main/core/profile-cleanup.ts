@@ -96,7 +96,25 @@ import path from 'node:path'
  * `core/paths.ts` put the app's own `thumbs/`, `scenes/`, `art/` and `jobs/`
  * inside it.
  */
-export const CLEANUP_VERSION = 3
+/**
+ * 3 -> 4: `%APPDATA%\RLPlayer\Preferences`, measured on this machine after
+ * version 2 had run:
+ *
+ *   {"spellcheck":{"dictionaries":["ko"],"dictionary":""}}
+ *
+ * No host and no IP, so this is not a leak -- but it is the request's last
+ * fingerprint: the record of WHICH dictionary 0.1.0 decided to fetch. It cannot
+ * be deleted wholesale the way the cache can, because `Preferences` is a live
+ * Chromium file in the general case; and it must not be confused with
+ * `<root>\session\Preferences`, which on this machine reads
+ * `{"browser":{"enable_spellchecking":false},"spellcheck":{"dictionaries":[],...}}`
+ * -- that one is 0.1.1's CORRECT current state and is left exactly alone.
+ *
+ * So version 4 does one surgical thing: it removes the `spellcheck` key from a
+ * `Preferences` file that has one, and deletes the file only if nothing else was
+ * in it. See `SPELLCHECK_SCRUBS`.
+ */
+export const CLEANUP_VERSION = 4
 
 const MARKER = 'cleanup.json'
 
@@ -160,6 +178,38 @@ function norm(rel: string): string {
  * the reason rather than on a boolean.
  */
 export function appOwnedConflict(rel: string): string | null {
+  /**
+   * TRAVERSAL FIRST, because rules 1-5 did not stop it and rule 5's own root
+   * guard was unreachable.
+   *
+   * `norm()` filtered `'.'` and not `'..'`, so `appOwnedConflict('session/..')`
+   * normalised to `'session/..'`, matched no APP_OWNED or APP_SUBTREES entry and
+   * returned NULL -- while `path.join(root, 'session', '..') === root`. The next
+   * line in `purgeLeakedProfileState` is
+   * `fs.rmSync(abs, { recursive: true, force: true })`, i.e. the user's entire
+   * profile: resume.json, history.json, per-file.json, keybinds.json,
+   * config.json, every bookmark and every thumbnail.
+   *
+   * Rule 5's "it is the data root itself" guard below could only ever fire for
+   * `''`, because that was the only spelling `norm()` collapsed to empty. The
+   * test that was supposed to cover this grepped the source for
+   * `/rmSync\(\s*dataRoot/` -- a spelling this code does not use and never would,
+   * since the dangerous call passes `abs`.
+   *
+   * So: a target is a RELATIVE path under the data root, with no `..` segment and
+   * no root of its own. All three checked before anything is compared, and
+   * `purgeLeakedProfileState` re-checks the RESOLVED path as well, because one
+   * guard in the same function as the `rmSync` is worth more than three in a
+   * helper somebody can forget to call.
+   */
+  const segments = rel.split(/[\\/]+/).filter((x) => x && x !== '.')
+  if (segments.includes('..')) {
+    return "it contains a '..' segment, which walks out of the data root"
+  }
+  if (/^[A-Za-z]:/.test(rel)) return 'it starts with a drive letter, so it is not relative'
+  if (/^[\\/]/.test(rel)) return 'it starts at the filesystem root, so it is not relative'
+  if (rel.includes('\0')) return 'it contains a NUL byte'
+
   const t = norm(rel)
   if (t === '') return 'it is the data root itself'
   for (const a of APP_OWNED) {
@@ -170,6 +220,33 @@ export function appOwnedConflict(rel: string): string | null {
     if (t === a) return `it IS the app-owned path '${a}'`
     if (a.startsWith(t + '/')) return `it contains the app-owned path '${a}'`
     if (t.startsWith(a + '/')) return `it is inside the app-owned path '${a}'`
+  }
+  return null
+}
+
+/**
+ * THE FUNCTION THAT GATES THE `rmSync`. Exported so a test can drive it.
+ *
+ * It is `appOwnedConflict()` PLUS an independent check on the RESOLVED absolute
+ * path, and both halves are here rather than in the caller for one reason: the
+ * test that was supposed to cover this grepped the source for
+ * `/rmSync\(\s*dataRoot/` -- a spelling this file has never used, because the
+ * dangerous call is `fs.rmSync(abs, …)` where `abs = path.join(dataRoot, rel)`.
+ * A test that asserts on a spelling proves nothing about behaviour, so
+ * `profile-cleanup.test.ts` now calls THIS and asserts what it returns.
+ *
+ * `path.relative` rather than `abs.startsWith(dataRoot)`: a `startsWith` is also
+ * true of `…\Roaming\RLPlayerEvil`, a sibling whose name merely begins with the
+ * root's.
+ */
+export function refuseTarget(dataRoot: string, rel: string): string | null {
+  const conflict = appOwnedConflict(rel)
+  if (conflict !== null) return conflict
+  const abs = path.join(dataRoot, rel)
+  const inside = path.relative(path.resolve(dataRoot), path.resolve(abs))
+  if (inside === '') return `it resolves to the data root itself ('${abs}')`
+  if (inside.startsWith('..') || path.isAbsolute(inside)) {
+    return `it resolves to '${abs}', which is outside the data root '${dataRoot}'`
   }
   return null
 }
@@ -277,6 +354,67 @@ const SAFE_TARGETS = TARGETS.filter((t) => appOwnedConflict(t.rel) === null)
 export const TARGET_PATHS: readonly string[] = TARGETS.map((t) => t.rel)
 
 /**
+ * Version 4: `spellcheck` keys, removed SURGICALLY rather than by deleting the file.
+ *
+ * `Preferences` is Chromium's, and in the general case it holds live state, so
+ * the wholesale delete every other target gets would be the `Cache` mistake
+ * again (rule 5). What 0.1.0 left is one key:
+ *
+ *   %APPDATA%\RLPlayer\Preferences  ->  {"spellcheck":{"dictionaries":["ko"],...}}
+ *
+ * The `session\Preferences` twin is listed too, and NOT because it is dirty:
+ * on this machine it reads `{"browser":{"enable_spellchecking":false},...}`,
+ * which is 0.1.1's correct state. The scrub only rewrites a file that actually
+ * names a downloaded dictionary, so the correct one is read and left alone --
+ * and listing it is how a machine where the twin IS dirty gets fixed too, which
+ * is the exact gap that stranded the 11 MB `Dictionaries` for a whole release.
+ */
+const SPELLCHECK_SCRUBS: readonly string[] = ['Preferences', path.join('session', 'Preferences')]
+
+/**
+ * Remove `spellcheck` from one Preferences file. Returns what happened.
+ *
+ * Never throws, like everything else here: a locked or unparseable Preferences
+ * file is a normal thing to meet and is not worth failing a launch over. An
+ * unparseable one is left completely alone rather than rewritten from a guess.
+ */
+function scrubSpellcheck(abs: string): 'absent' | 'clean' | 'rewritten' | 'removed' | 'failed' {
+  let text: string
+  try {
+    if (!fs.existsSync(abs)) return 'absent'
+    text = fs.readFileSync(abs, 'utf8')
+  } catch {
+    return 'failed'
+  }
+  let data: Record<string, unknown>
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 'failed'
+    data = parsed as Record<string, unknown>
+  } catch {
+    return 'failed'
+  }
+  const spell = data['spellcheck']
+  if (spell === undefined) return 'clean'
+  // A dictionary list that is already empty is 0.1.1's own correct state, not an
+  // artefact. Rewriting it would churn a live file for nothing.
+  const dictionaries = (spell as { dictionaries?: unknown } | null)?.dictionaries
+  const named = Array.isArray(dictionaries) && dictionaries.length > 0
+  if (!named) return 'clean'
+  delete data['spellcheck']
+  try {
+    if (Object.keys(data).length === 0) {
+      fs.rmSync(abs, { force: true })
+      return fs.existsSync(abs) ? 'failed' : 'removed'
+    }
+    fs.writeFileSync(abs, JSON.stringify(data))
+    return 'rewritten'
+  } catch {
+    return 'failed'
+  }
+}
+
+/**
  * NOT ON THE LIST, deliberately: `Code Cache`, `GPUCache`, `DawnGraphiteCache`,
  * `DawnWebGPUCache`. They are compilation and shader caches, not network
  * artefacts -- nothing in them ever came off a wire -- and deleting them buys
@@ -288,6 +426,8 @@ export interface CleanupResult {
   alreadyDone: boolean
   /** Paths that existed and are now gone, relative to the data root. */
   removed: string[]
+  /** Files that were EDITED rather than deleted (version 4's Preferences). */
+  scrubbed: string[]
   /** Paths that existed, could not be removed, and will be retried next launch. */
   failed: Array<{ rel: string; reason: string }>
   /** Bytes reclaimed, for the log line. */
@@ -314,7 +454,13 @@ function sizeOf(abs: string): number {
  * without launching anything.
  */
 export function purgeLeakedProfileState(dataRoot: string): CleanupResult {
-  const result: CleanupResult = { alreadyDone: false, removed: [], failed: [], bytes: 0 }
+  const result: CleanupResult = {
+    alreadyDone: false,
+    removed: [],
+    scrubbed: [],
+    failed: [],
+    bytes: 0
+  }
   const markerPath = path.join(dataRoot, MARKER)
 
   try {
@@ -337,6 +483,14 @@ export function purgeLeakedProfileState(dataRoot: string): CleanupResult {
 
   for (const target of SAFE_TARGETS) {
     const abs = path.join(dataRoot, target.rel)
+    const refusal = refuseTarget(dataRoot, target.rel)
+    if (refusal !== null) {
+      console.error(
+        `[cleanup] REFUSING to touch '${target.rel}': ${refusal}. See rule 5 in ` +
+          `src/main/core/profile-cleanup.ts.`
+      )
+      continue
+    }
     let existed = false
     try {
       existed = fs.existsSync(abs)
@@ -363,6 +517,23 @@ export function purgeLeakedProfileState(dataRoot: string): CleanupResult {
     result.bytes += bytes
   }
 
+  // Version 4's surgical half. It runs after the deletions and reports through
+  // the same `removed`/`failed` channels, so a locked Preferences file holds the
+  // marker back and is retried next launch exactly like a locked cache file.
+  for (const rel of SPELLCHECK_SCRUBS) {
+    const conflict = appOwnedConflict(rel)
+    if (conflict !== null) {
+      console.error(`[cleanup] REFUSING to scrub '${rel}': ${conflict}.`)
+      continue
+    }
+    const abs = path.join(dataRoot, rel)
+    const outcome = scrubSpellcheck(abs)
+    if (outcome === 'failed') result.failed.push({ rel, reason: 'could not rewrite' })
+    else if (outcome === 'rewritten' || outcome === 'removed') {
+      result.scrubbed.push(rel)
+    }
+  }
+
   // Only claim it is done when nothing is left behind. A partial run that wrote
   // the marker would strand whatever was locked on that one launch forever.
   if (result.failed.length === 0) {
@@ -375,6 +546,7 @@ export function purgeLeakedProfileState(dataRoot: string): CleanupResult {
             version: CLEANUP_VERSION,
             ranAt: new Date().toISOString(),
             removed: result.removed,
+            scrubbed: result.scrubbed,
             // The host is NOT named here on purpose. "Is my profile clean?" is
             // answered by grepping it for the host, and a marker that contains
             // the string makes that check answer yes when it should answer no.
@@ -400,10 +572,11 @@ export function purgeLeakedProfileState(dataRoot: string): CleanupResult {
 /** One line, only when something actually happened. Silence is the normal case. */
 export function describeCleanup(r: CleanupResult): string | null {
   if (r.alreadyDone) return null
-  if (r.removed.length === 0 && r.failed.length === 0) return null
+  if (r.removed.length === 0 && r.scrubbed.length === 0 && r.failed.length === 0) return null
   const mb = (r.bytes / (1024 * 1024)).toFixed(1)
   const parts = [`[cleanup] removed ${r.removed.length} 0.1.0 artefact(s), ${mb} MB`]
   for (const rel of r.removed) parts.push(`  - ${rel}`)
+  for (const rel of r.scrubbed) parts.push(`  ~ ${rel} (spellcheck key removed)`)
   for (const f of r.failed) parts.push(`  ! ${f.rel} could not be removed (${f.reason}); retrying next launch`)
   return parts.join('\n')
 }

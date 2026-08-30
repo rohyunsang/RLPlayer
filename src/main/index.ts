@@ -31,7 +31,7 @@ const networkPolicy = disableBackgroundNetworking()
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { app, BrowserWindow, dialog, Menu } from 'electron'
+import { app, BrowserWindow, dialog, Menu, type MenuItemConstructorOptions } from 'electron'
 import {
   createWindows,
   getHwnd,
@@ -59,6 +59,7 @@ import { OsdBus } from './core/osd/index.ts'
 import { Registry } from './core/registry.ts'
 import { SettingsRegistry } from './core/settings/registry.ts'
 import {
+  OPTS_MIGRATIONS,
   PerFileManager,
   type HistoryFile,
   type OptsFile,
@@ -67,6 +68,7 @@ import {
 import { commandRegistry, flushKeybinds } from './core/input/index.ts'
 import { LegacyBridge, setLegacyVolumeReader } from './core/legacy-bridge.ts'
 import { registerCoreCommands } from './core/transport.ts'
+import { commandMenuGroups } from './core/menu-model.ts'
 import { collectFeatureModules } from './features/index'
 import type { OsdKind } from '@shared/feature-api'
 
@@ -256,8 +258,15 @@ async function main(): Promise<void> {
     opts: createStore<OptsFile>({
       id: 'per-file',
       file: filePath('per-file.json'),
-      version: 1,
-      defaults: { entries: {} }
+      /**
+       * SCHEMA 2 adds `path` and `updatedAt` to each bucket, which is what makes
+       * the store cappable and enumerable — see OptsBucket and OPTS_MIGRATIONS.
+       */
+      version: 2,
+      defaults: { entries: {} },
+      // Declared next to the shape it migrates, in core/state/per-file.ts, where
+      // it can be unit-tested: this file imports electron and cannot be.
+      migrations: OPTS_MIGRATIONS
     })
   })
 
@@ -392,6 +401,56 @@ async function main(): Promise<void> {
    */
   if (process.env['RLPLAYER_E2E_OPEN_SETTINGS'] === '1') {
     await exerciseSettingsWindow()
+  }
+
+  /**
+   * The context menu, described rather than popped.
+   *
+   * `CommandDescriptor.menuPath` and `menuOrder` had no consumers at all until
+   * this round, so three modules declared a menu location and two of them were
+   * simply absent from the menu. The unit tests cover the rules and the live
+   * declarations; this is the only thing that proves the PACKAGED app builds a
+   * template out of them without throwing, and that the model is reading the
+   * real registry rather than a fixture.
+   *
+   * It DESCRIBES and does not `popup()`: a native menu on Windows stays open
+   * until it is dismissed, and a harness that has opened one cannot then close
+   * the window. Same three rules as RLPLAYER_E2E_OPEN_SETTINGS -- env only, read
+   * in exactly one place, exact value -- enforced by no-network.test.ts.
+   */
+  if (process.env['RLPLAYER_E2E_DUMP_MENU'] === '1') {
+    /**
+     * IT PRINTS THE RENDERED TEMPLATE'S LABELS, and the first version did not.
+     *
+     * The first version printed the ids that `commandMenuGroups()` produced --
+     * the MODEL -- alongside the template's item count. So when the rendering
+     * half of the fix was reverted to check the harness would catch it, the
+     * marker still listed all three commands (the model was untouched) and
+     * e2e-overlay reported CLEAN. The only trace was an item count dropping
+     * 58 -> 53, which nothing asserted on. An assertion that reads the model to
+     * prove the render is the same vacuous shape as a tooltip check satisfied by
+     * the bug it existed to catch.
+     *
+     * Now the harness gets the template's own labels and, separately, the label
+     * each menuPath command WOULD render as, and checks containment itself.
+     */
+    const labels = (nodes: MenuItemConstructorOptions[]): string[] =>
+      nodes.flatMap((n) => [
+        ...(typeof n.label === 'string' && n.label ? [n.label] : []),
+        ...(Array.isArray(n.submenu) ? labels(n.submenu as MenuItemConstructorOptions[]) : [])
+      ])
+    const expected = commandMenuGroups(commandRegistry.all()).flatMap((g) =>
+      g.items.map((i) => ({
+        id: i.commandId,
+        path: g.path,
+        order: i.order,
+        label: t(i.labelKey)
+      }))
+    )
+    const rendered = labels(menu.buildTemplate())
+    console.log(
+      `[e2e] menu ${JSON.stringify({ items: rendered.length, rendered, expected })}`
+    )
   }
 
   if (portableFallback()) toast(t('core.portableFallback'), 'error')

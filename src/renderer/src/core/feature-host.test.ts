@@ -1,5 +1,8 @@
 import test, { beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   __resetForTests,
   createContext,
@@ -16,6 +19,13 @@ import {
 } from './feature-host.ts'
 import type { RendererFeatureModule } from '../../../shared/renderer-api.ts'
 import type { PlayerState } from '../../../shared/types.ts'
+import {
+  NAMESPACES,
+  checkOrdering,
+  readMenuRoots,
+  scanRepoClaims,
+  type ManifestRow
+} from '../../../../scripts/lib/ordering.mjs'
 
 /**
  * The regression suite for the "one keypress permanently breaks the overlay"
@@ -342,4 +352,174 @@ test('two modules cannot claim the same transport button id', () => {
     errors.some((e) => /duplicate transport button id/.test(e)),
     `the collision was not reported: ${errors.join(' | ')}`
   )
+})
+
+// ---------------------------------------------------------------------------
+// Every cross-module ORDERING namespace, audited after the seek bar collided
+// ---------------------------------------------------------------------------
+//
+// `SeekbarHost.register()` rejected a duplicate layer id and nothing rejected a
+// duplicate `order`, and the two shipped layers at order 10 collided. Auditing
+// the sibling namespaces found `ctx.panel()`, `ctx.statsSection()` and
+// `ctx.settingsSection()` rejecting NOTHING — not even a duplicate id — and
+// `ctx.transportButton()` checking the id but not the order. The tests below are
+// per-namespace rather than one loop, so a failure names the namespace.
+
+const orderClash = /duplicate .* order/
+const idClash = /duplicate .* id/
+
+test('two panels cannot share an order, and cannot share an id', () => {
+  const ctx = createContext('playlist', bridge, 'player')
+  const panel = (id: string, order: number): void => {
+    ctx.panel({ id, side: 'right', titleKey: 'x', order, mount: () => () => {} })
+  }
+  panel('playlist', 10)
+  assert.throws(() => panel('nav-bookmarks', 10), orderClash)
+  assert.throws(() => panel('playlist', 20), idClash)
+  panel('nav-bookmarks', 20)
+  assert.deepEqual(
+    panels.map((p) => p.id),
+    ['playlist', 'nav-bookmarks']
+  )
+})
+
+test('two stats sections cannot share an order, and cannot share an id', () => {
+  const ctx = createContext('video-decode', bridge, 'player')
+  const section = (id: string, order: number): void => {
+    ctx.statsSection({ id, order, titleKey: 'x', fields: () => [] })
+  }
+  section('video-decode.stats', 20)
+  assert.throws(() => section('mediainfo.stats', 20), orderClash)
+  assert.throws(() => section('video-decode.stats', 30), idClash)
+})
+
+test('two transport buttons cannot share an order', () => {
+  const ctx = createContext('playlist', bridge, 'player')
+  const button = (id: string, order: number): void => {
+    ctx.transportButton({ id, order, labelKey: 'x', mount: () => () => {}, onClick: () => {} })
+  }
+  button('playlist.toggle', 20)
+  assert.throws(() => button('nav-bookmarks.toggle', 20), orderClash)
+  button('nav-bookmarks.toggle', 30)
+})
+
+test('settings sections may share an order only in DIFFERENT pages', () => {
+  // The one namespace with a legitimate scope: two sections that are never
+  // sorted against each other cannot collide, and forbidding it would make 55
+  // modules coordinate an order across pages they cannot see.
+  const ctx = createContext('shell-window', bridge, 'settings')
+  const section = (id: string, order: number, page: 'playback' | 'video'): void => {
+    ctx.settingsSection({ id, section: page, order, titleKey: 'x', mount: () => () => {} })
+  }
+  section('shell-window.a', 6, 'playback')
+  section('shell-window.b', 6, 'video')
+  assert.throws(() => section('shell-window.c', 6, 'video'), orderClash)
+})
+
+
+/**
+ * THE SHIPPED CONTRIBUTIONS, AGAINST THE ORDERING PARTITION IN `modules.json`.
+ *
+ * WHAT THIS TEST USED TO BE, AND WHY IT LIED. It paired `id:` to `order:` with
+ * one regex per namespace and a 400/600-character window:
+ *
+ *     /ctx\.panel\(\{\s*\n?\s*id:\s*'([^']+)'[\s\S]{0,400}?order:\s*(\d+)/g
+ *
+ * Three ways for that to report clean on a real duplicate, all three present in
+ * the delivered tree:
+ *
+ *   1. the WINDOW — `nav-chapters.skipPrompt` (transport button 60) and
+ *      `nav-chapters.skipBands` (seek-bar layer 15) both sit further than 400
+ *      characters from their own `id:`, because M25 wrote an 11-line comment
+ *      between the two keys to document the collision this test had caught. The
+ *      test was blinded by the note about itself;
+ *   2. the KEY ORDER — `order:` before `id:` matches nothing;
+ *   3. the VALUE — `order: MENU_ORDER` is not `(\d+)`, so M22's menu section was
+ *      invisible.
+ *
+ * MEASURED: putting the duplicate back (`nav-chapters.skipPrompt` at 50, which
+ * is `stream-open.toggle`'s) gave `npm test` 1143 pass / 0 fail, while the
+ * runtime host threw `duplicate transport button order 50` — a boot crash no
+ * check in the repository could see.
+ *
+ * WHAT IT IS NOW. Ordering is a partition key in `docs/parity/modules.json`
+ * (`ownedOrders`), exactly like `ownedProperties` and `ownedFiles`, and the code
+ * side is read with the TypeScript AST by `scripts/lib/ordering.mjs` — the same
+ * reader `npm run check:ordering` uses, imported rather than re-implemented,
+ * because a test that grows its own weaker copy of a shared rule is how this
+ * repository got here twice (see `scripts/lib/lex.d.mts`).
+ *
+ * A comment cannot separate two properties of one object literal in a parse
+ * tree, `order` may be a named constant, and key order is irrelevant.
+ */
+test('the shipped contributions agree with the ordering partition, both directions', () => {
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const repo = path.resolve(here, '..', '..', '..', '..')
+  const modules = JSON.parse(
+    fs.readFileSync(path.join(repo, 'docs', 'parity', 'modules.json'), 'utf8')
+  ) as ManifestRow[]
+
+  const { claims, unresolved } = scanRepoClaims(repo)
+  const problems = checkOrdering({
+    modules,
+    codeClaims: claims,
+    unresolved,
+    menuRoots: readMenuRoots(repo)
+  })
+  assert.deepEqual(problems, [], '\n  ' + problems.join('\n  '))
+
+  // A reader that found nothing agrees with everything, which is the shape of
+  // the header-only netlog. Every namespace must have been exercised by the
+  // shipped tree, and the count is asserted per namespace rather than in total.
+  for (const spec of NAMESPACES) {
+    assert.ok(
+      claims.some((c) => c.ns === spec.ns),
+      `the AST reader found NO ${spec.ns} contributions in the whole tree`
+    )
+  }
+
+  // The three claims the retired regex could not read are named, so "the new
+  // reader sees them" is a fact this file asserts rather than a claim it makes.
+  for (const id of ['nav-chapters.skipPrompt', 'nav-chapters.skipBands', 'capture-still.menu']) {
+    assert.ok(
+      claims.some((c) => c.id === id),
+      `${id} was invisible to the retired regex and must be visible now`
+    )
+  }
+})
+
+/**
+ * The partition is only worth having if a collision is detectable from the
+ * MANIFEST ALONE — that is the whole difference between "a boot crash we find by
+ * booting" and "a conflict CI reports by reading one file". Planted here rather
+ * than only in `check-ordering.mjs --self-test`, because `npm test` is what a
+ * module author runs.
+ */
+test('a duplicate order in the manifest is a collision naming both rows', () => {
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const repo = path.resolve(here, '..', '..', '..', '..')
+  const modules = JSON.parse(
+    fs.readFileSync(path.join(repo, 'docs', 'parity', 'modules.json'), 'utf8')
+  ) as ManifestRow[]
+
+  // `stream-open.toggle` holds transportButton 50. Give it to M25 as well —
+  // the exact duplicate that shipped and booted-crashed — and read the report.
+  const planted = modules.map((row) =>
+    row.id === 'M25'
+      ? {
+          ...row,
+          ownedOrders: {
+            ...row.ownedOrders,
+            transportButton: [{ id: 'nav-chapters.skipPrompt', order: 50 }]
+          }
+        }
+      : row
+  )
+  const problems = checkOrdering({ modules: planted, codeClaims: [] })
+  const collision = problems.find((p) => p.includes('ORDERING COLLISION'))
+  assert.ok(collision, `expected a collision, got:\n  ${problems.join('\n  ')}`)
+  assert.match(collision, /nav-chapters\.skipPrompt/)
+  assert.match(collision, /stream-open\.toggle/)
+  assert.match(collision, /M25/)
+  assert.match(collision, /M35/)
 })

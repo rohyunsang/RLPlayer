@@ -1,0 +1,100 @@
+/*
+ * M36 stream-ytdl, renderer styles. Every selector prefixed `sy-`.
+ */
+
+.sy-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sy-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.sy-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 7px;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgb(255 255 255 / 6%);
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 4px;
+}
+
+.sy-path.sy-missing {
+  background: rgb(255 160 90 / 12%);
+  border-color: rgb(255 160 90 / 45%);
+}
+
+.sy-btn {
+  flex: 0 0 auto;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: inherit;
+  cursor: pointer;
+  background: rgb(255 255 255 / 12%);
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 4px;
+}
+
+.sy-meta {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.sy-notes {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.sy-notes p {
+  margin: 0 0 6px;
+}
+
+.sy-privacy {
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  background: rgb(255 200 90 / 12%);
+  border-left: 2px solid rgb(255 200 90 / 70%);
+  border-radius: 3px;
+}
+
+.sy-quality {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.sy-quality-item {
+  width: 100%;
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 12px;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 3px;
+}
+
+.sy-quality-item:hover {
+  background: rgb(255 255 255 / 10%);
+}
+
+.sy-quality-item[aria-checked='true'] {
+  font-weight: 600;
+  background: rgb(120 170 255 / 18%);
+}

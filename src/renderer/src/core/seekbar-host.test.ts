@@ -429,3 +429,257 @@ test('every contribution point on the host is called from shipped code', () => {
       missing.join('\n  ')
   )
 })
+
+// ---------------------------------------------------------------------------
+// THE ASSERTION THAT WAS MISSING, AND WHY THE TWO THAT EXISTED COULD NOT MAKE IT
+//
+// `seekbar-host.test.ts:161` and `:238` both registered tooltip layers of the
+// shape `tooltip: () => ({ el: el(), order: 20 })` — layers that IGNORE
+// `e.handle` entirely. They asserted that fragments merge by order, which was
+// true, and they were structurally incapable of noticing that the host handed a
+// non-claiming layer `handle = ''` and that M25 then did
+// `chapters[Number('')]` === `chapters[0]`.
+//
+// Measured consequence in the packaged build, over 24 positions: 24/24 printed
+// "Intro", and 22 of the 24 contradicted M27's caption inside the same
+// `#seekHover` box — at 5:00 and 9:20 the tooltip read "Intro" and "End" at
+// once.
+//
+// So the layers below are the REAL shape: they index by handle exactly as M25
+// does, and they answer per position rather than unconditionally.
+// ---------------------------------------------------------------------------
+
+interface TipProbe {
+  layer: SeekbarLayer
+  /** The title the layer's fragment would print, per call. */
+  printed: Array<string | null>
+}
+
+/** A layer shaped exactly like M25's: ticks at fixed x, indexed by handle. */
+function chapterLayer(id: string, order: number, ticksAtX: readonly number[]): TipProbe {
+  const titles = ticksAtX.map((_, i) => `chapter-${i}`)
+  const probe: TipProbe = { layer: null as never, printed: [] }
+  probe.layer = {
+    id,
+    order,
+    render: () => undefined,
+    handles: () => titles.map((_, i) => String(i)),
+    hitTest: (c) => {
+      for (let i = 0; i < ticksAtX.length; i++) {
+        if (Math.abs(c.x - (ticksAtX[i] as number)) <= c.tolerancePx) return String(i)
+      }
+      return null
+    },
+    tooltip: (e) => {
+      // THE CONSUMER, WRITTEN THE CORRECT WAY. The discriminant is checked
+      // first; and if it were not, `Number(e.handle)` on the absent case is
+      // `NaN`, which indexes nothing. Both halves of the fix are load-bearing.
+      if (!e.claimed) {
+        probe.printed.push(null)
+        return null
+      }
+      const title = titles[Number(e.handle)]
+      probe.printed.push(title ?? null)
+      return title === undefined ? null : { el: {} as HTMLElement, order: 20, role: 'chapter' }
+    }
+  }
+  return probe
+}
+
+test('a tooltip layer that indexes by handle prints ONLY where it claimed', () => {
+  const r = makeHost(100, 1000)
+  // Ticks at 0 s, 40 s and 90 s on a 1000 px bar over a 100 s file.
+  const ticks = chapterLayer('nav-chapters.ticks', 10, [0, 400, 900])
+  r.host.register(ticks.layer)
+
+  const printing: number[] = []
+  for (let x = 0; x <= 1000; x += 50) {
+    if (r.host.tooltips(x).length > 0) printing.push(x)
+  }
+  assert.deepEqual(
+    printing,
+    [0, 400, 900],
+    'the fragment appears at the three ticks and nowhere else. Before the fix this list ' +
+      'was EVERY sampled position and the title was always chapter 0.'
+  )
+  assert.deepEqual(
+    ticks.printed.filter((p) => p !== null),
+    ['chapter-0', 'chapter-1', 'chapter-2'],
+    'and each tick names ITS OWN chapter'
+  )
+})
+
+test('the absent handle is undefined, so Number() on it cannot index item zero', () => {
+  const r = makeHost(100, 1000)
+  const seen: Array<{ claimed: boolean; handle: unknown; asIndex: number }> = []
+  r.host.register({
+    id: 'probe',
+    order: 10,
+    render: () => undefined,
+    hitTest: (c) => (Math.abs(c.x - 500) <= c.tolerancePx ? '7' : null),
+    handles: () => ['7'],
+    tooltip: (e) => {
+      seen.push({ claimed: e.claimed, handle: e.handle, asIndex: Number(e.handle) })
+      return null
+    }
+  })
+  r.host.tooltips(100)
+  r.host.tooltips(500)
+  assert.deepEqual(seen[0], { claimed: false, handle: undefined, asIndex: Number.NaN })
+  assert.deepEqual(seen[1], { claimed: true, handle: '7', asIndex: 7 })
+  assert.ok(
+    Number.isNaN(seen[0]?.asIndex),
+    'Number of an empty string and Number of null are both 0; only undefined is NaN, and ' +
+      'NaN is the only one of the three that cannot be a valid array index'
+  )
+})
+
+test('hover carries the same absent-handle shape as the tooltip', () => {
+  const r = makeHost(100, 1000)
+  const seen: Array<{ claimed: boolean; handle: unknown }> = []
+  r.host.register({
+    id: 'probe',
+    order: 10,
+    render: () => undefined,
+    hitTest: (c) => (Math.abs(c.x - 500) <= c.tolerancePx ? 'h' : null),
+    handles: () => ['h'],
+    onHover: (e) => {
+      if (e) seen.push({ claimed: e.claimed, handle: e.handle })
+    }
+  })
+  r.host.hover(100)
+  r.host.hover(500)
+  assert.deepEqual(seen, [
+    { claimed: false, handle: undefined },
+    { claimed: true, handle: 'h' }
+  ])
+})
+
+// ---------------------------------------------------------------------------
+// Rule 5: order is a slot, not a hint
+// ---------------------------------------------------------------------------
+
+test('duplicate layer orders are rejected, naming both layers', () => {
+  const r = makeHost()
+  // The exact collision that shipped: M25's ticks and M27's preview both at 10.
+  r.host.register({ id: 'nav-chapters.ticks', order: 10, render: () => undefined })
+  assert.throws(
+    () => r.host.register({ id: 'nav-thumbnails.preview', order: 10, render: () => undefined }),
+    (e: Error) => {
+      assert.match(e.message, /duplicate seek-bar layer order 10/)
+      assert.match(e.message, /nav-chapters\.ticks/)
+      assert.match(e.message, /nav-thumbnails\.preview/)
+      assert.match(e.message, /z-index/, 'the message has to say what actually breaks')
+      return true
+    }
+  )
+})
+
+test('the shipped layers hold distinct orders', () => {
+  // A registration-time throw only helps if the shipped set passes it, and two
+  // of the four did not. Reading the real modules is what keeps this honest.
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const features = path.resolve(here, '..', 'features')
+  const orders = new Map<string, number>()
+  for (const dir of fs.readdirSync(features, { withFileTypes: true })) {
+    if (!dir.isDirectory()) continue
+    const file = path.join(features, dir.name, 'index.ts')
+    if (!fs.existsSync(file)) continue
+    const src = fs.readFileSync(file, 'utf8')
+    const re = /ctx\.seekbarLayer\(\{\s*id:\s*'([^']+)'[\s\S]*?order:\s*(\d+)/g
+    for (let m = re.exec(src); m !== null; m = re.exec(src)) {
+      orders.set(m[1] as string, Number(m[2]))
+    }
+  }
+  assert.ok(orders.size >= 4, `only found ${orders.size} seek-bar layers in the tree`)
+  const byOrder = new Map<number, string[]>()
+  for (const [id, order] of orders) byOrder.set(order, [...(byOrder.get(order) ?? []), id])
+  const clashes = [...byOrder].filter(([, ids]) => ids.length > 1)
+  assert.deepEqual(
+    clashes,
+    [],
+    `two shipped layers share a seek-bar order: ${clashes
+      .map(([o, ids]) => `${o} -> ${ids.join(', ')}`)
+      .join('; ')}`
+  )
+})
+
+// ---------------------------------------------------------------------------
+// Rule 6: same role, one fragment — and the HOST decides, not the layer
+// ---------------------------------------------------------------------------
+
+test('two layers offering the same role collapse to one, and the claimant wins', () => {
+  const r = makeHost(100, 1000)
+  const el = (): HTMLElement => ({}) as HTMLElement
+  // M27's shape: a preview with no hitTest, plus a chapter caption for EVERY
+  // position, returned as two fragments so they can be dropped separately.
+  r.host.register({
+    id: 'nav-thumbnails.preview',
+    order: 5,
+    render: () => undefined,
+    tooltip: () => [
+      { el: el(), order: 10 },
+      { el: el(), order: 15, role: 'chapter' }
+    ]
+  })
+  // M25's shape: a chapter title only where its own tick was claimed.
+  r.host.register({
+    id: 'nav-chapters.ticks',
+    order: 10,
+    render: () => undefined,
+    hitTest: (c) => (Math.abs(c.x - 400) <= c.tolerancePx ? '1' : null),
+    handles: () => ['1'],
+    tooltip: (e) => (e.claimed ? { el: el(), order: 20, role: 'chapter' } : null)
+  })
+
+  assert.deepEqual(
+    r.host.tooltips(100).map((t) => t.order),
+    [10, 15],
+    'away from the tick: the preview and exactly one chapter line, M27s'
+  )
+  assert.deepEqual(
+    r.host.tooltips(400).map((t) => t.order),
+    [10, 20],
+    'on the tick: still exactly one chapter line, and it is the specific one'
+  )
+})
+
+test('with no claimant, the lowest order wins the role', () => {
+  const r = makeHost(100, 1000)
+  const el = (): HTMLElement => ({}) as HTMLElement
+  r.host.register({
+    id: 'low',
+    order: 10,
+    render: () => undefined,
+    tooltip: () => ({ el: el(), order: 15, role: 'chapter' })
+  })
+  r.host.register({
+    id: 'high',
+    order: 20,
+    render: () => undefined,
+    tooltip: () => ({ el: el(), order: 25, role: 'chapter' })
+  })
+  assert.deepEqual(
+    r.host.tooltips(100).map((t) => t.order),
+    [15],
+    'a deterministic winner rather than two lines saying the same thing'
+  )
+})
+
+test('a fragment with no role is never de-duplicated', () => {
+  const r = makeHost(100, 1000)
+  const el = (): HTMLElement => ({}) as HTMLElement
+  r.host.register({
+    id: 'a',
+    order: 10,
+    render: () => undefined,
+    tooltip: () => ({ el: el(), order: 10 })
+  })
+  r.host.register({
+    id: 'b',
+    order: 20,
+    render: () => undefined,
+    tooltip: () => ({ el: el(), order: 20 })
+  })
+  assert.equal(r.host.tooltips(100).length, 2)
+})

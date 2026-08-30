@@ -1,5 +1,10 @@
 import { ContributionError } from './errors.ts'
-import { validateIds, topoSort, type DiscoveredModule } from './registry-order.ts'
+import {
+  validateIds,
+  topoSort,
+  deferredDeps,
+  type DiscoveredModule
+} from './registry-order.ts'
 import { CORE_OWNERSHIP, OwnerMap } from './mpv/ownership.ts'
 import { createEngineService } from './mpv/engine.ts'
 import { createVfChain } from './mpv/vf-chain.ts'
@@ -8,6 +13,7 @@ import type { MpvBus } from './mpv/bus.ts'
 import { createI18nService, t } from './i18n/index.ts'
 import { createWindowService, releaseSleepBlocksFor } from './window/index.ts'
 import { createDialogService } from './dialog.ts'
+import { createImageService, createShellService } from './shell.ts'
 import { createNetworkService } from './no-network.ts'
 import { pathService } from './paths.ts'
 import type { SettingsRegistry } from './settings/registry.ts'
@@ -104,6 +110,18 @@ export class Registry {
     validateIds(specs)
     const ordered = topoSort(specs)
 
+    // A dependency on a module docs/parity/modules.json reserves but this build
+    // has not implemented is deferred, not fatal — see MANIFEST_CORE_IDS. It is
+    // said out loud exactly once, because "my dependency silently was not there"
+    // is otherwise a debugging session.
+    for (const { id, dep } of deferredDeps(specs)) {
+      console.info(
+        `[registry] '${id}' dependsOn '${dep}', which modules.json reserves but this ` +
+          `build does not implement. Ordering is vacuous; '${id}' must cope with it ` +
+          `being absent.`
+      )
+    }
+
     // 2. The property owner map (§3.7). Two modules claiming one property is a
     //    boot error naming both, in the same breath as a duplicate command id.
     this.owners = new OwnerMap([...CORE_OWNERSHIP, ...ordered.map((s) => s.module)])
@@ -196,6 +214,10 @@ export class Registry {
       },
       window: createWindowService(id),
       dialog: createDialogService(),
+      // §3.3.9/§3.3.10. Minted per module for the same reason `ctx.mpv` is: the
+      // owner id is in the refusal when a module asks for a path it may not have.
+      shell: createShellService(id),
+      image: createImageService(),
       network: createNetworkService(id),
       // A second mpv, tracked and reaped. Minted per module the same way
       // `ctx.mpv` is, so an engine always has an owner in the log.

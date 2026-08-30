@@ -1,0 +1,341 @@
+/**
+ * The decision: does this file need us at all, and if so what comes out.
+ *
+ * Kept free of `node:fs` and of `FeatureContext` so it can be tested against
+ * the real fixtures, which is where the value is: the difference between
+ * `kind: 'none'` and `kind: 'split'` is the difference between "Korean renders"
+ * and "Korean silently disappears", and it is decided here.
+ *
+ * THE RULE THAT KEEPS THIS HONEST: convert only what mpv gets WRONG.
+ * A well-formed single-language CP949 SAMI plays correctly with no options set
+ * (S02, verified: `Found 'sami' at score=100`, `charset UHC`, Korean on screen),
+ * so touching it would add a duplicate track and a cache file for nothing. Every
+ * `kind` other than `'none'` corresponds to a measured failure on the pinned
+ * binary.
+ */
+
+import { createHash } from 'node:crypto'
+import { buildAss } from './ass.ts'
+import type { RubyMode } from './ass.ts'
+import { cuesByClass, langOfStyle, needsHeaderRepair, parseSmi, repairHeader, smiProbeScore } from './smi.ts'
+import type { Cue, SmiDocument } from './smi.ts'
+import { decodeSubtitle } from './text.ts'
+import { parseTtml } from './ttml.ts'
+import { toSrt } from './serialise.ts'
+
+/** Bump when the OUTPUT of the converter changes, so stale cache is not reused. */
+export const CONVERTER_VERSION = 1
+
+export type ConversionKind = 'none' | 'repair' | 'split' | 'ttml' | 'unsupported'
+
+export interface ConversionOutput {
+  /** Relative file name inside `ctx.paths.subCacheDir()`. */
+  readonly fileName: string
+  readonly className: string
+  /** Two-letter code for `sub-add`'s `lang` argument, or `und`. */
+  readonly lang: string
+  /** Human title, e.g. `한국어 (KRCC)`. */
+  readonly title: string
+  readonly text: string
+  readonly cueCount: number
+  /** True for the one track that should end up selected. */
+  readonly preferred: boolean
+}
+
+export interface ConversionPlan {
+  readonly kind: ConversionKind
+  /** i18n key under this module explaining WHY, for the OSD and the log. */
+  readonly reasonKey: string
+  readonly outputs: readonly ConversionOutput[]
+  /** The encoding the source was decoded with. */
+  readonly encoding: string
+  /** Diagnostics worth putting in the stats overlay. */
+  readonly diagnostics: {
+    readonly probeScore: number
+    readonly classes: readonly string[]
+    readonly duplicateTimestamps: number
+  }
+}
+
+export interface ConvertOptions {
+  /** A `TextDecoder` label from the S34 override, or null for detection. */
+  readonly forcedDecoder: string | null
+  readonly rubyMode: RubyMode
+  readonly useSubtitleStyle: boolean
+  /** Two-letter codes, best first. The first match wins the `preferred` flag. */
+  readonly preferredLangs: readonly string[]
+}
+
+const SMI_EXT = /\.(smi|sami)$/i
+const TTML_EXT = /\.(ttml|dfxp|xml)$/i
+
+export function isConvertibleExtension(file: string): boolean {
+  return SMI_EXT.test(file) || TTML_EXT.test(file)
+}
+
+/** sha1 of the bytes plus everything that changes the output. */
+export function cacheKey(bytes: Uint8Array, o: ConvertOptions): string {
+  const h = createHash('sha1')
+  h.update(bytes)
+  h.update(
+    `\u0000v${CONVERTER_VERSION}|${o.forcedDecoder ?? 'auto'}|${o.rubyMode}|${
+      o.useSubtitleStyle ? 'styled' : 'plain'
+    }`
+  )
+  return h.digest('hex').slice(0, 16)
+}
+
+export function planConversion(
+  bytes: Uint8Array,
+  sourcePath: string,
+  o: ConvertOptions
+): ConversionPlan {
+  if (SMI_EXT.test(sourcePath)) return planSmi(bytes, sourcePath, o)
+  if (TTML_EXT.test(sourcePath)) return planTtml(bytes, sourcePath, o)
+  return {
+    kind: 'unsupported',
+    reasonKey: 'subs-formats.reason.unsupported',
+    outputs: [],
+    encoding: 'utf-8',
+    diagnostics: { probeScore: 0, classes: [], duplicateTimestamps: 0 }
+  }
+}
+
+/**
+ * How many RENDERABLE events share a timestamp with an earlier renderable one.
+ * Each of these is a line FFmpeg gives duration 0 and silently drops.
+ *
+ * `&nbsp;` CLEAR EVENTS ARE EXCLUDED, and skipping that was the module's worst
+ * bug — an inverted safety rule rather than a missing feature. This count is the
+ * whole evidence for "mpv gets this file wrong", and
+ *
+ *     <SYNC Start=3000><P Class=KRCC>&nbsp;
+ *     <SYNC Start=3000><P Class=KRCC>두 번째
+ *
+ * — clear the line, start the next one at the same instant — is in more or less
+ * every real Korean `.smi`. Measured on the single-language fixture, which S02
+ * records as rendering CORRECTLY on the pinned binary with no options set:
+ *
+ *     countDuplicateTimestamps  ->  1        (before)
+ *     planConversion().kind     ->  'split'  (before)
+ *     planConversion().kind     ->  'none'   (after)
+ *
+ * So "convert only what mpv gets WRONG" was doing the opposite for the commonest
+ * file in the target market: a cache file and a second, identical-looking Korean
+ * track on every single subtitle. FFmpeg losing a clear event costs nothing —
+ * the clear exists to end the previous cue, and the cue that follows it at the
+ * same PTS ends it anyway.
+ */
+export function countDuplicateTimestamps(doc: SmiDocument): number {
+  const seen = new Set<number>()
+  let dups = 0
+  for (const e of doc.events) {
+    if (e.clear) continue
+    if (seen.has(e.startMs)) dups++
+    else seen.add(e.startMs)
+  }
+  return dups
+}
+
+function planSmi(bytes: Uint8Array, sourcePath: string, o: ConvertOptions): ConversionPlan {
+  const decoded = decodeSubtitle(bytes, o.forcedDecoder)
+  const probeScore = smiProbeScore(decoded.text)
+  const repairNeeded = needsHeaderRepair(decoded.text)
+  const text = repairNeeded ? repairHeader(decoded.text) : decoded.text
+  const doc = parseSmi(text)
+  const byClass = cuesByClass(doc)
+  const duplicateTimestamps = countDuplicateTimestamps(doc)
+
+  // A class with no renderable cue (all `&nbsp;`) is not a language.
+  const real = [...byClass.entries()].filter(([, cues]) => cues.length > 0)
+  const namedClasses = real.filter(([id]) => id.length > 0)
+  const classes = real.map(([id]) => id)
+  const diagnostics = { probeScore, classes, duplicateTimestamps }
+
+  if (real.length === 0) {
+    return {
+      kind: 'unsupported',
+      reasonKey: 'subs-formats.reason.empty',
+      outputs: [],
+      encoding: decoded.encoding,
+      diagnostics
+    }
+  }
+
+  const multi = namedClasses.length >= 2
+  // A single class is still broken if two of ITS events share a timestamp: the
+  // demuxer's queue is global and gives the first of the pair duration 0.
+  const collides = !multi && duplicateTimestamps > 0
+
+  if (!multi && !collides && !repairNeeded) {
+    return {
+      kind: 'none',
+      reasonKey: 'subs-formats.reason.native',
+      outputs: [],
+      encoding: decoded.encoding,
+      diagnostics
+    }
+  }
+
+  if (!multi && !collides && repairNeeded) {
+    // S04 alone: the body is fine, only the six bytes at the front are not.
+    // Hand mpv a normalised `.smi` and let uchardet and samidec do their job —
+    // rewriting a working body into ASS would throw away libass's own SAMI
+    // handling for no gain.
+    const base = baseName(sourcePath)
+    return {
+      kind: 'repair',
+      reasonKey: 'subs-formats.reason.repair',
+      outputs: [
+        {
+          fileName: `${cacheKey(bytes, o)}.repaired.smi`,
+          className: classes[0] ?? '',
+          lang: 'und',
+          title: `${base} (정규화)`,
+          text,
+          cueCount: real[0]?.[1].length ?? 0,
+          preferred: true
+        }
+      ],
+      encoding: decoded.encoding,
+      diagnostics
+    }
+  }
+
+  const key = cacheKey(bytes, o)
+  const source = namedClasses.length > 0 ? namedClasses : real
+  const outputs: ConversionOutput[] = []
+  let preferredIndex = pickPreferred(source, doc, o.preferredLangs)
+  for (let i = 0; i < source.length; i++) {
+    const entry = source[i]
+    if (!entry) continue
+    const [className, cues] = entry
+    const style = doc.styles.get(className)
+    const lang = langOfStyle(style, className)
+    const name = style?.name ?? languageName(lang)
+    const title = className.length > 0 ? `${name} (${className})` : name
+    outputs.push({
+      fileName: `${key}.${safeName(className || 'sub')}.${lang}.ass`,
+      className,
+      lang,
+      title,
+      text: buildAss(cues, {
+        title,
+        rubyMode: o.rubyMode,
+        useSubtitleStyle: o.useSubtitleStyle,
+        classStyle: style,
+        defaultStyle: doc.styles.get('')
+      }),
+      cueCount: cues.length,
+      preferred: i === preferredIndex
+    })
+  }
+  return {
+    kind: 'split',
+    reasonKey: multi ? 'subs-formats.reason.split' : 'subs-formats.reason.collide',
+    outputs,
+    encoding: decoded.encoding,
+    diagnostics
+  }
+}
+
+function planTtml(bytes: Uint8Array, sourcePath: string, o: ConvertOptions): ConversionPlan {
+  const decoded = decodeSubtitle(bytes, o.forcedDecoder)
+  // `.xml` is claimed by a hundred other things; only convert one that really
+  // is a timed-text document.
+  if (!/<\s*(?:[A-Za-z0-9_.-]+:)?tt\b/i.test(decoded.text)) {
+    return {
+      kind: 'unsupported',
+      reasonKey: 'subs-formats.reason.notTtml',
+      outputs: [],
+      encoding: decoded.encoding,
+      diagnostics: { probeScore: 0, classes: [], duplicateTimestamps: 0 }
+    }
+  }
+  const doc = parseTtml(decoded.text)
+  if (doc.cues.length === 0) {
+    return {
+      kind: 'unsupported',
+      reasonKey: 'subs-formats.reason.empty',
+      outputs: [],
+      encoding: decoded.encoding,
+      diagnostics: { probeScore: 0, classes: [], duplicateTimestamps: 0 }
+    }
+  }
+  const key = cacheKey(bytes, o)
+  const langs = doc.langs.length > 0 ? doc.langs : ['']
+  const outputs: ConversionOutput[] = []
+  let preferred = 0
+  for (const want of o.preferredLangs) {
+    const at = langs.findIndex((l) => l.startsWith(want))
+    if (at >= 0) {
+      preferred = at
+      break
+    }
+  }
+  for (let i = 0; i < langs.length; i++) {
+    const lang = langs[i] ?? ''
+    const cues: Cue[] = doc.cues
+      .filter((c) => c.lang === lang)
+      .map((c) => ({ startMs: c.startMs, endMs: c.endMs, text: c.text, ruby: '' }))
+    const short = (lang.split('-')[0] ?? '').toLowerCase() || 'und'
+    outputs.push({
+      fileName: `${key}.${safeName(short)}.${short}.srt`,
+      className: lang,
+      lang: short,
+      // The source name is in the title because a TTML sidecar carries no
+      // human label of its own, and "TTML" alone in a track list tells the user
+      // nothing about which of two files they are looking at.
+      title:
+        langs.length > 1 ? `${baseName(sourcePath)} (${lang || 'und'})` : baseName(sourcePath),
+      text: toSrt(cues),
+      cueCount: cues.length,
+      preferred: i === preferred
+    })
+  }
+  return {
+    kind: 'ttml',
+    reasonKey: 'subs-formats.reason.ttml',
+    outputs,
+    encoding: decoded.encoding,
+    diagnostics: { probeScore: 0, classes: langs, duplicateTimestamps: 0 }
+  }
+}
+
+function pickPreferred(
+  entries: ReadonlyArray<readonly [string, readonly Cue[]]>,
+  doc: SmiDocument,
+  preferredLangs: readonly string[]
+): number {
+  for (const want of preferredLangs) {
+    for (let i = 0; i < entries.length; i++) {
+      const id = entries[i]?.[0] ?? ''
+      if (langOfStyle(doc.styles.get(id), id) === want) return i
+    }
+  }
+  return 0
+}
+
+function languageName(lang: string): string {
+  switch (lang) {
+    case 'ko':
+      return '한국어'
+    case 'en':
+      return 'English'
+    case 'ja':
+      return '日本語'
+    case 'zh':
+      return '中文'
+    default:
+      return lang
+  }
+}
+
+function safeName(s: string): string {
+  return s.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 24) || 'sub'
+}
+
+function baseName(p: string): string {
+  const parts = p.split(/[\\/]/)
+  return parts[parts.length - 1] ?? p
+}

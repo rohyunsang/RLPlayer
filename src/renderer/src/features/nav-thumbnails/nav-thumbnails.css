@@ -1,0 +1,58 @@
+/*
+ * M27 nav-thumbnails, renderer half. Owned by this module and imported by its
+ * index.ts, exactly as M25's chapter ticks and M28's playlist panel are.
+ *
+ * `.seek-hover` is core's BOX and `.seek-tip-time` is core's fragment inside it;
+ * everything below is this module's own fragment. None of it goes anywhere near
+ * `src/renderer/src/styles.css`, which is `core-renderer`'s file and sits in the
+ * mustNotTouch list of 40 of the 55 rows in docs/parity/modules.json — the
+ * collision §6.3 sets up by putting chapter ticks (M25), bookmark pins (M26) and
+ * this preview (M27) on one bar.
+ */
+
+.rl-thumb-tip {
+  display: block;
+  /* Core's box is `white-space: nowrap` for its timecode; a caption under a
+     288 px image needs to wrap inside it. */
+  white-space: normal;
+  max-width: 480px;
+}
+
+.rl-thumb-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* The intrinsic size is the frame's, set in JS; this only keeps a very wide
+     preview from pushing the tooltip past the window edge. */
+  max-width: 480px;
+  margin: 2px 0;
+  border-radius: 3px;
+  background: #000;
+  image-rendering: auto;
+}
+
+.rl-thumb-canvas[hidden] {
+  display: none;
+}
+
+/*
+ * N37's caption. It is a SIBLING fragment of the preview rather than a child of
+ * it (see index.ts), so it carries its own wrapping rules: core's `.seek-hover`
+ * box is `white-space: nowrap` for its timecode.
+ *
+ * De-duplication against M25's chapter title is the HOST's, keyed off the
+ * fragment's `role`. This module used to derive a suppression band from M25's
+ * hit-test tolerance and was wrong at 22 of 24 measured positions.
+ */
+.rl-thumb-chapter {
+  display: block;
+  white-space: normal;
+  max-width: 480px;
+  font-size: 11px;
+  opacity: 0.85;
+  text-align: center;
+}
+
+.rl-thumb-chapter[hidden] {
+  display: none;
+}

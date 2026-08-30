@@ -10,6 +10,12 @@ import {
 } from './ownership.ts'
 import { composeArgs, validateArgContributions, type ArgContribution } from './reserved.ts'
 import { ContributionError } from '../errors.ts'
+import {
+  SELECTION_TRACK_TYPE,
+  isTrackSelectionProperty,
+  type TrackLike,
+  type TrackSelectionProperty
+} from '../../../shared/mpv/tracks.ts'
 import type { FeatureId, MpvService, Unsubscribe } from '@shared/feature-api'
 import type { PlayerState } from '@shared/types'
 
@@ -450,6 +456,62 @@ class MpvBus {
     return this.#manager.client.command<T>(args)
   }
 
+  /**
+   * THE WRITE MPV ACCEPTS AND THEN DISCARDS.
+   *
+   * `sid`, `aid`, `vid` and `secondary-sid` hold an INDEX into a list mpv
+   * renumbers freely, and mpv answers `{"error":"success"}` to
+   * `set_property sid 1` when there is no track 1. It then reports `sid=false`
+   * and the subtitle is gone. Measured: one press of Alt+C on a CP949 `.smi`
+   * did exactly that, `subs-tracks` swallowed it with `.catch(() => undefined)`,
+   * and the e2e check that reads `sub-codepage` printed PASS.
+   *
+   * So the bus checks the four of them for EVERY module, not just for the one
+   * that found the bug — ~25 modules are about to be written against this API
+   * and `aid`/`vid` have precisely the same exposure. The check is deliberately
+   * narrow: only a NUMERIC write (writing `'no'`/`false` resolving to `false` is
+   * correct), and only when mpv has a track list to select from, so an idle core
+   * or a pre-`file-loaded` restore cannot produce a false alarm.
+   */
+  private async confirmTrackWrite(
+    ownerId: string,
+    name: TrackSelectionProperty,
+    wanted: number,
+    log: (m: string) => void,
+    known?: number | false
+  ): Promise<void> {
+    let resolved: number | false
+    if (known !== undefined) resolved = known
+    else {
+      try {
+        resolved = await this.#manager.client.getProperty<number | false>(name)
+      } catch {
+        return /* mpv is gone; the caller's own error path owns that */
+      }
+    }
+    if (resolved === wanted) return
+    const type = SELECTION_TRACK_TYPE[name]
+    let list: TrackLike[] = []
+    try {
+      list = (await this.#manager.client.getProperty<TrackLike[]>('track-list')) ?? []
+    } catch {
+      list = (this.cache.get('track-list') as TrackLike[] | undefined) ?? []
+    }
+    const ofType = list.filter((t) => t.type === type)
+    // No tracks of that type at all: nothing was lost, there was nothing there.
+    if (ofType.length === 0) return
+    const ids = ofType.map((t) => t.id).join(', ')
+    log(
+      `[mpv-bus] ${ownerId} set ${name}=${wanted} and mpv ACCEPTED it, then resolved it to ` +
+        `${JSON.stringify(resolved)}. The ${type} tracks mpv actually has are ${ids}. ` +
+        `A track index is a position in a list mpv renumbers (sub-reload, audio-reload, ` +
+        `sub-add/remove, rescan-external-files); re-resolve the track by identity with ` +
+        `findByIdentity() from @shared/mpv/tracks and write ctx.mpv.selectTrack(), which ` +
+        `returns what mpv resolved to. Writing a captured index back is how every Korean ` +
+        `subtitle disappeared on one press of Alt+C.`
+    )
+  }
+
   /** Refusal counts, for the stats overlay and for a bug report (§3.5 rule 5). */
   refusals(): Array<{ moduleId: string; count: number }> {
     return this.owners?.refusalEntries() ?? []
@@ -572,6 +634,25 @@ class MpvBus {
       async set(name: string, value: unknown): Promise<void> {
         if (!checkWrite(name)) return
         await bus.#manager.client.setProperty(name, value)
+        // A write mpv ACCEPTS but resolves to nothing must not be silent.
+        if (isTrackSelectionProperty(name) && typeof value === 'number') {
+          await bus.confirmTrackWrite(ownerId, name, value, log)
+        }
+      },
+      async selectTrack(
+        name: TrackSelectionProperty,
+        id: number | false | 'no'
+      ): Promise<number | false> {
+        if (!checkWrite(name)) return false
+        const wire = id === false ? 'no' : id
+        await bus.#manager.client.setProperty(name, wire)
+        const resolved = await bus.#manager.client
+          .getProperty<number | false>(name)
+          .catch(() => false as const)
+        if (typeof id === 'number') {
+          await bus.confirmTrackWrite(ownerId, name, id, log, resolved)
+        }
+        return typeof resolved === 'number' ? resolved : false
       },
       async requestSet(name, value, reason) {
         if (bus.owners && !bus.owners.owns(ownerId, name) && !bus.owners.mayRequest(ownerId, name)) {

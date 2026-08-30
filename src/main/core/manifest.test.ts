@@ -3,6 +3,12 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+  MANIFEST_CORE_IDS,
+  MANIFEST_FEATURE_IDS,
+  deferredDeps,
+  topoSort
+} from './registry-order.ts'
 
 /**
  * `docs/parity/modules.json` is the machine-readable partition: who owns which
@@ -86,16 +92,35 @@ test('every row carries every field the tooling reads', () => {
 })
 
 test('every dependsOn names a module that exists', () => {
-  const ids = new Set(modules.map((m) => m.id))
+  /**
+   * ONE NAMESPACE. `dependsOn` used to name manifest ROW ids (`M07`) while code
+   * `dependsOn` names module DIRECTORIES (`video-decode`), so the two files
+   * could not be compared and a module mirroring its own row failed to boot.
+   * The manifest side moved: a feature dependency is spelled with the module
+   * id, a core dependency with the core piece id, and both are exactly what
+   * goes in the code.
+   */
+  const coreIds = new Set(modules.filter((m) => m.id.startsWith('core-')).map((m) => m.id))
+  const moduleIds = new Set(featureRowDirs().values())
   for (const m of modules) {
     for (const dep of m.dependsOn) {
-      assert.ok(ids.has(dep), `${m.id} depends on '${dep}', which is not in the manifest`)
+      assert.ok(
+        coreIds.has(dep) || moduleIds.has(dep),
+        `${m.id} depends on '${dep}', which is neither a core piece id nor a module id`
+      )
+      assert.ok(
+        !/^[A-Z]\d{2}$/.test(dep),
+        `${m.id} depends on '${dep}', a row id. dependsOn names module ids on both sides now.`
+      )
     }
   }
 })
 
 test('the dependency graph is acyclic', () => {
-  const byId = new Map(modules.map((m) => [m.id, m]))
+  // Keyed by whatever `dependsOn` names: a core row by its id, a feature row by
+  // its module id.
+  const dirs = featureRowDirs()
+  const byId = new Map(modules.map((m) => [dirs.get(m.id) ?? m.id, m]))
   const state = new Map<string, 'open' | 'done'>()
   const visit = (id: string, trail: string[]): void => {
     if (state.get(id) === 'done') return
@@ -107,7 +132,7 @@ test('the dependency graph is acyclic', () => {
     for (const dep of byId.get(id)?.dependsOn ?? []) visit(dep, [...trail, id])
     state.set(id, 'done')
   }
-  for (const m of modules) visit(m.id, [])
+  for (const m of modules) visit(dirs.get(m.id) ?? m.id, [])
 })
 
 test('no file is claimed by two rows', () => {
@@ -385,4 +410,149 @@ test('a feature assigned to one module is not owned by a directory another modul
     }
   }
   assert.deepEqual(problems, [], problems.join('\n  '))
+})
+
+/**
+ * ---------------------------------------------------------------------------
+ * `dependsOn` — the manifest's graph and the code's graph are ONE graph.
+ *
+ * Before this block the two were different namespaces with nothing comparing
+ * them, and mirroring your own manifest row was a boot failure. See
+ * MANIFEST_CORE_IDS in registry-order.ts for the whole argument.
+ * ---------------------------------------------------------------------------
+ */
+
+/** Feature-row id (`M12`) -> module directory id (`audio-eq`). */
+function featureRowDirs(): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const m of modules) {
+    const hit = /^src\/main\/features\/([a-z0-9-]+)\/$/.exec(m.path ?? '')
+    if (hit) out.set(m.id, hit[1] as string)
+  }
+  return out
+}
+
+/** The `dependsOn: [...]` array literal declared by a module's index.ts. */
+function codeDependsOn(dir: string): string[] | null {
+  const file = path.join(repo, 'src', 'main', 'features', dir, 'index.ts')
+  if (!fs.existsSync(file)) return null
+  const src = fs.readFileSync(file, 'utf8')
+  const hit = /\n\s*dependsOn:\s*\[([^\]]*)\]/.exec(src)
+  if (!hit) return null
+  return [...(hit[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1] as string)
+}
+
+const implementedDirs = fs
+  .readdirSync(path.join(repo, 'src', 'main', 'features'), { withFileTypes: true })
+  .filter((d) => d.isDirectory())
+  .filter((d) => fs.existsSync(path.join(repo, 'src/main/features', d.name, 'index.ts')))
+  .map((d) => d.name)
+
+test('registry-order.ts knows exactly the core piece ids the manifest has', () => {
+  const fromManifest = modules.filter((m) => m.id.startsWith('core-')).map((m) => m.id)
+  assert.deepEqual(
+    [...MANIFEST_CORE_IDS].sort(),
+    [...fromManifest].sort(),
+    'MANIFEST_CORE_IDS has drifted from docs/parity/modules.json'
+  )
+})
+
+test('registry-order.ts knows exactly the feature module ids the manifest reserves', () => {
+  const fromManifest = [...featureRowDirs().values()]
+  assert.deepEqual(
+    [...MANIFEST_FEATURE_IDS].sort(),
+    [...fromManifest].sort(),
+    'MANIFEST_FEATURE_IDS has drifted from docs/parity/modules.json'
+  )
+})
+
+test('a module mirroring its manifest row VERBATIM sorts instead of failing to boot', () => {
+  // This is the reported defect, in the two shapes the manifest actually
+  // contains: a core piece, and a module that is reserved but not built.
+  const rows = featureRowDirs()
+  for (const m of modules) {
+    const dir = rows.get(m.id)
+    if (!dir) continue
+    const mirrored = { dir, id: dir, dependsOn: m.dependsOn }
+    assert.doesNotThrow(
+      () => topoSort([mirrored]),
+      `'${dir}' cannot declare its own manifest row: dependsOn ${JSON.stringify(m.dependsOn)}`
+    )
+  }
+  // …and a name in no namespace is still a hard boot error, with the namespace
+  // it reached into named.
+  assert.throws(
+    () => topoSort([{ dir: 'audio-eq', id: 'audio-eq', dependsOn: ['M03'] }]),
+    /is a docs\/parity\/modules\.json ROW id, not a module id/
+  )
+  assert.throws(
+    () => topoSort([{ dir: 'audio-eq', id: 'audio-eq', dependsOn: ['core-af-chian'] }]),
+    /Did you mean 'core-af-chain'\?/
+  )
+})
+
+test("every implemented module's code dependsOn matches its manifest row", () => {
+  const rows = featureRowDirs()
+  let compared = 0
+  /**
+   * AND THIS ASSERTION LIED ON ITS FIRST RUN, in the way this project keeps
+   * finding. It was written while the manifest still spelled feature
+   * dependencies as ROW ids, so it translated `M11 -> audio-tracks` through a
+   * row-id map. Once the manifest moved to module ids the translation matched
+   * NOTHING, every `wantedFeatures` came out empty, and the test went green
+   * while five implemented modules declared none of the four dependencies their
+   * rows record. `wantedCount` below is the guard: a comparison that compares
+   * nothing is a failure, not a pass.
+   */
+  let wantedCount = 0
+
+  for (const m of modules) {
+    const dir = rows.get(m.id)
+    if (!dir || !implementedDirs.includes(dir)) continue
+
+    // Same namespace on both sides now: a feature dependency is a module id.
+    const wantedFeatures = m.dependsOn.filter((d) => !d.startsWith('core-')).sort()
+    wantedCount += wantedFeatures.length
+
+    const declared = codeDependsOn(dir) ?? []
+    const declaredFeatures = declared.filter((d) => !d.startsWith('core-')).sort()
+
+    assert.deepEqual(
+      declaredFeatures,
+      wantedFeatures,
+      `${m.id} (${dir}): modules.json says it depends on ${JSON.stringify(
+        wantedFeatures
+      )}; its index.ts declares ${JSON.stringify(declaredFeatures)}. ` +
+        `These are the same graph — setup order comes from the code half, and the ` +
+        `review reads the manifest half.`
+    )
+
+    // A core entry in code is optional documentation, but it must be spelled
+    // right and it must be one the manifest row actually claims.
+    for (const dep of declared.filter((d) => d.startsWith('core-'))) {
+      assert.ok(
+        MANIFEST_CORE_IDS.includes(dep),
+        `${dir} dependsOn '${dep}', which is not a core piece id`
+      )
+      assert.ok(
+        m.dependsOn.includes(dep),
+        `${dir} dependsOn '${dep}' in code, but ${m.id}'s manifest row does not`
+      )
+    }
+    compared++
+  }
+  assert.ok(compared >= 18, `expected to compare every implemented module, compared ${compared}`)
+  assert.ok(
+    wantedCount >= 5,
+    `the manifest records feature dependencies for the implemented modules; this test ` +
+      `found ${wantedCount}, so it is comparing nothing`
+  )
+})
+
+test('deferredDeps names the reserved-but-unbuilt dependencies and nothing else', () => {
+  const mods = [
+    { dir: 'subs-tracks', id: 'subs-tracks', dependsOn: ['core-mpv-bus', 'subs-formats'] },
+    { dir: 'subs-style', id: 'subs-style', dependsOn: ['subs-tracks'] }
+  ]
+  assert.deepEqual(deferredDeps(mods), [{ id: 'subs-tracks', dep: 'subs-formats' }])
 })

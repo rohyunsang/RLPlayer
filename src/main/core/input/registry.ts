@@ -1,4 +1,5 @@
 import { ContributionError } from '../errors.ts'
+import { validateMenuPlacement } from '../menu-model.ts'
 // Relative, not '@shared/...': this file is unit-tested under `node --test`,
 // which strips types but does not know the bundler's path aliases.
 import { normalizeAccel } from '../../../shared/input/accel.ts'
@@ -47,6 +48,11 @@ export interface Conflict {
 export class CommandRegistry {
   private readonly commands = new Map<CommandId, CommandDescriptor>()
   private readonly owners = new Map<CommandId, string>()
+  /**
+   * `menuPath#menuOrder` -> the command that claimed it. Carried across modules
+   * so two modules cannot claim one menu slot; see core/menu-model.ts.
+   */
+  private readonly menuSlots = new Map<string, string>()
 
   private readonly backing: KeybindBacking
 
@@ -71,6 +77,9 @@ export class CommandRegistry {
       this.owners.set(d.id, ownerId)
       this.commands.set(d.id, d)
     }
+    // menuPath/menuOrder are checked here, not at popup time: a bad placement is
+    // a contribution error and must name the module that made it.
+    validateMenuPlacement(ownerId, descriptors, this.menuSlots)
   }
 
   has(id: CommandId): boolean {

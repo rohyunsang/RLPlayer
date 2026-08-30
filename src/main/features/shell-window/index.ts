@@ -29,6 +29,7 @@ let ctx: FeatureContext
 
 const mod: FeatureModule = {
   id: 'shell-window',
+  dependsOn: ['core-osd', 'core-window', 'video-geometry'],
   ownsProperties: [],
 
   setup(c): void {

@@ -16,6 +16,11 @@
 > src/renderer/src/settings.ts src/renderer/src/styles.css src/renderer/src/core/**
 > ```
 >
+> And one thing you now declare rather than choose alone: every `order:` you
+> contribute belongs in your row's `ownedOrders` in `docs/parity/modules.json`
+> (§10). A duplicate `order` throws out of the contribution host and the app
+> does not start.
+>
 > The API below exists so you do not have to — and it is no longer only a grep
 > that stops you. `core/mpv/bus.ts` **exports no bus**. It exports
 > `createMpvBus()`, which throws on a second call, and `src/main/index.ts` makes
@@ -39,7 +44,8 @@
 > `styles.css`. They render now (§10, §7), and `ctx.transportButton()` joins
 > them so the transport bar's button row stops being a shared file too.
 >
-> Last updated: 2026-08-28 (third repair round)
+> Last updated: 2026-08-28 (fourth repair round -- the first one driven by what
+> four real modules hit, rather than by an audit of core alone)
 
 ---
 
@@ -79,12 +85,17 @@ That is the whole contract. The registry finds the directory with
 the owner map, sets you up in dependency order, and hands you a
 `FeatureContext`. Nothing about your module is written down anywhere else.
 
-**Run `npm run verify` before you push.** It is typecheck + ~240 tests + the
+**Run `npm run verify` before you push.** It is typecheck + ~1150 tests + the
 natural-sort differential (27,225 pairs against the real `StrCmpLogicalW`) + the
 forbidden-pattern check (a comment- and string-aware lexer now, not a line
 scanner — three multi-line escalations walked past the old one) + the
-file-partition check (content-granular for CSS, **HTML and TS**). CI runs all of
-it on every push, plus `check:network` against a freshly PACKAGED build.
+file-partition check (content-granular for CSS, **HTML and TS**) + the
+**ordering-partition check**, which reads every contributed `order:` off the
+TypeScript AST and compares it with `modules.json` in both directions. CI runs
+all of it on every push, plus `check:network`, `e2e:overlay`, **`e2e:wave1`** and
+**`e2e:resume`** against a freshly PACKAGED build — the last two were absent
+from the workflow entirely, so the 24 checks that prove the modules work against
+mpv's own `get_property` ran only when somebody remembered.
 
 Three things need a desktop session and a build, so run them before you tag:
 
@@ -117,7 +128,7 @@ one was completing a download to Google.
 | Field | Meaning |
 |---|---|
 | `id` | kebab-case, equals the directory name. Boot error naming both if not. |
-| `dependsOn?` | Other module ids that must be set up first. A cycle is a boot error **naming the cycle**. |
+| `dependsOn?` | Other module ids that must be set up first. A cycle is a boot error **naming the cycle**. **Copy your `modules.json` row verbatim** -- it is the same namespace now (see below). |
 | `ownsProperties?` | Every mpv property you may **write**. §2 below. |
 | `ownsCommands?` | Every mpv **command** only you may issue. Same syntax, same duplicate check, same runtime guard. §2.1. |
 | `requestsProperties?` | Properties you reach through `ctx.mpv.requestSet()`. Declared so the dependency is visible in review, and it now also decides which fix-hint an OwnershipError gives you. |
@@ -129,6 +140,24 @@ one was completing a download to Google.
 `ownsCommands` is not optional in spirit any more: if your module issues an mpv
 command that mutates state, it has to be listed, and §2.2's side-effect table
 plus `npm run test:command-ownership` will tell you if it is not.
+
+**`dependsOn` is ONE namespace, and your manifest row is the answer.** It used to
+be two: `modules.json` rows said `"dependsOn": ["core-af-chain"]` and
+`["core-mpv-bus", "M18"]`, code `dependsOn` took feature-module directory ids and
+nothing else, and nothing compared the two files -- so mirroring the row written
+*for you* was a boot failure on the first line of your own module. Copy the row.
+Four cases:
+
+| What you name | What happens |
+|---|---|
+| a loaded module id (`audio-tracks`) | a real edge; you are set up after it |
+| a core piece id (`core-af-chain`) | satisfied by construction -- core is fully up before the first feature `setup()`. The entry is documentation, and it is spell-checked |
+| a module the manifest reserves but this build has not implemented (`subs-formats`) | **deferred, not an error.** Logged once at boot. Your `setup()` has to cope with the helper being absent -- that is what §3.6 means when it says N51 falls back to "this folder" if `playlist.seriesPrefix` is not there |
+| anything else | a boot error naming the namespace you reached into: a row id (`M07`) is told to look up that row's `path`; anything else gets the nearest real id within two edits |
+
+The manifest's sixteen feature dependencies are spelled with module ids now, and
+`npm test` compares the two graphs for every implemented module in both
+directions.
 
 **Isolation, and its deliberate asymmetry.** A *collision* — duplicate property,
 duplicate command id, duplicate IPC channel, a namespace violation, a spawn-arg
@@ -537,7 +566,10 @@ Declare `usesVideoFilters` / `usesAudioFilters` and `ownsFilterLabels`, then:
 ctx.vf.set('rl-sharpen', 'lavfi=[cas=strength=0.4]')   // spec WITHOUT the label
 ctx.vf.toggle('rl-sharpen', false)                      // disables IN PLACE
 ctx.vf.remove('rl-sharpen')
-const { path } = await ctx.vf.command('rl-sharpen', 'strength', '0.55', 'cas')
+// The sixth argument is REQUIRED: the spec the filter now has, label excluded.
+const { path } = await ctx.vf.command(
+  'rl-sharpen', 'strength', '0.55', 'cas', 'lavfi=[cas=strength=0.55]'
+)
 ```
 
 - **You never issue a raw `vf`/`af` command.** The ownership map refuses it for
@@ -555,6 +587,29 @@ const { path } = await ctx.vf.command('rl-sharpen', 'strength', '0.55', 'cas')
   `['vf-command', label, option, value, lavfiFilterName]` — the last argument is
   the libavfilter **filter name**, not the label and not `'all'`. The
   three-argument form fails on both sides.
+- **...and `command()` takes the post-change spec as a REQUIRED sixth argument,**
+  because the chain has to go on believing what mpv believes. This is the defect
+  that cost M03 a 201-line `chain-sync.ts` (plus 247 lines of test) which M01,
+  M09, M13 and M14 would each have copied. Measured against the chain, before:
+
+  ```
+  command('rl-sharpen','strength','0.55','cas')
+      -> serialise() still returned @rl-sharpen:lavfi=[cas=strength=0.4],
+         so the next foreign set() pushed 0.4 back to mpv and REVERTED the
+         value the user had just dragged to
+  command(...,'luma_amount','1.2','unsharp')       (V08, M03's own row)
+      -> unsharp refuses vf-command, so the rebuild path ran and re-serialised
+         the spec the slot ALREADY held: mpv received unsharp=5:5:1.0
+  af.command('rleq','change','0|f=500|w=100|g=9','anequalizer')
+      -> the chain still held g=0
+  ```
+
+  An optional `spec?` was tried first and had **zero production adopters**, which
+  is why it is required: the compiler now refuses a call that cannot keep the slot
+  honest, and no spelling of `command()` is left that silently desynchronises the
+  chain. The chain also checks that the spec you pass really does mention the
+  option and value you say you set. Every chain test asserts the resulting chain
+  STATE and the exact string mpv holds, not merely that a command was emitted.
 - **The refuser table lives in the chain, not in your module.** `unsharp`
   refuses `vf-command`; `superequalizer`, `pan` and `loudnorm` refuse
   `af-command`. `command()` transparently rebuilds for those and reports
@@ -620,6 +675,40 @@ the namespace using **mpv's own names**: `MBTN_LEFT`, `MBTN_RIGHT_DBL`,
 argument, so `seek +5` and `seek +60` are two commands (`nav-seek.forward5`,
 `nav-seek.forward60`). That is what lets the mpv preset put `ArrowUp` on ±60s
 while Default puts it on volume.
+
+**`menuPath` + `menuOrder` put the command in the context menu** -- and until this
+round nothing read either field. Three modules declared a menu location; two of
+them (M12's equaliser toggle, M10's mute) were simply absent from the menu while
+their source said otherwise. The rules, every one a boot error naming your
+command:
+
+```ts
+menuPath: 'audio',      // EXACTLY one of the eight fixed roots
+menuOrder: 30           // REQUIRED with a menuPath, and unique within that root
+```
+
+- The roots are `playback video audio subtitles navigate capture window tools`.
+  Fixed, for the reason §7 fixes the eight settings sections. **`menuPath` does
+  not nest:** a submenu needs a title, the title needs an i18n key, and you may
+  only register keys under your own id -- so `'audio/devices'` could only ever
+  render as the raw key `core.menu.audio.devices`. Use `ctx.menu.contribute()`
+  for a submenu; it carries its own `labelKey`.
+- `menuOrder` is **required** with a `menuPath`, and a duplicate `(path, order)`
+  is rejected naming both commands. Without it, item order falls to module
+  discovery order -- alphabetical directory order, which nobody chose and nothing
+  documents. Same rule as every other cross-module ordering namespace — seek-bar
+  layers, panels, stats sections, settings sections, transport buttons and menu
+  sections all reject a tie, scoped where a scope exists. The two deliberate
+  exceptions are `contributeArgs` priority, which is a BAND that eight modules
+  share by design (ties broken deterministically by owner id), and
+  `settings.define`, which already sorted by `(order, id)`.
+- `menuOrder` without `menuPath`, and `menuPath` on an `internal: true` mediator,
+  are contribution errors rather than silent no-ops.
+- The label is your command's `labelKey` and the accelerator is your command's own
+  binding, so there is nothing to keep in sync -- that is what P13 means by
+  "keymap and menu a single source of truth". The two mechanisms share ONE
+  ordering space, so an `audio` command lands beside the audio section rather
+  than in a lump at the end.
 
 **`internal: true`** hides a command from the keybind editor and the cheat sheet.
 Use it for mediators and for the arg-driven entry points the legacy bridge and
@@ -772,6 +861,79 @@ size and chrome are saved and restored as one unit.
 
 ---
 
+## 8.5 `ctx.shell` and `ctx.image` — Explorer, the clipboard, OS folders
+
+```ts
+ctx.shell.showItemInFolder(file)        // C20, C23, L34 — Explorer, file selected
+await ctx.shell.openPath(dir)           // resolves to '' on success, else the OS error
+await ctx.shell.trashItem(file)         // C24 — the RECYCLE BIN, never fs.unlink
+await ctx.shell.copyText(text)          // S39, L25, L26, L34
+await ctx.shell.copyImagePng(bytes)     // C03
+ctx.shell.appPath('pictures'|'videos'|'music'|'downloads'|'documents'|'desktop'|'home'|'temp'|'exe')
+
+const img = ctx.image.read(fileOrBytes) // null when the bytes are not an image
+img.width; img.height
+img.resize(640).toPng()                 // C07
+img.toJpeg(quality)
+ctx.image.encodableFormats              // ['png','jpg','jpeg'] — exactly two encoders
+```
+
+**A feature module may not `import 'electron'`, and `check:forbidden` now
+enforces it.** Three of the thirteen landed modules did, all three for this
+surface, and the cost is not stylistic: that one line makes `index.ts`
+unloadable by `node --test`, so M22 and M23 each split a `manifest.ts` out of
+`index.ts` purely to give a test something it could import, and any suite that
+wants to assert on the real module object had to give up. `ctx.shell`,
+`ctx.image`, `ctx.dialog` and `ctx.window` are the whole surface; there is
+nothing left to reach Electron for.
+
+That rule took three attempts, and the two rejected ones are worth knowing
+because they are this repository's two recurring failure shapes in one page:
+
+* `/(?:from|import|require)\s*\(?\s*['"]electron['"]/` over the `code` view
+  **false-positived** on two test files that assert this very rule with a regex
+  literal — `lex.mjs` keeps regex literals in `code` and `bare` on purpose,
+  because blanking them would hide a rule that greps for one;
+* the anchored `^\s*import…from 'electron'` **missed**
+  `import {\n  app,\n  shell\n} from 'electron'`. A line is not a unit of
+  syntax.
+
+What ships is the intersection of two views: it must look like a quoted
+specifier in `code` **and** still be there in `strings`, which is the one view
+where a regex literal's quotes were never string quotes.
+
+**`appPath` is a closed enum on purpose.** `app.getPath` also answers
+`'userData'`, `'sessionData'`, `'logs'` and `'crashDumps'`; a module reaching
+those would be routing around `ctx.paths`, which owns portable mode and the
+profile redirection (P36-P39). Ask for an OS folder here, ask for anything of
+ours from `ctx.paths`.
+
+**`copyText` is async and so is `copyImagePng`.** Electron 44's
+`clipboard.writeText` returns a Promise; every §2 row that names it (S39, L25,
+L26, L34) reads as synchronous. `await` it, or a clipboard failure becomes an
+unhandled rejection behind a toast that says "copied".
+
+**There is no `clipboard.writeImage` in Electron 44, whatever §2.4 C03 used to
+say.** Measured against the running binary, not its typings:
+
+```
+Object.getOwnPropertyNames(Object.getPrototypeOf(clipboard))
+  -> clear, has, read, readText, write, writeText   (+ selection)
+typeof clipboard.writeImage -> 'undefined'      typeof clipboard.readImage -> 'undefined'
+```
+
+Following that row literally is a runtime `writeImage is not a function` on the
+first Ctrl+C, past typecheck and past any test that mocks Electron. M22 hit it
+and worked around it; the row is corrected, `copyImagePng` is the supported
+path, and `core/shell.test.ts` fails if the row grows the old prescription back.
+
+**`ctx.image.encodableFormats` exists because C07 has to refuse.** There are two
+encoders. A `.webp` capture that would have to be re-encoded to honour a maximum
+width is left at full size and says so, rather than being written as a PNG under
+a `.webp` name.
+
+---
+
 ## 9. `ctx.perFile` — per-file state
 
 ```ts
@@ -798,9 +960,43 @@ ctx.perFile.slice({
   finished, so a stale position is never offered back; `history.json` **keeps**
   it with `finished: true` so the history panel can show a checkmark.
 
+- **A slice whose module did not load this boot is PRESERVED, not erased.** A
+  module whose `setup()` throws is disabled while the app still runs (§1), so it
+  registers no slice — and `captureSlices()` used to rebuild the bucket from the
+  registered slices alone, which meant every file played while your module was
+  broken silently *deleted* its saved state for that file. When no registered
+  slice had a diff, the whole entry went, taking other modules' data with it.
+  Same principle as P10 one level up.
+- **The slice store is capped at 1000 files**, evicted oldest-first, the way
+  `resume.json` is capped at 500 and `history.json` at 2000. It was uncapped and
+  never evicted: every file ever opened kept a bucket for ever, holding the
+  payload of every module that ever registered a slice.
+
 Also on the service: `currentKey()`, `currentPath()`, `forget(file)`,
 `resumeFor(file)`, `recordPosition(file, pos, dur)`, `captureNow()`, and
 `lookupMany(paths)` for the playlist's watched badges.
+
+**Reading a file that is not the one playing** -- which you could not do at all
+before. `resumeKey()` is a one-way hash of path+size, so a module could not even
+ask about a path it *had*. That is what made N11's all-files bookmark mode and
+N16's playlist badges inexpressible, and left a module no option but to
+re-implement `per-file.json` beside it:
+
+```ts
+ctx.perFile.sliceFor(file, 'nav-bookmarks')   // that file's slice, or null
+ctx.perFile.slicesFor(file)                    // all of its slices, or null
+ctx.perFile.storedFiles()                      // [{key, path, updatedAt, sliceKeys}],
+                                               //   newest first -- the enumeration
+```
+
+`slicesFor` returns `null` rather than `{}` when nothing is stored, so "nothing
+stored" stays distinguishable from "stored empty".
+
+**`persistNow()` -- capture AND fsync.** `captureNow()` only reaches the store,
+whose write is debounced 300 ms and whose flush otherwise waits for quit, so a
+module that captured a bookmark and then lost the process lost the bookmark. Use
+`persistNow()` for anything that must survive a crash rather than a clean quit,
+and `captureNow()` when you are merely about to switch files.
 
 ---
 
@@ -841,6 +1037,27 @@ registers everything is still correct — branch on it to skip expensive work.
 
 **Import your own CSS.** Vite bundles it. `styles.css` is core's and is on the
 forbidden list; a panel's look is the panel's business.
+
+**Your two halves DO have a file they both compile: `src/shared/features/<your
+id>/`.** Declare every payload that crosses your own IPC there, once.
+
+```
+src/shared/features/nav-thumbnails/wire.ts     owned by YOUR row in modules.json
+```
+
+`tsconfig.web.json` excludes `src/main` and `tsconfig.node.json` excludes
+`src/renderer`, so a type declared in one half and used in the other has to be
+written twice — and nothing compares the two, so adding a field on one side is a
+silent `undefined` on the wire rather than a type error. Measured across the four
+pilots, **five** wire types were hand-duplicated (`ThumbStatus`; `Bookmark` and
+`BookmarkPanelState`; `EqState` and `PresetWire`), and core had made the same
+mistake with `SettingRow`. `src/shared/**` is in both tsconfigs, the directory is
+listed in your row's `ownedFiles`, and it is yours rather than core's.
+
+It may export **values**, not only types — M12's verified band table lives there.
+That took a fix of its own: `npm test` could not resolve `@shared/…` or an
+extensionless relative import, so a value import from a wire file gave a green
+typecheck, a green build and a test file that would not load (§13).
 
 > **A trap that cost us a live bug, and it is about YOUR code, not core's.**
 > `ctx.state.subscribe(cb)` **replays the last state synchronously**, so `cb`
@@ -892,6 +1109,58 @@ ctx.transportButton({
 })
 ```
 
+**EVERY `order:` ON THIS PAGE IS A PARTITION KEY IN `docs/parity/modules.json`,
+and a duplicate is a boot failure.** `claimSlot()` and
+`MenuRegistry.contribute()` throw a `ContributionError`, the registry re-throws
+it rather than isolating it, and the app does not start. It collided twice in a
+single nine-module round — seek-bar layers at 10, menu sections at 45 — so
+ordering is partitioned exactly like `ownedProperties`:
+
+```json
+"ownedOrders": {
+  "panel":            [{ "id": "playlist", "order": 10 }],
+  "transportButton":  [{ "id": "playlist.toggle", "order": 20 }],
+  "menuSection":      [{ "id": "playlist.menuOpen", "order": 10, "tiesRoot": "playback" }],
+  "seekbarLayer":     [],
+  "statsSection":     [],
+  "settingsSection":  [{ "id": "video-color.help", "order": 8, "scope": "video" }],
+  "spawnArgPriority": [{ "order": 10 }]
+}
+```
+
+Seven namespaces. Six are **slots** — a tie throws. `spawnArgPriority` is a
+**band**: eight modules share 10 by design and the bus breaks ties by owner id,
+so what the partition buys there is that a module cannot move between bands
+unnoticed, which decides whose `--sub-codepage` wins. `scope` narrows the
+namespace exactly where the runtime does: a settings page, a menu parent.
+(`ctx.settings.define()`'s `order?` is the eighth candidate and is deliberately
+out: `SettingsRegistry` already sorts by `(order, id)`, so a tie is
+deterministic and nothing throws.)
+
+**`npm run check:ordering` cross-checks the manifest against the code in both
+directions**, so an undeclared contribution and a declared order nobody
+contributes both fail — and a collision is named from the manifest ALONE,
+without running anything:
+
+```
+ORDERING COLLISION — transportButton order 50:
+  'nav-chapters.skipPrompt' (M25) and 'stream-open.toggle' (M35).
+```
+
+Write your claim into your row. The failure message contains the JSON to paste.
+
+**Why this is not "a better regex".** The check that was supposed to catch this
+paired `id:` to `order:` with a 400-character window, and three shipped
+contributions fell outside it: `nav-chapters.skipPrompt` (60) and
+`nav-chapters.skipBands` (15), separated from their own `id:` by the eleven-line
+comment M25 wrote to document the *previous* collision, and `capture-still.menu`,
+whose order is the named constant `MENU_ORDER`. Restoring the duplicate gave
+`npm test` **1143 pass / 0 fail** while the runtime threw `duplicate transport
+button order 50`. The code side is read with the TypeScript AST now
+(`scripts/lib/ordering.mjs`), where a comment cannot separate two properties of
+one object literal, key order is irrelevant, and a named numeric constant
+resolves — including one imported from a sibling file.
+
 `transportButton` is new, and it exists for the same reason as `panel()`.
 `src/renderer/index.html` hard-coded `#subBtn` (M17's) and `#playlistBtn`
 (M28's), with their click handlers and their pressed-state rendering in
@@ -922,6 +1191,23 @@ for channels a module actually registered under its own id.
 The renderer context also gives you `panel()`, `statsSection()`,
 `settingsSection()`, `settingsComponent()`, `transportButton()`, `t()` and
 `osd.show()`. Every one of them has a host that renders it; see below.
+
+**`src/shared/features/<your id>/` is in EVERY module row now.** §10 has always
+said your two halves share a file they both compile and that the directory is
+"listed in your row's `ownedFiles`" — and it was listed for 3 of 40 rows, the
+three pilots that needed it. Seven modules hit the wall independently: creating
+the directory anyway is a file no row owns, which `check:partition` fails, and
+adding it to your row is a manifest edit a module may not make. So M23 wrote
+`JobWire` twice and M29 shipped a byte-for-byte duplicate `wire.ts` with a
+`wire-parity.test.ts` standing in for the compiler — and the two `JobWire`
+copies had *already* drifted: `kind` was `JobKind` on the main side and `string`
+on the renderer side, so the renderer compiled against a value main can never
+send.
+
+All 40 rows carry it, reserved whether or not the directory exists yet (the
+manifest treats an absent `/features/` path as a reservation, exactly like an
+unimplemented module directory). Declare every payload that crosses your own IPC
+there, once, and let the compiler be the parity test.
 
 ### Your layer's CSS lives in YOUR directory
 
@@ -1168,7 +1454,7 @@ switched off, which is the difference between "gone" and "blackholed".
 
 ```ts
 ctx.paths.dataDir() / cacheDir() / subCacheDir() / thumbCacheDir() /
-          sceneCacheDir() / logsDir() / tempJobDir(jobId)
+          sceneCacheDir() / artCacheDir() / logsDir() / tempJobDir(jobId)
 ctx.paths.isPortable() / ctx.paths.portableFallback / ctx.paths.mpvBinary()
 ctx.lifecycle.onReady(cb) / onQuit(cb) / trackProcess(child)
 ```
@@ -1280,9 +1566,30 @@ wrong on real disks:
   its two directories, so anything inside them is already covered.
 - Node runs TypeScript by **stripping** it. That means: no `enum`, no
   `namespace`, no **parameter properties** (`constructor(private x: T)`) — declare
-  the field and assign it. Type-only imports must be written `import type`, and
-  runtime imports inside tested files must be **relative with a `.ts`
-  extension**, because Node knows nothing about the `@shared` alias.
+  the field and assign it. Type-only imports must be written `import type`.
+- **`@shared/…` and extensionless relative imports resolve under `npm test` now,
+  and until this round they did not — which made a third of `src/main` untestable
+  by construction.** Both shapes are legal under `moduleResolution: bundler` and
+  are what electron-vite builds from; Node's own ESM resolver rejects both. So
+  `npm test` was green with 395 tests while this was true:
+
+  ```
+  $ node --test src/main/core/input/zz-probe.test.ts   # body: import('./index.ts')
+  Error [ERR_MODULE_NOT_FOUND]: Cannot find module '…\src\main\mpv\manager'
+      imported from '…\src\main\core\paths.ts'
+  ```
+
+  Every test that existed happened to sit on a file whose whole import graph
+  spells relative imports with an explicit `.ts`. `core/menu.ts`,
+  `core/input/index.ts`, `core/registry.ts` and `src/main/ipc.ts` could not be
+  loaded by any test at all, which is a large part of why this round found two
+  untested defects in the last two of those. `scripts/lib/ts-resolve.mjs` is a
+  resolve hook installed by every `node --test` script; it does what the bundler
+  does and nothing more, and it never invents a module — an unresolvable
+  specifier is handed back to Node so a typo still fails as a typo. Its own test
+  runs the same fixture with and without the hook and requires the first to fail.
+  Relative `.ts` extensions are still the house style; the hook is what makes a
+  wire file able to export a value.
 - Keep the logic you want to test free of Electron imports. Every core piece
   that has a test does this, which is why the suites exercise the real
   implementation rather than a copy of it.
@@ -1392,6 +1699,36 @@ Two smaller notes:
 
 ---
 
+### What the FOURTH round changed — and this one was driven by four real modules
+
+The first four feature modules landed. **The API held for the module authors:**
+27 files, all additions, every one inside their own `ownedFiles`, zero shared-file
+edits. Then the integrator needed 8 shared-file edits across 6 core rows to work
+around 5 API defects, and an audit found two of those "fixes" were not fixes.
+Everything below is a defect the pilots exposed, fixed ONCE in core so the
+remaining 34 modules meet a fixed API instead of each writing the workaround.
+
+| # | Was | Is |
+|---|---|---|
+| 52 | `FilterChainService.command()` took an **optional** `spec?` with **zero production adopters**, so in the shipped app the chain's model diverged from mpv on every live filter update: `command('rl-sharpen','strength','0.55','cas')` left `serialise()` returning `strength=0.4`, and the next foreign `set()` reverted the user's value. On the rebuild path (V08's `unsharp`, M03's own row) mpv received `unsharp=5:5:1.0` — the documented "transparently rebuilds" was a literal no-op | `spec` is **required**; the slot is updated before either path runs; the chain asserts the spec really mentions the option and value claimed. All four production call sites pass it. **`chain-sync.ts` (201 lines + 247 of test) is deleted** — M01/M09/M13/M14 would each have copied it. Every chain test asserts chain STATE and the string mpv holds |
+| 53 | `mustNotTouch` was enforced **nowhere**: the only hit in the tree checked that the listed paths were not stale. Appending three lines to `src/renderer/src/main.ts` — named in 40 of the 55 rows' `mustNotTouch` — gave `check:partition` exit 0 and `check:forbidden` exit 0, which is correct behaviour for both: they ask who OWNS a file, never who changed it | `scripts/check-ownership.mjs` attributes every changed file to a row. RULE A (cross-attribution) needs nothing declared; RULE B uses an actor from `--as`, `$RL_MODULE`, a `Module:` commit trailer or the branch name. In `npm run verify` and in CI twice. On that exact 3-line edit: partition 0, forbidden 0, **ownership 1**, naming the `mustNotTouch` entry and the contribution point that exists instead |
+| 54 | `seekbar-host.ts` passed `handle = ''` to every layer that did **not** claim the hit, and M25 did `chapters[Number(e.handle)]`. `Number('') === 0`, so the chapter caption rendered at every position, always as chapter 0: **24/24** sampled positions printed "Intro", and 22 of them contradicted M27's caption inside the same `#seekHover` box. `e2e-overlay.mjs` failed only if `tipFragments < 2`, and the buggy fragment was present at every x — so the assertion passed **vacuously** | the event is a discriminated union: `claimed: false` carries `handle?: undefined`, so "no handle" is unrepresentable as a valid index. Consumer and M27's de-duplication fixed. The e2e assertion is **positional**: it samples 24 x-positions and checks that M25 prints only where its own `hitTest` claimed, that one box never carries two chapter captions, that the caption names the right chapter, and that it **changes** across the bar |
+| 55 | duplicate layer `order` was unguarded and had already collided at n=4: `nav-chapters` and `nav-thumbnails` both registered at `order: 10`, and paint order, hit order and `z-index` all fell to registration order. Duplicate `id` was rejected; duplicate `order` was not | rejected at registration in **all three** cross-module ordering namespaces — seek-bar layers, menu sections (also already colliding, at 45), and now command `menuOrder` within a menu root. The two modules have distinct orders |
+| 56 | `profile-cleanup.ts`'s `norm()` filtered `'.'` and not `'..'`, so `appOwnedConflict('session/..')` returned null and `path.join(root,'session','..') === root` → `fs.rmSync(root, {recursive:true, force:true})`. The test titled "no recursive delete of the root" grepped for `/rmSync\(\s*dataRoot/`, a spelling this file has never contained | two independent guards, one of them one line from the `rmSync`, and behavioural tests: eight spellings of the escape refused, ten real targets still accepted, the profile still standing after an end-to-end run |
+| 57 | the invariant "the cleanup marker must never name the leaked host" had **no test**: adding `host:"redirector.gvt1.com"` to `cleanup.json` passed all 12 cleanup tests and all 395 | the test greps the **whole** post-cleanup profile — the user's own grep does not know which file it is reading — for the host, its path, the file, the `mip=` address and any hostname-shaped string, and then asserts the marker still says enough to be understood, so "contains no host" cannot be satisfied by an empty file |
+| 58 | `artCacheDir()` existed and §12 promised it to modules, and it was in neither `PathService` nor the `pathService` object, so `ctx.paths.artCacheDir()` was `undefined` | exposed, and `paths.test.ts` compares the **three** lists that have to agree — what §12 promises, what the interface declares, what the object carries — in both directions, each with a minimum-count guard so a rotted regex fails instead of reporting clean |
+| 59 | `audio-eq/index.ts` byte 1527 was a raw **NUL** (`const CUSTOM = '\0custom'`). With no `.gitattributes`, git classified a 326-line TypeScript file as binary: `git diff` said `Bin 0 -> 11349 bytes` and `git grep` answered "binary file matches" with no line numbers. **326 lines landed unreviewable** | sentinel replaced, `.gitattributes` with the **boolean** `diff` attribute (measured: `diff=typescript` does *not* work — git still autodetects binary), and `npm run check:control-chars` fails on any control character in tracked source |
+| 60 | `visibleWhen` landed in two shared files with **zero tests** against a 395-test suite; the only evidence was one hand-driven "35 rows → 24" | evaluated in main, shipped as a boolean per row, re-fetched only when the visibility vector moves — and tested, including a predicate that throws and the live-value case |
+| 67 | nothing end-to-end proved a `menuPath` reaches a real menu, so row 61's fix had only unit tests behind it. The first marker written for it printed the ids `commandMenuGroups()` produced — **the model** — so when the rendering half was reverted to check the harness would notice, it still listed all three commands and `e2e-overlay` reported **clean**; the only trace was an item count dropping 58 to 53, which nothing asserted on | the marker prints the RENDERED template's labels and, separately, the label each `menuPath` command would render as; the harness checks containment. Demonstrated: with the rendering reverted it fails naming all three commands and their labels. Reading the model to prove the render is the same vacuous shape as a tooltip check satisfied by its own bug |
+| 61 | `CommandDescriptor.menuPath`/`menuOrder` had **no consumers**. Three modules declared a menu location; two were absent from the menu while their source said otherwise | the menu reads them (§6). Eight fixed roots, no nesting (a submenu's title would need a `core.*` i18n key a module may not register), `menuOrder` required and slot-unique. `core/menu-model.ts` is the pure half, so it is testable at all — `menu.ts` imports electron, which is why none of this had a test |
+| 62 | `modules.json.dependsOn` and code `dependsOn` were **different namespaces**: 16 rows spelled feature dependencies as row ids (`M07`) that no code can resolve, and mirroring your own row was a boot failure. No test compared them | one namespace, module ids on both sides, four documented outcomes (§1), and a cross-check in both directions. **That cross-check lied on its first run** — written against the old row-id spelling, its translation matched nothing and every expected list came out empty — so it now counts what it compared and fails at zero |
+| 66 | `e2e-overlay.mjs`'s `quit` line was not measuring the app's quit. It did `await s.send('Runtime.evaluate', 'window.close()')` — a CDP call whose reply can never arrive, because the call destroys the page — and `Session.send` rejects on a **10 000 ms** timeout. So consecutive runs of an app that quits in 75 ms printed `quit: 10012 ms` and `quit: 531 ms`, depending on whether the reply won the race, and those ten seconds were spent BEFORE the ten-second grace period, so a genuinely hung app had twenty seconds and reported a plausible number. Nothing asserted on it either way | the call is not awaited; wall time comes from the process object at 50 ms granularity and is **cross-checked against the app's own `[quit] clean exit in N ms`** marker, which only the shutdown path that ran the hooks prints. A missing marker fails, and so does an app-side shutdown over a 3 s budget (its internal watchdog is 6 s, and it prints no marker at all if that fires). `check-network.mjs` had been doing it right all along, which is how the app's real 67–144 ms was known |
+| 65 | `captureSlices()` rebuilt each file's bucket from the slices registered on **this** boot, so a stored slice whose module was not registered was **discarded** — and when no registered slice had a diff, `delete all[key]` threw the whole entry away, other modules' data included. A module whose `setup()` throws is documented as disabled-while-the-app-runs, and registers no slice: one bad release silently deleted the user's per-file state for every file they played. Found by migrating a real profile and noticing a slice key gone after one play | the bucket starts from what is stored, minus the keys this boot's modules own; whatever is left is kept verbatim, and the entry is deleted only when nothing at all remains. Three boots in one test: healthy, module broken, module fixed — the value comes back |
+| 63 | `PerFileService` could read and enumerate **nothing but the current file**, which makes N11's all-files mode and N16 inexpressible; the slice store was **uncapped and never evicted** while resume is capped at 500 and history at 2000; and there was no "persist my slice now" for data that must survive a crash | `slicesFor` / `sliceFor` / `storedFiles`, a 1000-entry cap evicted oldest-first, and `persistNow()` (§9). The first eviction was **exactly backwards** — `Date.now()` ties inside a millisecond and `bound()`'s stable sort then keeps the OLDEST; measured, the five entries dropped from 1005 were the five newest. All three stores are monotonically stamped |
+| 64 | **`npm test` could not load a third of `src/main`.** `@shared/…` and extensionless relative imports are legal under `moduleResolution: bundler` and rejected by Node's resolver, so `core/menu.ts`, `core/input/index.ts`, `core/registry.ts` and `src/main/ipc.ts` were untestable by construction — and a module wire file could carry types but never a value | a resolve hook in every `node --test` script (§13), with the alias asserted against both tsconfigs and all three vite targets, and a test that runs one fixture with and without the hook and requires the first to fail. **Its harness lied first too:** the child inherited `NODE_TEST_CONTEXT`, ran zero tests, printed nothing and exited 0, so "must fail without the hook" was satisfied by a process that did nothing |
+
+---
+
 ## 15. Checklist before you open a PR
 
 - [ ] Directory name equals `id`.
@@ -1409,11 +1746,23 @@ Two smaller notes:
 - [ ] Keybind defaults use **physical** codes for all three presets.
 - [ ] Every state-changing command fires an OSD message.
 - [ ] Per-file state goes through a slice, never through your own JSON file.
+- [ ] Every `order:` you contribute is in your row's `ownedOrders`, in the right
+      namespace, with the right `scope`. `npm run check:ordering` proves it in
+      both directions and names a collision from the manifest alone. A duplicate
+      `order` is a BOOT FAILURE, not a layout wobble, and it happened twice in
+      one round.
+- [ ] Payloads that cross your own IPC are declared once, in
+      `src/shared/features/<your id>/`. Every row owns that directory now; a
+      hand-duplicated wire type with a parity test is not the arrangement.
+- [ ] No import of `electron` — by `from`, by `require()`, by `await import()`,
+      or across line breaks. `ctx.shell` (§8.5), `ctx.image` (§8.5),
+      `ctx.dialog` and `ctx.window` are the whole surface, and the import is
+      what makes your `index.ts` unloadable by `node --test`.
 - [ ] No import of `windows.ts`, `ipc.ts`, `preload/index.ts`, `core/mpv/*`,
-      the renderer core, another feature module, or Electron's `dialog` — by
-      `from`, by `require()`, by `await import()`, or by a computed specifier.
-      `npm run check:forbidden` proves all four now; it only proved the first
-      one before, and that is how a one-line ownership bypass shipped.
+      the renderer core, or another feature module — by `from`, by `require()`,
+      by `await import()`, or by a computed specifier. `npm run check:forbidden`
+      proves all four now; it only proved the first one before, and that is how
+      a one-line ownership bypass shipped.
 - [ ] No network API at all: no `fetch` (aliased or not), no `node:dns` /
       `https` / `tls` / `dgram` / `http2`, no `resolveHost`. If your module is
       the one that genuinely needs a host, add its `ALLOWLIST` row in

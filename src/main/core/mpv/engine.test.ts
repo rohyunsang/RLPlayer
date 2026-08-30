@@ -3,6 +3,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { assertCommandShape, isBannedCommand } from './ownership.ts'
+// The repo's comment/string-aware lexer, so source rules run on code and not on prose.
+import { lex } from '../../../../scripts/lib/lex.mjs'
 
 /**
  * test:secondary-engine — the shared "spawn a second mpv" service (§5.3).
@@ -125,6 +128,39 @@ test('no feature module reaches the binary or the IPC client directly', () => {
     'CORE_PATHS no longer covers mpv/client'
   )
 
+  // THE RULE RUNS ON CODE, NOT ON PROSE — and this is a check that lied.
+  //
+  // It was `/resolveMpvPath|mpv\/manager|mpv\/client/.test(text)` against the
+  // RAW file. Three Wave-1 modules red-lighted on it and all three hits were
+  // comments citing evidence by file:line, which is the documentation discipline
+  // this repo asks for everywhere else:
+  //
+  //   capture-encode/encode-args.ts:79   ` * (\`src/main/mpv/client.ts:36\`), so every job …`
+  //   capture-still/manifest.ts:12       ` *   src/main/mpv/manager.ts:5  import { app } …`
+  //   subs-style/legacy.ts:15,21         ` *   src/main/mpv/manager.ts:5`
+  //
+  // Zero were imports. This is the same sign-flipped defect `check-partition.mjs`
+  // already fixed once ("a `// plantedC` in a comment is not a use") and that
+  // M29 hit again in its own `/(word-boundary)dialog(word-boundary)/` rule. The fix is the one the repo
+  // already owns: `scripts/lib/lex.mjs` blanks comments and keeps string
+  // CONTENTS, and an import specifier is a string — so the rule keeps every bit
+  // of its reach over real code and loses only its reach over English.
+  const reach = /resolveMpvPath|mpv\/manager|mpv\/client/
+
+  // NEGATIVE CONTROL, permanent. A detector is worth nothing unless it is shown
+  // firing. If `lex()` ever starts blanking string contents too, the rule above
+  // would match nothing, the walk would report clean, and this test would become
+  // the fifth check in this repo to pass by being blind. These two assertions
+  // fail the moment that happens.
+  assert.ok(
+    reach.test(lex("import { resolveMpvPath } from '../../mpv/manager'").code),
+    'the detector no longer fires on a real direct import — it would report clean on anything'
+  )
+  assert.ok(
+    !reach.test(lex('/* see src/main/mpv/manager.ts:5 for why */').code),
+    'the detector still fires on prose, which is what made it red-light three clean modules'
+  )
+
   const offenders: string[] = []
   const walk = (dir: string): void => {
     if (!fs.existsSync(dir)) return
@@ -133,7 +169,7 @@ test('no feature module reaches the binary or the IPC client directly', () => {
       if (e.isDirectory()) walk(full)
       else if (/\.ts$/.test(e.name)) {
         const text = fs.readFileSync(full, 'utf8')
-        if (/resolveMpvPath|mpv\/manager|mpv\/client/.test(text)) {
+        if (reach.test(lex(text).code)) {
           offenders.push(path.relative(repo, full).split(path.sep).join('/'))
         }
       }
@@ -151,4 +187,50 @@ test('an engine can be given an idle timeout, which §6.3 requires of M27', () =
   assert.match(engine, /idleTimeoutMs/)
   assert.match(engine, /entry\.idleTimer = setTimeout/)
   assert.match(engine, /idleTimer\.unref\?\.\(\)/, 'an idle timer must not hold the loop open')
+})
+
+/**
+ * A secondary skips OWNERSHIP, not the shape check and not the bans.
+ *
+ * `ctx.mpv.command()` runs `assertCommandShape()` and refuses the two banned
+ * commands before any other guard reads the array (bus.ts). `SecondaryEngine.
+ * command()` ran neither, so on a private engine a boxed primitive walked past
+ * every guard the same way it used to on the primary, and a bare
+ * `['screenshot-raw']` -- which KILLS mpv over JSON IPC -- reached the pipe.
+ * M27 found it as the first module to use `ctx.engine.spawn()` at all.
+ *
+ * This is a WIRING assertion, not a live one: `engine.ts` reaches `electron`
+ * through `resolveMpvPath`, so it cannot be imported under `node --test` and
+ * every test in this file is source-level for that reason. What the two
+ * payloads actually do to the guards is asserted for real in ownership.test.ts;
+ * this asserts that the secondary's command path is on the same side of them.
+ */
+test('a secondary engine command is shape-checked and ban-checked, like the primary', () => {
+  const src = read('src/main/core/mpv/engine.ts')
+  const body = src.slice(src.indexOf('async command<T>'), src.indexOf('async getProperty<T>'))
+  assert.ok(body.length > 0, 'could not find the SecondaryEngine.command body')
+  assert.match(
+    body,
+    /assertCommandShape\(args\)/,
+    'SecondaryEngine.command() must shape-check before it writes to the pipe'
+  )
+  assert.match(
+    body,
+    /isBannedCommand\(args\)/,
+    'SecondaryEngine.command() must refuse screenshot-raw / apply-profile too'
+  )
+  assert.ok(
+    body.indexOf('assertCommandShape') < body.indexOf('client.command'),
+    'the guards have to run BEFORE the write, or they are decoration'
+  )
+})
+
+test('the two payloads that reached a secondary are rejected by the guards it now calls', () => {
+  // The exact shapes M27 measured going straight to the pipe.
+  assert.throws(() => assertCommandShape([new String('vf'), 'set', 'hflip']), /shape/)
+  assert.equal(isBannedCommand(['screenshot-raw']), true)
+  assert.equal(isBannedCommand(['apply-profile', 'fast']), true)
+  // And a legitimate thumbnail call is untouched, or the fix breaks M27.
+  assert.doesNotThrow(() => assertCommandShape(['loadfile', 'C:/x.mp4', 'replace']))
+  assert.equal(isBannedCommand(['screenshot-to-file', 'C:/x.png']), false)
 })

@@ -1,6 +1,8 @@
 import path from 'node:path'
 import { SUB_EXTENSIONS } from '@shared/media-types'
+import { captureSlice, reloadSubtitles, restoreSelection, type ReloadPort } from './reload.ts'
 import { loadConfig, saveConfig } from '../../services/config.ts'
+import type { TrackLike } from '@shared/mpv/tracks'
 import type { Track } from '@shared/types'
 import type { FeatureContext, FeatureModule, MenuNode } from '@shared/feature-api'
 
@@ -34,6 +36,7 @@ function label(t: Track): string {
 
 const mod: FeatureModule = {
   id: 'subs-tracks',
+  dependsOn: ['core-mpv-bus', 'subs-formats'],
   ownsProperties: [
     'sid',
     'secondary-sid',
@@ -100,15 +103,27 @@ const mod: FeatureModule = {
       '--sub-file-paths=sub;subs;subtitles;자막'
     ])
 
+    /**
+     * The per-file restore carries the track's IDENTITY beside its id.
+     *
+     * The same lesson as the reload path, one level up: a remembered `sid` is an
+     * index into the track list of a PREVIOUS session, and the sibling `.srt`
+     * the user added since shifts every id after it. Restoring the number alone
+     * either selects a different subtitle or resolves to `false`. `identity` is
+     * additive, so a bucket written by an older build still restores by index —
+     * and `selectTrack` now tells us when that index lands on nothing.
+     */
     ctx.perFile.slice({
       key: 'subs-tracks',
-      capture: () => ({
-        sid: ctx.mpv.peek<number | false>('sid') ?? false,
-        visible: ctx.mpv.peek<boolean>('sub-visibility') !== false
-      }),
+      capture: () =>
+        captureSlice(
+          ctx.mpv.peek<TrackLike[]>('track-list') ?? [],
+          ctx.mpv.peek<number | false>('sid') ?? false,
+          ctx.mpv.peek<boolean>('sub-visibility') !== false
+        ) as unknown as Record<string, unknown>,
       apply: async (v) => {
-        if (typeof v.sid === 'number') await ctx.mpv.set('sid', v.sid)
         if (typeof v.visible === 'boolean') await ctx.mpv.set('sub-visibility', v.visible)
+        await restoreSelection(reloadPort(), v as never)
       },
       rememberDefaults: { sid: true, visible: true }
     })
@@ -131,6 +146,7 @@ const mod: FeatureModule = {
         labelKey: 'subs-tracks.toggleVisibility',
         category: 'subtitles',
         menuPath: 'subtitles',
+        menuOrder: 10,
         defaults: { default: ['KeyV'], mpv: ['KeyV'] },
         run: async () => {
           const next = ctx.mpv.peek<boolean>('sub-visibility') === false
@@ -157,7 +173,17 @@ const mod: FeatureModule = {
         internal: true,
         run: async (arg) => {
           const id = arg === false || arg === 'no' ? 'no' : Number(arg)
-          await ctx.mpv.set('sid', id)
+          // `selectTrack`, not `set`: mpv accepts `sid = <gone>` and holds
+          // `false`, and a menu entry built from a list that has since been
+          // renumbered is exactly how that happens.
+          const got = await ctx.mpv.selectTrack('sid', id)
+          if (id !== 'no' && got !== id) {
+            ctx.log.warn(`sid=${id} was accepted by mpv and resolved to ${JSON.stringify(got)}`)
+            ctx.osd.toast({
+              kind: 'error',
+              message: ctx.i18n.t('subs-tracks.reloadLost', { name: String(id) })
+            })
+          }
         }
       },
       {
@@ -196,14 +222,7 @@ const mod: FeatureModule = {
           if (reloadTimer) clearTimeout(reloadTimer)
           reloadTimer = setTimeout(() => {
             reloadTimer = null
-            const sid = ctx.mpv.peek<number | false>('sid')
-            const track = subTracks().find((t) => t.id === sid)
-            // No-op for embedded tracks: sub-reload only re-reads external ones.
-            if (!track?.external) return
-            void ctx.mpv
-              .command(['sub-reload'])
-              .then(() => ctx.mpv.set('sid', sid as number))
-              .catch(() => undefined)
+            void reloadSubtitles(reloadPort())
           }, 300)
         }
       }
@@ -257,6 +276,8 @@ const mod: FeatureModule = {
       'subs-tracks.open': '자막 파일 열기...',
       'subs-tracks.openTitle': '자막 파일 열기',
       'subs-tracks.reload': '자막 다시 읽기',
+      'subs-tracks.reloadFailed': '자막을 다시 읽지 못했습니다',
+      'subs-tracks.reloadLost': '자막 트랙을 찾을 수 없습니다: {name}',
       'subs-tracks.menuTitle': '자막 트랙',
       'subs-tracks.none': '(트랙 없음)',
       'subs-tracks.off': '사용 안 함',
@@ -274,12 +295,34 @@ const mod: FeatureModule = {
       'subs-tracks.open': 'Open subtitle file...',
       'subs-tracks.openTitle': 'Open subtitle file',
       'subs-tracks.reload': 'Reload subtitles',
+      'subs-tracks.reloadFailed': 'Subtitles could not be reloaded',
+      'subs-tracks.reloadLost': 'Subtitle track not found after reload: {name}',
       'subs-tracks.menuTitle': 'Subtitle track',
       'subs-tracks.none': '(no tracks)',
       'subs-tracks.off': 'Off',
       'subs-tracks.needVideo': 'Start a video first',
       'subs-tracks.added': 'Subtitle added: {name}'
     })
+  }
+}
+
+/**
+ * The narrow slice of `ctx` the reload path needs.
+ *
+ * `reload.ts` holds the logic and is unit-testable; `index.ts` cannot be loaded
+ * by `node --test` at all, because `services/config.ts` reaches `electron`
+ * through `core/paths.ts`. The single most Korean-market-critical behaviour in
+ * the product does not get to be the untestable half.
+ */
+function reloadPort(): ReloadPort {
+  return {
+    get: (name) => ctx.mpv.get(name),
+    peek: (name) => ctx.mpv.peek(name),
+    command: (args) => ctx.mpv.command(args),
+    selectTrack: (name, id) => ctx.mpv.selectTrack(name, id),
+    log: ctx.log,
+    toast: (kind, message) => ctx.osd.toast({ kind, message }),
+    t: (key, vars) => ctx.i18n.t(key, vars)
   }
 }
 

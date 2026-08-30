@@ -1,6 +1,8 @@
 import type { AudioDevice } from '@shared/types'
 import type { FeatureContext, FeatureModule } from '@shared/feature-api'
 import { loadConfig, saveConfig } from '../../services/config.ts'
+import { describeIdentity, identityOf, planReselection } from '@shared/mpv/tracks'
+import type { TrackLike } from '@shared/mpv/tracks'
 
 /**
  * M15 audio-devices — output device selection.
@@ -15,6 +17,7 @@ let ctx: FeatureContext
 
 const mod: FeatureModule = {
   id: 'audio-devices',
+  dependsOn: ['core-af-chain', 'audio-tracks'],
   // §3.6: M15 "owns every AO-reinit round-trip; nothing else may re-set
   // `audio-device`". `ao-reload` is that round-trip in one command.
   ownsCommands: ['ao-reload'],
@@ -87,7 +90,10 @@ const mod: FeatureModule = {
           const value = String(arg ?? 'auto')
           // Read the selected track BEFORE the switch: reopening the audio
           // output can drop it, and mpv then re-picks by its own rules.
+          const before = ctx.mpv.peek<TrackLike[]>('track-list') ?? []
           const previous = ctx.mpv.peek<number | false>('aid') ?? false
+          const previousTrack = before.find((t) => t.type === 'audio' && t.id === previous)
+          const identity = previousTrack ? identityOf(before, previousTrack) : null
           await ctx.mpv.set('audio-device', value)
           saveConfig({ audioDevice: value })
 
@@ -105,13 +111,36 @@ const mod: FeatureModule = {
            * own per-file restore is in flight, because granting it there picks
            * the wrong dub on a dual-audio release. Log it and move on.
            */
-          if (previous !== false) {
-            const r = await ctx.mpv.requestSet(
-              'aid',
-              previous,
-              'the audio output was reopened for a device change and may have dropped the track'
+          /**
+           * RE-RESOLVED BY IDENTITY, not by the captured index.
+           *
+           * Reopening the audio output can make mpv re-read external audio
+           * files, and every command that re-reads a track list renumbers it —
+           * the same shape that lost the Korean subtitle through `sid`. Asking
+           * M11 to restore the OLD NUMBER after a renumber selects a different
+           * dub, or nothing at all, and mpv reports `"error":"success"` either
+           * way. So the request carries the id the track has NOW.
+           */
+          if (previous !== false && identity) {
+            const after = ctx.mpv.peek<TrackLike[]>('track-list') ?? before
+            const plan = planReselection(
+              after,
+              identity,
+              ctx.mpv.peek<number | false>('aid') ?? false
             )
-            if (!r.ok) ctx.log.warn(`audio track not re-asserted after the switch: ${r.reason}`)
+            if (plan.kind === 'lost') {
+              ctx.log.warn(
+                `${describeIdentity(identity)} is gone after the device switch; not guessing ` +
+                  `at a replacement.`
+              )
+            } else if (plan.kind === 'write') {
+              const r = await ctx.mpv.requestSet(
+                'aid',
+                plan.id,
+                'the audio output was reopened for a device change and may have dropped the track'
+              )
+              if (!r.ok) ctx.log.warn(`audio track not re-asserted after the switch: ${r.reason}`)
+            }
           }
         }
       }

@@ -107,14 +107,17 @@ function lineText(text, index) {
 const global_ = (re) => new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g')
 
 /**
- * @param view 'bare' (default) for identifier rules, 'code' for module paths.
+ * @param view 'bare' (default) for identifier rules, 'code' for module paths,
+ *   'strings' for "is this exact token a STRING LITERAL here" — which is the
+ *   only view in which a regex literal that quotes the token is not a match.
  */
 function forbid(files, pattern, message, allow = () => false, view = 'bare') {
   const re = global_(pattern)
   for (const file of files) {
     if (allow(rel(file))) continue
     const v = viewsOf(file)
-    for (const m of (view === 'code' ? v.code : v.bare).matchAll(re)) {
+    const text = view === 'code' ? v.code : view === 'strings' ? v.strings : v.bare
+    for (const m of text.matchAll(re)) {
       failures.push(
         `${rel(file)}:${v.lineAt(m.index)}  ${message}\n    ${lineText(v.text, m.index)}`
       )
@@ -265,6 +268,53 @@ const COMPUTED_IMPORT_RE = /\bimport\s*\((?=\s*[^\s'"])/
  */
 const CREATE_REQUIRE_RE = /\bcreateRequire\b/
 
+/**
+ * `'electron'` AS A MODULE SPECIFIER, which is the only thing every spelling of
+ * the import has in common — static, dynamic, side-effect, re-export, and
+ * however many lines it spans.
+ *
+ * THREE VERSIONS OF THIS RULE WERE WRITTEN AND TWO WERE MEASURED WRONG, on this
+ * tree, before it shipped:
+ *
+ *   /(?:from|import|require)\s*\(?\s*['"]electron['"]/  over the `code` view
+ *     -> FALSE POSITIVE on `mediainfo/module.test.ts:307` and
+ *        `wire-parity.test.ts:120`, two REGEX LITERALS that assert this very
+ *        rule. `lex.mjs` deliberately keeps regex literals in `code` and `bare`,
+ *        because blanking them would hide a rule that greps for one.
+ *
+ *   /^[ \t]*(?:import|export)\b[^\n]*?['"]electron['"]/m  anchored to one line
+ *     -> MISSES `import {\n  app,\n  shell\n} from 'electron'`. A line is not a
+ *        unit of syntax; that is this file's own founding lesson.
+ *
+ * So the test is not a single regex over a single view, it is the INTERSECTION
+ * of two: the token has to look like a quoted specifier in `code`, AND the
+ * character after the opening quote has to still be there in `strings`. Inside a
+ * regex literal the whole span is blank in `strings`, so the two test files pass;
+ * inside a comment both views are blank; inside a real import both hold.
+ */
+const ELECTRON_SPECIFIER_RE = /['"]electron['"]/
+
+/** Indices in `code` where `'electron'` is genuinely a string literal. */
+function electronSpecifierHits(v) {
+  const out = []
+  for (const m of v.code.matchAll(global_(ELECTRON_SPECIFIER_RE))) {
+    // `lex` blanks the quote characters in `strings` and keeps the CONTENT, so
+    // a real string literal has 'e' at index+1 there and a regex literal does
+    // not. This is the whole difference between the rule and its false positive.
+    if (v.strings[m.index + 1] === 'e') out.push(m.index)
+  }
+  return out
+}
+
+function forbidElectron(files, message) {
+  for (const file of files) {
+    const v = viewsOf(file)
+    for (const idx of electronSpecifierHits(v)) {
+      failures.push(`${rel(file)}:${v.lineAt(idx)}  ${message}\n    ${lineText(v.text, idx)}`)
+    }
+  }
+}
+
 // --- test:no-hijack (P33) --------------------------------------------------
 forbid(
   srcFiles,
@@ -322,31 +372,42 @@ forbid(
 )
 forbid(featureFiles, /new BrowserWindow/, 'no feature module constructs a BrowserWindow')
 
-// --- the other forbidden shared files (§3.0) -------------------------------
-forbid(
+/**
+ * ELECTRON ITSELF, in a feature module. §3.3 claims `FeatureContext` is "the
+ * whole surface a module is allowed to touch", and until now nothing enforced
+ * the claim: three of the thirteen landed modules opened with
+ * `import { app, clipboard, ClipboardItem, nativeImage, shell } from 'electron'`.
+ *
+ * The cost is not abstract. That one line makes `index.ts` unloadable by
+ * `node --test`, so M22 and M23 each split a `manifest.ts` out of `index.ts`
+ * purely to give a test something it could import, and every suite that wants to
+ * assert on the real module object had to give up. With `ctx.shell` (§3.3.9),
+ * `ctx.image` (§3.3.10), `ctx.dialog` and `ctx.window` in place there is nothing
+ * left for a module to reach Electron FOR, so the import is forbidden rather
+ * than discouraged, and the next twenty-five modules inherit a loadable
+ * `index.ts` by default.
+ *
+ * `code`, not `bare`: the specifier is a string literal, and prose about
+ * Electron in a comment is not an import. Two files quote
+ * `import { app } from 'electron'` inside a doc comment today, citing the core
+ * file that legitimately does it.
+ *
+ * TWO patterns rather than the obvious one, and the reason is a false positive
+ * this rule produced on its first run. `/(?:from|import|require)\s*\(?\s*
+ * ['"]electron['"]/` fired on `mediainfo/module.test.ts:307` and
+ * `mediainfo/wire-parity.test.ts:120` — two REGEX LITERALS that assert this very
+ * rule. `scripts/lib/lex.mjs` keeps regex literals in both views on purpose
+ * (blanking them would hide a rule that greps for one), so the fix is a pattern
+ * that describes an import rather than a substring of one: a STATEMENT at the
+ * start of a line, or a call to `import(` / `require(`. A test that checks for
+ * the string still reads naturally, and a real import in any spelling fails.
+ */
+forbidElectron(
   featureFiles,
-  CORE_IMPORT_RE,
-  'no feature module imports a shared core file — everything arrives on FeatureContext. ' +
-    'This now matches dynamic import(), require() and createRequire() too, ACROSS LINE BREAKS: ' +
-    '`await import(\\n  "../../core/mpv/vf-chain.ts"\\n)` was a full ownership bypass that both ' +
-    'the static-only regex and the line-at-a-time scanner printed "clean" for',
-  () => false,
-  'code'
-)
-forbid(
-  featureFiles,
-  COMPUTED_IMPORT_RE,
-  'a feature module may not compute a module specifier. A computed import is how a ' +
-    'path-fragment grep gets walked around, and no module has a reason to need one',
-  () => false,
-  'code'
-)
-forbid(
-  featureFiles,
-  CREATE_REQUIRE_RE,
-  'no feature module calls createRequire(). It is a second module loader that no ' +
-    'specifier rule can follow once the returned function is bound to a name, and a ' +
-    'feature module has no use for one: everything it may reach arrives on FeatureContext'
+  'no feature module imports electron — ctx.shell (§3.3.9), ctx.image (§3.3.10), ' +
+    'ctx.dialog and ctx.window are the whole surface. A direct import also makes the ' +
+    'file unloadable by node --test, which is why M22 and M23 each had to split a ' +
+    'manifest.ts out just to be testable'
 )
 
 // The renderer half has the same rule: a module's UI reaches the overlay
@@ -428,7 +489,17 @@ const MUST_CATCH = [
   ['create-require', `const req = createRequire(import.meta.url)\nconst m = req(p)`],
   ['computed-import', `const bus = await import(BUS_PATH)`],
   ['computed-import', 'const m = await import(`../../core/mpv/${name}.ts`)'],
-  ['computed-import', `const m = await import(\n  head + tail\n)`]
+  ['computed-import', `const m = await import(\n  head + tail\n)`],
+  // ELECTRON, in a feature module. Every spelling three landed modules used or
+  // could have used, plus the two dynamic ones the anchored rule alone misses.
+  ['electron-import', `import { app, shell } from 'electron'`],
+  ['electron-import', `import { clipboard, nativeImage } from "electron"`],
+  ['electron-import', `import electron from 'electron'`],
+  ['electron-import', `import 'electron'`],
+  ['electron-import', `export { shell } from 'electron'`],
+  ['electron-import', `import {\n  app,\n  shell\n} from 'electron'`],
+  ['electron-import', `const { shell } = await import('electron')`],
+  ['electron-import', `const { app } = require("electron")`]
 ]
 
 const MUST_NOT_CATCH = [
@@ -454,13 +525,26 @@ const MUST_NOT_CATCH = [
   ['computed-import', `const mod = await import(\n  './thing.ts'\n)`],
   ['computed-import', `const mod = await import(\n  "./thing.ts"\n)`],
   // A regex literal containing a slash must not open a phantom comment.
-  ['computed-import', `const re = /https?:\\/\\/x/\nconst mod = await import('./a.ts')`]
+  ['computed-import', `const re = /https?:\\/\\/x/\nconst mod = await import('./a.ts')`],
+  /**
+   * THE FALSE POSITIVE THIS RULE ACTUALLY PRODUCED, kept as a fixture.
+   *
+   * `mediainfo/module.test.ts:307` and `mediainfo/wire-parity.test.ts:120`
+   * assert this very rule with a REGEX LITERAL, and `lex.mjs` keeps regex
+   * literals in both views on purpose. The obvious pattern
+   * (`/(?:from|import|require)\\s*\\(?\\s*['"]electron['"]/`) red-lights both.
+   */
+  ['electron-import', `const electronImport = /import \\{([^}]*)\\} from 'electron'/.exec(src)`],
+  ['electron-import', `assert.equal(/from 'electron'/.test(text), false)`],
+  ['electron-import', `// core/shell.ts does \`import { app } from 'electron'\` for us\nconst x = 1`],
+  ['electron-import', `const electronImport = /import \\{([^}]*)\\} from 'electron'/.exec(src)`],
+  ['electron-import', `import type { ShellService } from '@shared/feature-api'`]
 ]
 
 function selfTest() {
   const test = (re, view) => (text) => {
     const v = lex(text)
-    return global_(re).test(view === 'code' ? v.code : v.bare)
+    return global_(re).test(view === 'code' ? v.code : view === 'strings' ? v.strings : v.bare)
   }
   const network = (text) => {
     const v = lex(text)
@@ -472,7 +556,8 @@ function selfTest() {
     network,
     'core-import': test(CORE_IMPORT_RE, 'code'),
     'create-require': test(CREATE_REQUIRE_RE, 'bare'),
-    'computed-import': test(COMPUTED_IMPORT_RE, 'code')
+    'computed-import': test(COMPUTED_IMPORT_RE, 'code'),
+    'electron-import': (text) => electronSpecifierHits(lex(text)).length > 0
   }
   const bad = []
   const show = (s) => s.replace(/\n/g, '\\n')

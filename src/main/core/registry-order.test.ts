@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { topoSort, validateIds } from './registry-order.ts'
+import { deferredDeps, topoSort, validateIds } from './registry-order.ts'
 
 /**
  * test:registry (§6.2), the static half: "boot with a deliberately bad module:
@@ -81,9 +81,64 @@ test('a dependency cycle throws and NAMES the cycle', () => {
   )
 })
 
-test('depending on a module that is not loaded throws', () => {
-  assert.throws(
-    () => topoSort([{ dir: 'nav-thumbnails', id: 'nav-thumbnails', dependsOn: ['mediainfo'] }]),
-    /dependsOn 'mediainfo'/
+/**
+ * `dependsOn` HAS ONE NAMESPACE now — see MANIFEST_CORE_IDS in
+ * registry-order.ts. This test used to assert that depending on `mediainfo`
+ * THREW, and that was the defect: `mediainfo` is M29's reserved directory, so
+ * the assertion enshrined "a module cannot name a dependency this build has not
+ * implemented yet", which every module whose manifest row names an unbuilt
+ * helper would have hit on the first line of its own feature. Four cases, four
+ * different answers.
+ */
+test('a dep on a RESERVED but unbuilt module is deferred, not a boot error', () => {
+  // M29's row depends on audio-tracks; M17's depends on subs-formats, which
+  // does not exist yet. Neither may fail the boot.
+  assert.doesNotThrow(() =>
+    topoSort([{ dir: 'nav-thumbnails', id: 'nav-thumbnails', dependsOn: ['mediainfo'] }])
   )
+  assert.deepEqual(
+    deferredDeps([{ dir: 'nav-thumbnails', id: 'nav-thumbnails', dependsOn: ['mediainfo'] }]),
+    [{ id: 'nav-thumbnails', dep: 'mediainfo' }]
+  )
+})
+
+test('a dep on a CORE piece is satisfied by construction', () => {
+  assert.doesNotThrow(() =>
+    topoSort([{ dir: 'audio-eq', id: 'audio-eq', dependsOn: ['core-af-chain'] }])
+  )
+  // …and it is not reported as deferred: core is up, there is nothing to say.
+  assert.deepEqual(
+    deferredDeps([{ dir: 'audio-eq', id: 'audio-eq', dependsOn: ['core-af-chain'] }]),
+    []
+  )
+})
+
+test('a dep naming a manifest ROW id says which namespace it came from', () => {
+  assert.throws(
+    () => topoSort([{ dir: 'video-hdr', id: 'video-hdr', dependsOn: ['M07'] }]),
+    /is a docs\/parity\/modules\.json ROW id, not a module id/
+  )
+})
+
+test('a dep in NO namespace is still a boot error, and names the nearest id', () => {
+  assert.throws(
+    () => topoSort([{ dir: 'audio-eq', id: 'audio-eq', dependsOn: ['core-af-chian'] }]),
+    /Did you mean 'core-af-chain'\?/
+  )
+  assert.throws(
+    () => topoSort([{ dir: 'audio-eq', id: 'audio-eq', dependsOn: ['navthumbnails'] }]),
+    /Did you mean 'nav-thumbnails'\?/
+  )
+  assert.throws(
+    () => topoSort([{ dir: 'audio-eq', id: 'audio-eq', dependsOn: ['totally-made-up'] }]),
+    /neither a loaded feature module, a module reserved in/
+  )
+})
+
+test('a real edge is still a real edge, and ordering still comes out right', () => {
+  const ordered = topoSort([
+    { dir: 'subs-style', id: 'subs-style', dependsOn: ['subs-tracks'] },
+    { dir: 'subs-tracks', id: 'subs-tracks', dependsOn: ['core-mpv-bus', 'subs-formats'] }
+  ]).map((m) => m.id)
+  assert.deepEqual(ordered, ['subs-tracks', 'subs-style'])
 })

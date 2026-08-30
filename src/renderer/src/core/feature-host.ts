@@ -61,6 +61,54 @@ export interface SettingsSectionSpec {
 
 export type SettingsComponentMount = (el: HTMLElement, api: SettingBinding) => () => void
 
+/**
+ * ONE rule for every cross-module ordering namespace in this file.
+ *
+ * THE AUDIT THAT PRODUCED IT. `SeekbarHost.register()` rejected a duplicate
+ * layer `id` and nothing rejected a duplicate `order`, and the two collided at
+ * n=4: `nav-chapters.ticks` and `nav-thumbnails.preview` both registered at 10,
+ * which left paint order, hit order and z-index falling to `import.meta.glob`'s
+ * directory order. Auditing the sibling namespaces for the same gap found:
+ *
+ *   ctx.panel()            no id check, no order check
+ *   ctx.statsSection()     no id check, no order check
+ *   ctx.settingsSection()  no id check, no order check
+ *   ctx.transportButton()  id checked, order NOT checked
+ *   ctx.menu.contribute()  id checked, order NOT checked — AND ALREADY COLLIDING:
+ *                          nav-chapters.menu and nav-thumbnails.menu were both 45
+ *   ctx.mpv.contributeArgs() priority is a BAND, not a slot: eight modules share
+ *                          10 by design. Ties are made deterministic by owner id
+ *                          instead of rejected (see core/mpv/bus.ts).
+ *   ctx.settings.define()  already sorts by (order, id), so ties were already
+ *                          deterministic. No change needed.
+ *
+ * `scope` narrows the namespace where one exists — two settings sections may
+ * share an order if they are in different pages, because they are never sorted
+ * against each other.
+ */
+function claimSlot<T extends { id: string; order: number }>(
+  kind: string,
+  existing: readonly T[],
+  spec: T,
+  scope: (x: T) => string = () => ''
+): void {
+  const dupId = existing.find((x) => x.id === spec.id)
+  if (dupId) {
+    throw new Error(
+      `duplicate ${kind} id '${spec.id}'. Ids are '<module>.<name>' and globally unique.`
+    )
+  }
+  const dupOrder = existing.find((x) => x.order === spec.order && scope(x) === scope(spec))
+  if (dupOrder) {
+    throw new Error(
+      `duplicate ${kind} order ${spec.order}: '${dupOrder.id}' and '${spec.id}'. ` +
+        `order is the only thing deciding which comes first, so a tie makes the layout ` +
+        `depend on module load order — which is directory order, which nobody chose. ` +
+        `Pick distinct orders and record them in docs/parity/02-wave0-api.md.`
+    )
+  }
+}
+
 export const panels: PanelSpec[] = []
 /** `ctx.transportButton()`, consumed by `transport-host.ts`. */
 export const transportButtons: TransportButton[] = []
@@ -221,6 +269,7 @@ export function createContext(
     },
     t,
     panel(p): void {
+      claimSlot('panel', panels, p as PanelSpec)
       panels.push(p as PanelSpec)
       panels.sort((a, b) => a.order - b.order)
       announce()
@@ -230,19 +279,19 @@ export function createContext(
       else pendingLayers.push(l)
     },
     transportButton(b): void {
-      if (transportButtons.some((x) => x.id === b.id)) {
-        throw new Error(`duplicate transport button id '${b.id}'`)
-      }
+      claimSlot('transport button', transportButtons, b)
       transportButtons.push(b)
       transportButtons.sort((a, x) => a.order - x.order)
       announce()
     },
     statsSection(s): void {
+      claimSlot('stats section', statsSections, s)
       statsSections.push(s)
       statsSections.sort((a, b) => a.order - b.order)
       announce()
     },
     settingsSection(s): void {
+      claimSlot('settings section', settingsSections, s as SettingsSectionSpec, (x) => x.section)
       settingsSections.push(s as SettingsSectionSpec)
       settingsSections.sort((a, b) => a.order - b.order)
       announce()

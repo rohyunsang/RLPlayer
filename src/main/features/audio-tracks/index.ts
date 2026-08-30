@@ -1,3 +1,5 @@
+import { describeIdentity, identityOf, planReselection } from '@shared/mpv/tracks'
+import type { TrackLike } from '@shared/mpv/tracks'
 import type { Track } from '@shared/types'
 import type { FeatureContext, FeatureModule, MenuNode } from '@shared/feature-api'
 
@@ -35,9 +37,26 @@ function label(t: Track): string {
   return bits.join(' · ')
 }
 
+/**
+ * `aid` HAS THE SAME EXPOSURE AS `sid`, and it is written from four places.
+ *
+ * mpv accepts `set_property aid <gone>` with `{"error":"success"}` and then
+ * holds `false` — the shape that lost every Korean subtitle through `sid` one
+ * round ago. `audio-add`, `audio-remove`, `audio-reload` and
+ * `rescan-external-files` all renumber the audio list, so a captured `aid` is
+ * exactly as perishable as a captured `sid`. `selectTrack` returns what mpv
+ * RESOLVED to rather than whether it accepted the write.
+ */
 async function select(id: number | false): Promise<void> {
   intended = id
-  await ctx.mpv.set('aid', id === false ? 'no' : id)
+  const got = await ctx.mpv.selectTrack('aid', id === false ? 'no' : id)
+  if (id !== false && got !== id) {
+    ctx.log.error(
+      `aid=${id} was accepted by mpv and resolved to ${JSON.stringify(got)}; the audio tracks ` +
+        `mpv has are ${audioTracks().map((t) => t.id).join(', ') || '(none)'}. A captured track ` +
+        `index does not survive audio-reload / audio-add / rescan-external-files.`
+    )
+  }
   const t = audioTracks().find((x) => x.id === id)
   ctx.osd.show({ kind: 'track', text: id === false ? '오디오 없음' : `오디오 ${label(t ?? { id, type: 'audio', selected: true })}` })
 }
@@ -112,8 +131,40 @@ const mod: FeatureModule = {
 
     ctx.perFile.slice({
       key: 'audio-tracks',
-      capture: () => ({ aid: ctx.mpv.peek<number | false>('aid') ?? false }),
+      capture: () => {
+        const list = ctx.mpv.peek<TrackLike[]>('track-list') ?? []
+        const aid = ctx.mpv.peek<number | false>('aid') ?? false
+        const t = list.find((x) => x.type === 'audio' && x.id === aid)
+        // The identity beside the index, for the same reason M17 stores one: a
+        // remembered `aid` is a position in a PREVIOUS session's track list, and
+        // an external audio file added since shifts every id after it.
+        return { aid, identity: t ? identityOf(list, t) : null }
+      },
       apply: async (v) => {
+        const identity = v.identity as ReturnType<typeof identityOf> | null | undefined
+        if (identity && typeof identity.type === 'string') {
+          const list = ctx.mpv.peek<TrackLike[]>('track-list') ?? []
+          const plan = planReselection(list, identity, ctx.mpv.peek<number | false>('aid') ?? false)
+          if (plan.kind === 'lost') {
+            ctx.log.warn(
+              `the remembered audio track ${describeIdentity(identity)} is not in this file; ` +
+                `leaving mpv's own choice alone.`
+            )
+            return
+          }
+          if (plan.kind === 'already') {
+            intended = plan.id
+            return
+          }
+          busyRestoring = true
+          restoring = select(plan.id).then(
+            () => undefined,
+            () => undefined
+          )
+          await restoring
+          busyRestoring = false
+          return
+        }
         if (typeof v.aid === 'number') {
           // The window the arbiter refuses inside: a foreign write landing
           // here picks the wrong dub on a dual-audio release.
@@ -156,7 +207,13 @@ const mod: FeatureModule = {
         labelKey: 'audio-tracks.selectVideo',
         category: 'video',
         internal: true,
-        run: (arg) => ctx.mpv.set('vid', arg === false || arg === 'no' ? 'no' : Number(arg))
+        run: async (arg) => {
+          const id = arg === false || arg === 'no' ? 'no' : Number(arg)
+          const got = await ctx.mpv.selectTrack('vid', id)
+          if (id !== 'no' && got !== id) {
+            ctx.log.warn(`vid=${id} was accepted by mpv and resolved to ${JSON.stringify(got)}`)
+          }
+        }
       },
       {
         /**
@@ -172,8 +229,14 @@ const mod: FeatureModule = {
           await restoring
           const target = intended
           if (target === false) return
-          await ctx.mpv.set('aid', 'no')
-          await ctx.mpv.set('aid', target)
+          await ctx.mpv.selectTrack('aid', 'no')
+          const got = await ctx.mpv.selectTrack('aid', target)
+          if (got !== target) {
+            ctx.log.error(
+              `the decoder reinit round-trip left aid=${JSON.stringify(got)} rather than ` +
+                `${target}; mpv accepted the write and resolved it to nothing.`
+            )
+          }
         }
       },
       {
@@ -185,7 +248,7 @@ const mod: FeatureModule = {
         internal: true,
         run: async (arg) => {
           const a = (arg ?? {}) as { vid?: number | false; aid?: number | false }
-          if (a.vid !== undefined) await ctx.mpv.set('vid', a.vid === false ? 'no' : a.vid)
+          if (a.vid !== undefined) await ctx.mpv.selectTrack('vid', a.vid === false ? 'no' : a.vid)
           if (a.aid !== undefined) await select(a.aid)
         }
       }

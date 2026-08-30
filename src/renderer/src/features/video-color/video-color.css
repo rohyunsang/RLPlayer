@@ -1,0 +1,28 @@
+/*
+ * M01 video-color. Every selector this file DEFINES is prefixed `vc-` and lives
+ * in this module's own directory: `src/renderer/src/styles.css` and
+ * `src/renderer/src/core/settings.css` are core's, and a feature-only selector
+ * sitting in either is what `check:partition` fails the build for.
+ *
+ * `.btn` is core's and is only used from inside `.vc-help`, which is this
+ * module's own subtree — the `leftmost` view of the partition check is what
+ * makes that legitimate rather than a claim on core's class.
+ */
+
+.vc-help {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 46em;
+}
+
+.vc-help-line {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  opacity: 0.8;
+}
+
+.vc-reset {
+  align-self: flex-start;
+}

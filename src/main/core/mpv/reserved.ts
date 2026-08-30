@@ -259,9 +259,27 @@ export function validateArgContributions(
   }
 }
 
-/** Flatten contributions into a spawn argv, priority ascending, stable. */
+/**
+ * Flatten contributions into a spawn argv, priority ascending, then by OWNER ID.
+ *
+ * `priority` is deliberately a BAND rather than a slot here — eight modules
+ * share 10 today, and rejecting a duplicate the way the seek bar and the menu
+ * now do would be wrong: contributing `--audio-file-auto=fuzzy` and
+ * `--sub-auto=fuzzy` at the same priority is not a conflict, and a real option
+ * collision is caught by `validateArgContributions` instead, which names both
+ * modules.
+ *
+ * But a TIE still has to resolve the same way on every launch. It used to fall
+ * to `this.contributions` push order, i.e. feature discovery order, i.e.
+ * `import.meta.glob`'s directory listing — so "which module's `--vo` wins" was
+ * an accident of alphabetisation. Sorting the tie by owner id makes the argv
+ * byte-identical across launches, which also means a bug report's command line
+ * is reproducible.
+ */
 export function composeArgs(contributions: readonly ArgContribution[]): string[] {
-  const sorted = [...contributions].sort((a, b) => a.priority - b.priority)
+  const sorted = [...contributions].sort(
+    (a, b) => a.priority - b.priority || a.ownerId.localeCompare(b.ownerId)
+  )
   const out: string[] = []
   for (const c of sorted) out.push(...c.args)
   return out

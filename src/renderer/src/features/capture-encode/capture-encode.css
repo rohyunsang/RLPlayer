@@ -1,0 +1,219 @@
+/*
+ * M23 capture-encode — the module's own stylesheet.
+ *
+ * Every selector here is prefixed `enc-` and private to this module, which is
+ * the rule `check:partition` enforces symbol by symbol: a feature-only selector
+ * sitting in core's `styles.css` fails the build, because `styles.css` is in the
+ * mustNotTouch list of 40 of the 55 manifest rows. Core owns the panel dock, the
+ * transport <button> and its `icon-btn` class; everything inside them is ours.
+ */
+
+/* --- the job panel ------------------------------------------------------- */
+
+.enc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px 6px;
+}
+
+.enc-head h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.enc-jobs {
+  margin: 0;
+  padding: 0 12px;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.enc-job {
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.enc-job-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.enc-job-label {
+  flex: 1 1 auto;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.enc-job-state {
+  flex: 0 0 auto;
+  font-size: 10px;
+  opacity: 0.7;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.enc-job-name {
+  margin-top: 2px;
+  font-size: 10px;
+  opacity: 0.55;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: ltr;
+}
+
+.enc-job-error {
+  margin: 4px 0 0;
+  font-size: 10px;
+  color: #ff9a8b;
+  /* An mpv error string can be long and is worth reading in full. */
+  overflow-wrap: anywhere;
+}
+
+/* --- progress ------------------------------------------------------------ */
+
+.enc-bar {
+  position: relative;
+  margin-top: 6px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.enc-bar-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 2px;
+  background: #7fc8ff;
+  transition: width 120ms linear;
+}
+
+/*
+ * Indeterminate: a queued job, or a running one whose first `time-pos` has not
+ * arrived yet. Those are genuinely different from "0%" and must not look like a
+ * bar stuck at zero.
+ */
+.enc-bar-idle .enc-bar-fill {
+  width: 35%;
+  animation: enc-slide 1.1s ease-in-out infinite;
+  transition: none;
+}
+
+@keyframes enc-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .enc-bar-idle .enc-bar-fill {
+    animation: none;
+    width: 100%;
+    opacity: 0.35;
+  }
+}
+
+.enc-done .enc-bar-fill {
+  background: #8ddf9a;
+}
+
+.enc-failed .enc-bar-fill,
+.enc-failed .enc-bar {
+  background: rgba(255, 154, 139, 0.35);
+}
+
+.enc-cancelled {
+  opacity: 0.55;
+}
+
+/* --- empty state and quick actions -------------------------------------- */
+
+.enc-empty {
+  margin: 4px 12px 0;
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.enc-quick {
+  padding: 10px 12px 14px;
+}
+
+.enc-quick h3 {
+  margin: 0 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.6;
+}
+
+.enc-quick-btn {
+  display: block;
+  width: 100%;
+  margin-bottom: 4px;
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.enc-quick-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.enc-quick-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* --- the transport button ------------------------------------------------ */
+
+/* Core's transport button is positioned static; the badge needs a containing
+ * block, and giving it one is a change to OUR subtree only. */
+.enc-busy {
+  position: relative;
+  color: #7fc8ff;
+}
+
+.enc-badge {
+  position: absolute;
+  right: 1px;
+  bottom: 0;
+  padding: 0 3px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #7fc8ff;
+  font-size: 9px;
+  line-height: 12px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+/* --- the settings-window limits block ----------------------------------- */
+
+.enc-limits {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.enc-limits li + li {
+  margin-top: 4px;
+}

@@ -1,7 +1,9 @@
 import type {
   SeekbarLayer,
   SeekbarLayerCtx,
-  SeekbarPointerEvent
+  SeekbarPointerEvent,
+  SeekbarTooltipFragment,
+  SeekbarUnclaimedEvent
 } from '../../../shared/renderer-api.ts'
 
 /**
@@ -42,6 +44,18 @@ import type {
  *      tooltip from `tooltips()`, Tab drives `focusNext()`, and arrows reach
  *      `key()` before the early-out, which now applies only when no handle is
  *      focused.
+ *   5. `order` IS A SLOT, NOT A HINT. It decides paint order, hit-test order
+ *      (reversed) and the layer container's z-index, so a duplicate is rejected
+ *      at registration exactly as a duplicate `id` is. It had already collided
+ *      at n=4 — `nav-chapters.ticks` and `nav-thumbnails.preview` both at 10 —
+ *      and was benign only because M27 declares no `hitTest` yet.
+ *   6. A LAYER NEVER LEARNS ANYTHING ABOUT ANOTHER LAYER: not whether it
+ *      claimed the pointer, not whether it printed a tooltip. Where two layers
+ *      legitimately want to print the same KIND of thing they say so with a
+ *      fragment `role`, and the host — the only thing that knows who claimed
+ *      the pointer — keeps one. The alternative, M27 re-deriving M25's
+ *      hit-test band from the chapter list and the bar width, shipped and was
+ *      wrong at 22 of 24 sampled positions.
  *
  * No DOM API is called in here — only geometry the caller supplies — so the
  * whole interaction model is unit-testable under `node --test`.
@@ -113,6 +127,31 @@ export class SeekbarHost {
   register(layer: SeekbarLayer): () => void {
     if (this.layers.some((l) => l.id === layer.id)) {
       throw new Error(`duplicate seek-bar layer id '${layer.id}'`)
+    }
+    /**
+     * A DUPLICATE `order` IS REJECTED THE SAME WAY A DUPLICATE ID IS.
+     *
+     * `order` is not decoration here: it decides paint order, it decides
+     * hit-test order (reversed), and `main.ts` copies it straight into the
+     * layer container's `z-index`. Two layers sharing it means all three fall
+     * back to registration order — which is `import.meta.glob`'s directory
+     * order, i.e. alphabetical by module id, i.e. an ordering nobody chose and
+     * nothing states.
+     *
+     * It had already collided at n=4: `nav-chapters.ticks` and
+     * `nav-thumbnails.preview` both registered at 10. Benign only because M27
+     * declares no `hitTest`, so the tie could not steal a press yet — and "the
+     * next module to add a hitTest breaks a shipped feature" is not a property
+     * worth relying on with 34 modules still to land.
+     */
+    const clash = this.layers.find((l) => l.order === layer.order)
+    if (clash) {
+      throw new Error(
+        `duplicate seek-bar layer order ${layer.order}: '${clash.id}' and '${layer.id}'. ` +
+          `order decides paint order, hit-test order (reversed) and z-index, so a tie makes ` +
+          `all three depend on module load order. Pick distinct orders and record them in ` +
+          `docs/parity/02-wave0-api.md §3.4.`
+      )
     }
     this.layers.push(layer)
     this.layers.sort((a, b) => a.order - b.order)
@@ -239,6 +278,29 @@ export class SeekbarHost {
     this.pointerUp(x, {}, true)
   }
 
+  /**
+   * The event a layer gets when the pointer may or may not be on one of ITS
+   * handles: hover and tooltip.
+   *
+   * `handle` is a real string or ABSENT — never `''`, never `null`. That was the
+   * whole of the 24/24-wrong-chapter bug: the host handed `''` to every layer
+   * that did not claim the hit, and `Number('') === 0`, so M25's chapter
+   * fragment rendered at every position naming chapter 0. `Number(undefined)` is
+   * `NaN`, so the same careless consumer now gets nothing instead of item zero.
+   */
+  private unclaimedEvent(
+    handle: string | null,
+    x: number,
+    mods: PointerMods
+  ): SeekbarUnclaimedEvent {
+    // The base event needs SOME string for its `handle` field; it is discarded
+    // by the spread below, and the discriminant decides what a consumer sees.
+    const base = this.event(handle ?? 'unclaimed', x, mods)
+    const { handle: _discard, ...rest } = base
+    void _discard
+    return handle === null ? { ...rest, claimed: false } : { ...rest, claimed: true, handle }
+  }
+
   /** Hover is hit-test independent and goes to EVERY layer that wants it. */
   hover(x: number | null, mods: PointerMods = {}): void {
     if (x === null) {
@@ -248,35 +310,74 @@ export class SeekbarHost {
     const claim = this.hit(x)
     for (const layer of this.layers) {
       if (!layer.onHover) continue
-      const handle: string | null = claim?.layer === layer ? claim.handle : null
-      layer.onHover({ ...this.event(handle ?? '', x, mods), handle })
+      layer.onHover(this.unclaimedEvent(claim?.layer === layer ? claim.handle : null, x, mods))
     }
   }
 
-  /** Tooltip fragments from every layer, merged by order into ONE tooltip, so
-   *  the time, the chapter title and the thumbnail compose instead of stacking
-   *  three floating boxes. */
-  tooltips(x: number, mods: PointerMods = {}): Array<{ el: HTMLElement; order: number }> {
-    const out: Array<{ el: HTMLElement; order: number }> = []
+  /**
+   * Tooltip fragments from every layer, merged by order into ONE tooltip, so the
+   * time, the chapter title and the thumbnail compose instead of stacking three
+   * floating boxes.
+   *
+   * TWO FRAGMENTS WITH THE SAME `role` COLLAPSE TO ONE, and the host is the only
+   * thing that can decide which: it is the only thing that knows who claimed the
+   * pointer. M25's chapter title (the tick under the pointer) and M27's chapter
+   * caption (the chapter containing the hovered time) are both "the chapter", and
+   * M27 previously tried to work out whether M25 would print by re-deriving
+   * M25's hit-test band from the chapter list and the bar width. That premise was
+   * false twice over — M25 printed everywhere, and even correct it only prints
+   * when it WINS the hit-test against every other layer on the bar. Neither is
+   * knowable from inside a foreign module, and a layer that could ask would be a
+   * layer coupled to another module's internals.
+   *
+   * The rule: the claiming layer's fragment wins; otherwise the lowest `order`.
+   */
+  tooltips(x: number, mods: PointerMods = {}): SeekbarTooltipFragment[] {
+    const collected: Array<{ frag: SeekbarTooltipFragment; claimed: boolean }> = []
     // Core's timecode is a fragment like any other, at order 0, so the merge
     // order is decided once here instead of half here and half in main.ts.
     const base = this.deps.baseTooltip?.(x)
-    if (base) out.push(base)
+    if (base) collected.push({ frag: base, claimed: false })
     // ONE hit-test for the whole tooltip. It was inside the loop, so an n-layer
     // bar ran n hit-tests per pointermove -- and every hitTest walks its layer's
     // own items, which for M26's bookmark pins is the whole list.
     const claim = this.hit(x)
     for (const layer of this.layers) {
       if (!layer.tooltip) continue
-      const handle = claim?.layer === layer ? claim.handle : ''
+      const mine = claim?.layer === layer
       try {
-        const frag = layer.tooltip(this.event(handle, x, mods))
-        if (frag) out.push(frag)
+        const got = layer.tooltip(this.unclaimedEvent(mine ? claim.handle : null, x, mods))
+        if (!got) continue
+        for (const frag of Array.isArray(got) ? got : [got as SeekbarTooltipFragment]) {
+          if (frag) collected.push({ frag, claimed: mine })
+        }
       } catch (e) {
         // One layer's broken tooltip must not blank the timecode.
         console.error(`[seekbar] layer '${layer.id}' tooltip threw:`, (e as Error).message)
       }
     }
+
+    const byRole = new Map<string, { frag: SeekbarTooltipFragment; claimed: boolean }>()
+    const out: SeekbarTooltipFragment[] = []
+    for (const item of collected) {
+      const role = item.frag.role
+      if (role === undefined) {
+        out.push(item.frag)
+        continue
+      }
+      const held = byRole.get(role)
+      if (!held) {
+        byRole.set(role, item)
+        continue
+      }
+      // The claiming layer is specific to what the pointer is ON; anything else
+      // is a general answer for the position. Specific wins, then lowest order.
+      const wins = item.claimed !== held.claimed ? item.claimed : item.frag.order < held.frag.order
+      if (wins) byRole.set(role, item)
+    }
+    for (const item of byRole.values()) out.push(item.frag)
+    // `sort` is stable, and layer `order` is now unique, so fragments that share
+    // an `order` still merge in a defined sequence: their layers' paint order.
     return out.sort((a, b) => a.order - b.order)
   }
 

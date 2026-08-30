@@ -179,6 +179,7 @@ const mod: FeatureModule = {
         labelKey: 'audio-volume.toggleMute',
         category: 'audio',
         menuPath: 'audio',
+        menuOrder: 10,
         defaults: { default: ['KeyM'], potplayer: ['KeyM'], mpv: ['KeyM'] },
         run: async () => {
           const next = ctx.mpv.peek<boolean>('mute') !== true

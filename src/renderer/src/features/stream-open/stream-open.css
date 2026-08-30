@@ -1,0 +1,197 @@
+/*
+ * M35 stream-open, renderer styles.
+ *
+ * Every selector is prefixed `so-`, which is what `check:partition` needs to
+ * attribute a rule to this module: a private symbol sitting in a core file is a
+ * partition failure, and an unprefixed `.row` in a module file is the same
+ * problem one step from happening.
+ */
+
+.so-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.so-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.so-head h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.so-form {
+  display: flex;
+  gap: 6px;
+}
+
+.so-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12px;
+  color: inherit;
+  background: rgb(255 255 255 / 8%);
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 4px;
+}
+
+.so-input:focus-visible {
+  outline: 2px solid rgb(120 170 255 / 90%);
+  outline-offset: 1px;
+}
+
+.so-go {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 12px;
+  color: inherit;
+  cursor: pointer;
+  background: rgb(255 255 255 / 14%);
+  border: 1px solid rgb(255 255 255 / 20%);
+  border-radius: 4px;
+}
+
+.so-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0;
+  margin: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.so-item {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.so-item-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 6px;
+  overflow: hidden;
+  font: inherit;
+  font-size: 12px;
+  color: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 3px;
+}
+
+.so-item-open:hover {
+  background: rgb(255 255 255 / 10%);
+}
+
+.so-item.so-current .so-item-open {
+  font-weight: 600;
+}
+
+.so-item-forget {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  font: inherit;
+  font-size: 11px;
+  color: inherit;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  opacity: 0.6;
+}
+
+.so-item-forget:hover {
+  opacity: 1;
+}
+
+.so-empty {
+  padding: 4px 6px;
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.so-note {
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  background: rgb(255 200 90 / 12%);
+  border-left: 2px solid rgb(255 200 90 / 70%);
+  border-radius: 3px;
+}
+
+/* R20's persistent lock-open badge: it must not be subtle. */
+.so-badge-tls {
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  background: rgb(255 90 90 / 16%);
+  border-left: 2px solid rgb(255 90 90 / 80%);
+  border-radius: 3px;
+}
+
+.so-buffer {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 11px;
+}
+
+.so-buffer-bar {
+  position: relative;
+  flex: 1 1 auto;
+  height: 4px;
+  overflow: hidden;
+  background: rgb(255 255 255 / 14%);
+  border-radius: 2px;
+}
+
+.so-buffer-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: rgb(120 170 255 / 85%);
+}
+
+/* The seek-bar layer: the cached window, painted UNDER everything else. */
+.so-ranges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.so-range {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgb(255 255 255 / 22%);
+}
+
+.so-range-live {
+  background: rgb(120 220 160 / 26%);
+}
+
+.so-settings-note {
+  font-size: 12px;
+  line-height: 1.5;
+  opacity: 0.85;
+}
+
+.so-settings-note code {
+  padding: 0 3px;
+  font-size: 11px;
+  background: rgb(255 255 255 / 10%);
+  border-radius: 3px;
+}

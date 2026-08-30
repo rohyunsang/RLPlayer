@@ -99,6 +99,54 @@ jobs:
         if: '!cancelled()'
         run: npm run check:partition
 
+      # The SAME question for the seven cross-module `order` namespaces, which
+      # had no partition key at all while a duplicate `order` is strictly worse
+      # than a duplicate property: it throws out of the contribution host, the
+      # registry re-throws, and the packaged app does not start. It collided
+      # twice in one nine-module round.
+      #
+      # The check that was supposed to catch it paired `id:` to `order:` with a
+      # 400-character regex window and could not see three shipped
+      # contributions, two of them blinded by the comment M25 wrote to document
+      # the previous collision. The code side is read with the TypeScript AST
+      # now. `--self-test` runs the reader against all four shapes the regex
+      # got wrong and asserts, on this repo's own files, that the retired regex
+      # is still blind to `nav-chapters.skipPrompt`.
+      - name: 'check:ordering'
+        if: '!cancelled()'
+        run: npm run check:ordering
+
+      # No control characters and no source file git treats as binary. A raw NUL
+      # in `audio-eq/index.ts` made `git diff` print "Bin 0 -> 11349 bytes" and
+      # `git grep` answer "binary file matches", so 326 lines of a shipped module
+      # landed with no reviewable diff at all -- and typecheck plus 395 tests were
+      # perfectly happy. `--self-test` rebuilds the exact byte that shipped and
+      # asserts the scanner FAILS on it.
+      - name: 'check:control-chars'
+        if: '!cancelled()'
+        run: npm run check:control-chars
+
+      # `mustNotTouch` was enforced NOWHERE: appending three lines to
+      # `src/renderer/src/main.ts` -- named in 40 of the 55 rows' lists -- gave
+      # both check:partition and check:forbidden exit 0, because both ask who OWNS
+      # a file and neither asks who CHANGED it. This asks. `--self-test` runs the
+      # rules against ten change-set fixtures, including that exact edit.
+      - name: 'check:ownership (self-test)'
+        if: '!cancelled()'
+        run: npm run check:ownership
+
+      # And against the REAL change set of this push or PR.
+      #
+      # Rule A (a feature module's change set may contain only its own files)
+      # needs nothing declared and runs everywhere. Rule B (every changed file
+      # belongs to one declared row) engages when the branch is named
+      # `feat/M03-…` / `module/video-enhance` / `core/renderer`, or when a commit
+      # carries a `Module:` trailer -- so a module branch is not on the honour
+      # system either, while a legitimate core commit is not failed for existing.
+      - name: 'check:ownership (this change set)'
+        if: '!cancelled()'
+        run: node scripts/check-ownership.mjs --base ${{ github.event.pull_request.base.sha || github.event.before }}
+
       # It has to actually build. `npm test` never touches the bundler, and a
       # renderer that does not compile is not caught by anything above.
       - name: Build
@@ -119,7 +167,9 @@ jobs:
   # is a separate job and it is allowed to be slow.
   network:
     runs-on: windows-latest
-    timeout-minutes: 30
+    # Was 30. It now also packages-and-drives the 24-check Wave-1 module suite
+    # and the two-launch resume suite; locally those add ~3 minutes.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -190,6 +240,38 @@ jobs:
       - name: 'e2e:overlay (packaged)'
         if: '!cancelled()'
         run: npm run e2e:overlay -- --packaged --presses=30
+
+      # DO THE MODULES ACTUALLY WORK? 24 checks, every one of them answered by
+      # mpv itself over a SECOND JSON-IPC client on the pipe the app opened, or
+      # by what the overlay rendered into the live DOM -- never by a module's
+      # own state channel, which is the app agreeing with itself.
+      #
+      # This suite was written for the nine-module round, was quoted as the
+      # reason for the package.json change in 008c1a4, and was then not wired
+      # into this file at all. A suite that only runs when someone remembers is
+      # the same guarantee `npm run verify` had before this workflow existed.
+      #
+      # THIS STEP IS ALLOWED TO FAIL THE BUILD. It needs a real window and a
+      # D3D11 context, and if a GitHub Windows runner cannot give it one the
+      # right outcome is a red job that says so -- not a skip, not
+      # `continue-on-error`, and not a green tick that ran nothing. The
+      # `e2e:overlay` step above already drives the packaged app over CDP on
+      # this same runner, so the window path is not speculative; what is new
+      # here is mpv decoding for real, and if that turns out to need a GPU the
+      # failure has to be visible on the first run rather than discovered
+      # later. Measured locally against the packaged build: 24 passed, 0 failed.
+      - name: 'e2e:wave1 (packaged)'
+        if: '!cancelled()'
+        run: npm run e2e:wave1
+
+      # The v0.1 resume guarantee: seek, quit, reopen, and look at resume.json.
+      # Giving `seek` an owner broke this once and every unit test, grep and
+      # partition check stayed green, because the refusal is DROPPED in a
+      # packaged build and all four call sites had `.catch(() => undefined)`.
+      # Also absent from CI until now.
+      - name: 'e2e:resume (packaged)'
+        if: '!cancelled()'
+        run: npm run e2e:resume
 
   # A second, deliberately dumb job. `check:forbidden` skips comment lines so it
   # can explain what we do NOT do; this one does not, so a commented-out

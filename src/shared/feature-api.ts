@@ -10,6 +10,10 @@
  * are structurally identical to Electron's and pass straight through.
  */
 
+import type { TrackSelectionProperty } from './mpv/tracks.ts'
+
+export type { TrackSelectionProperty }
+
 export type FeatureId = string // kebab-case, globally unique, e.g. 'video-color'
 export type CommandId = string // `${FeatureId}.${verb}`
 export type SettingId = string // `${FeatureId}.${key}`
@@ -105,6 +109,10 @@ export interface FeatureContext {
   readonly lifecycle: LifecycleService
   readonly window: WindowService
   readonly dialog: DialogService
+  /** §3.3.9. Explorer, the recycle bin, the clipboard and the OS folders. */
+  readonly shell: ShellService
+  /** §3.3.10. Decode / measure / resize / re-encode, for C07 and C03. */
+  readonly image: ImageService
   /**
    * The network allowlist (§1.3). RLPlayer reaches ZERO hosts by default, and
    * this service is how a module that genuinely needs one — R05's yt-dlp,
@@ -210,6 +218,19 @@ export interface PathService {
   subCacheDir(): string
   thumbCacheDir(): string
   sceneCacheDir(): string
+  /**
+   * Album art and poster frames.
+   *
+   * It existed in `core/paths.ts` and was promised to modules by
+   * `02-wave0-api.md` section 12, and it was in NEITHER this interface NOR the
+   * `pathService` object, so `ctx.paths.artCacheDir()` was `undefined` and every
+   * module that followed the guide would have crashed on
+   * "artCacheDir is not a function". M27's poster frames and M30's
+   * continue-watching thumbnails are both named users. The gap survived because
+   * nothing compared the promised surface against the implemented one; the
+   * `paths.ts` test does now.
+   */
+  artCacheDir(): string
   logsDir(): string
   /** A per-job scratch directory. lavfi cannot take Windows absolute paths;
    *  stage assets here and spawn with `cwd` set (§7.7 trap 1). */
@@ -236,6 +257,30 @@ export interface MpvService {
    * production so one bad module cannot black-screen the player.
    */
   set(name: string, value: unknown): Promise<void>
+
+  /**
+   * Write one of the four TRACK-SELECTION properties and return what mpv
+   * actually resolved it to.
+   *
+   * `sid`, `aid`, `vid` and `secondary-sid` hold an INDEX into a list mpv is
+   * free to renumber, and mpv answers `{"error":"success"}` to
+   * `set_property sid 1` when there is no track 1 — and then holds `false`. So
+   * `set()` returning without throwing proves only that the write was accepted,
+   * not that a track is selected. That exact shape lost every Korean subtitle
+   * on one press of Alt+C: `sub-reload` renumbered `kor.smi` from 1 to 3, mpv
+   * re-selected it correctly on its own, and the module wrote the captured 1
+   * back over it.
+   *
+   * Use this whenever the id you are writing was captured before an operation
+   * that can renumber (see `RENUMBERING_COMMANDS` in `@shared/mpv/tracks`), and
+   * re-resolve the track by IDENTITY first with `findByIdentity`. Plain `set()`
+   * still works and still reports a resolved-to-`false` write loudly, but it
+   * cannot hand you the answer.
+   */
+  selectTrack(
+    name: TrackSelectionProperty,
+    id: number | false | 'no'
+  ): Promise<number | false>
 
   /** The mediated path for a property another module owns. */
   requestSet(
@@ -454,8 +499,33 @@ export interface PerFileService {
    * say "capture first".
    */
   captureNow(): void
+  /**
+   * Capture AND fsync. For state that must survive a CRASH, not just a clean
+   * quit: `captureNow()` reaches the store, whose write is debounced 300 ms and
+   * whose flush otherwise happens on quit, so a module that captured a bookmark
+   * and then lost the process lost the bookmark. Also a deviation from §3.3.5,
+   * reported by the pilots.
+   */
+  persistNow(): void
   /** Batch watched-state lookup for the playlist's badges (L39). */
   lookupMany(paths: readonly string[]): Record<string, { position: number; finished: boolean }>
+  /**
+   * The stored slices for ANY file, not only the one playing, or null when
+   * nothing is stored for it.
+   *
+   * Reported by the pilots: the service could read nothing but the current
+   * file, which makes N11's all-files bookmark mode and N16's playlist badges
+   * inexpressible — both ask about files that are not open — and left a module
+   * with no option but to re-implement per-file.json beside it.
+   */
+  slicesFor(file: string): Record<string, Record<string, unknown>> | null
+  sliceFor(file: string, sliceKey: string): Record<string, unknown> | null
+  /**
+   * Every file with stored slices, newest first. Enumeration is the other half
+   * of the same defect: `resumeKey()` is a one-way hash of path+size, so
+   * without this a caller could only ever ask about a path it already had.
+   */
+  storedFiles(): { key: string; path: string; updatedAt: number; sliceKeys: string[] }[]
 }
 
 export type MenuNode =
@@ -515,13 +585,52 @@ export interface FilterChainService {
    * Live parameter update, emitted in the VERIFIED FOUR-ARGUMENT form
    * `['vf-command', label, option, value, lavfiFilterName]`. Falls back to a
    * full rebuild for the measured refusers and reports which path it took.
+   *
+   * `spec` IS REQUIRED. It is the whole filter spec the slot must hold AFTER
+   * this change, and the chain both stores it and CHECKS that it expresses the
+   * change (see `specReflects` in core/mpv/chain.ts). It was optional for one
+   * release, with zero production adopters, and the chain's model of the filter
+   * therefore diverged from mpv's on every live update in the shipped app:
+   *
+   *  - On the REBUILD path (`unsharp`, `pan`, `loudnorm`, `superequalizer` --
+   *    the four measured refusers, one of them V08's) the rebuild re-serialises
+   *    the spec the slot ALREADY holds, i.e. the pre-change value. Measured:
+   *    `command('rl-sharpen','luma_amount','1.2','unsharp')` sent mpv
+   *    `unsharp=5:5:1.0`. The slider did nothing.
+   *  - On the COMMAND path mpv changes and the slot does not, so the next
+   *    whole-chain rebuild -- another module's `set()`, an mpv respawn, the next
+   *    file -- silently reverts it. Measured:
+   *    `command('rl-sharpen','strength','0.55','cas')` left `serialise()`
+   *    returning `@rl-sharpen:lavfi=[cas=strength=0.4]`.
+   *
+   * Being optional cost M03 a whole compensating file (`chain-sync.ts`, 201
+   * lines + 247 of test) that every `ctx.vf`/`ctx.af` author would have written
+   * again, and which did not fix it either -- it kept a SECOND model of the
+   * chain's state. With `spec` required, the slot and mpv agree on both paths,
+   * there is nothing left for a module to mirror, and the compiler refuses the
+   * call shape that used to desynchronise them.
    */
   command(
     label: string,
     option: string,
     value: string,
-    lavfiFilterName: string
+    lavfiFilterName: string,
+    spec: string
   ): Promise<{ path: 'command' | 'rebuild' }>
+  /**
+   * Whether this module's slot exists, and whether it is enabled.
+   *
+   * Here because without them a module cannot tell a first `set()` from a live
+   * `command()` without keeping its own copy of the chain's state -- and a
+   * second model of one piece of state is how the two come to disagree. Both are
+   * ownership-checked: asking about ANOTHER module's label throws, because a
+   * layer of Wave-1 modules able to observe each other's slots is the coupling
+   * §5 exists to prevent.
+   */
+  has(label: string): boolean
+  isEnabled(label: string): boolean
+  /** What the chain currently holds for this label. Reads, for a stats row. */
+  specOf(label: string): string | undefined
   readonly hasCpuFilter: boolean
 }
 
@@ -613,6 +722,97 @@ export interface TaskbarSurface {
 // ---------------------------------------------------------------------------
 // §3.3.8 DialogService
 // ---------------------------------------------------------------------------
+
+/**
+ * §3.3.9 `ctx.shell` — the OS surfaces a module is allowed to reach.
+ *
+ * WHY IT EXISTS, and it is a measurement rather than a preference. Four spec
+ * rows need Explorer or the recycle bin — C20 "reveal in folder", C23 "open the
+ * capture folder", C24 "delete to the recycle bin", L34 "copy path / reveal" —
+ * and two more need an OS folder: C05's default capture directory
+ * (`app.getPath('pictures')`) and P59's portable-mode sibling folder
+ * (`app.getPath('exe')`). `FeatureContext` had none of it, so M22 and M23 both
+ * wrote `import { app, shell } from 'electron'` at the top of their `index.ts`
+ * — and that ONE line makes the file unloadable outside Electron, which is why
+ * both then had to split a `manifest.ts` out purely so a test could read their
+ * declarations. Two modules paid that tax; twenty-five more were queued behind
+ * it, and `docs/parity/02-wave0-api.md` §3.3 claims FeatureContext is "the whole
+ * surface a module is allowed to touch".
+ *
+ * The same argument that put `ctx.dialog` here (M22, M28 and M40 all needed a
+ * picker), one round later and with the receipts.
+ */
+export type AppPathName =
+  | 'pictures'
+  | 'videos'
+  | 'music'
+  | 'downloads'
+  | 'documents'
+  | 'desktop'
+  | 'home'
+  | 'temp'
+  /** The running executable. `path.dirname()` of it is the portable root (P39). */
+  | 'exe'
+
+export interface ShellService {
+  /** Open Explorer with the file SELECTED. C20, C23, L34. */
+  showItemInFolder(fullPath: string): void
+  /** Open a path with its default handler. Resolves to '' on success, or the OS error. */
+  openPath(fullPath: string): Promise<string>
+  /** The RECYCLE BIN, never `fs.unlink`: C24 says the user can undo it. */
+  trashItem(fullPath: string): Promise<void>
+  /**
+   * Text on the system clipboard. S39, L25, L26, L34.
+   *
+   * ASYNC, and that is not a style choice: Electron 44's `clipboard.writeText`
+   * returns a Promise. A module that treats it as synchronous drops the
+   * rejection on the floor.
+   */
+  copyText(text: string): Promise<void>
+  /**
+   * A PNG on the system clipboard. C03.
+   *
+   * NOT `clipboard.writeImage`, which §2.4 C03 prescribed and which DOES NOT
+   * EXIST in Electron 44 — verified against the running binary, whose clipboard
+   * module is exactly `clear/has/read/readText/write/writeText/selection`.
+   * Following that row literally is a runtime "writeImage is not a function"
+   * past typecheck. The row is corrected; this method is the supported path.
+   */
+  copyImagePng(png: Uint8Array): Promise<void>
+  /** An OS folder, or the running executable. C05, P59. */
+  appPath(name: AppPathName): string
+}
+
+/**
+ * §3.3.10 `ctx.image` — decode, measure, resize, re-encode.
+ *
+ * The other half of M22's electron import. C07 resizes a capture to a maximum
+ * width, and it has to REFUSE rather than silently rewrite when the user's
+ * chosen format has no encoder — Electron ships exactly two (PNG and JPEG), so
+ * a `.webp` capture must be left at full size instead of being written as a PNG
+ * under a webp name. Exposing the decode surface is what lets that decision stay
+ * inside the module while the Electron dependency stays inside core.
+ */
+export interface DecodedImage {
+  readonly width: number
+  readonly height: number
+  /** Bilinear-ish, highest quality the backend offers; height follows the aspect. */
+  resize(width: number): DecodedImage
+  toPng(): Uint8Array
+  /** `quality` is 1-100. */
+  toJpeg(quality: number): Uint8Array
+}
+
+export interface ImageService {
+  /**
+   * Decode a file path or a buffer. `null` when the bytes are not a decodable
+   * image — an empty decode is a normal outcome for a capture that mpv has not
+   * finished writing, not an exception.
+   */
+  read(source: string | Uint8Array): DecodedImage | null
+  /** The formats `toPng`/`toJpeg` can actually produce. C07 asks this. */
+  readonly encodableFormats: readonly string[]
+}
 
 export interface DialogService {
   openFiles(o: {
