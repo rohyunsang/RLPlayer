@@ -1,5 +1,7 @@
 # RLPlayer
 
+https://rlplayer.vercel.app/
+
 A free, open-source, ad-free Windows video player that plays everything and
 **never nags you about anything**.
 
